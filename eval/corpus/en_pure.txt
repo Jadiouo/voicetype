@@ -1,0 +1,27 @@
+# 純英文技術陳述 (SDD §8.1)
+# 目標 WER < 10% (SDD §1.3)
+the training loss stopped decreasing after the third epoch
+we need to increase the batch size to improve throughput
+this function returns a reference to the internal buffer
+the simulation crashed because it ran out of memory
+please review the pull request before the end of the day
+the model achieves better accuracy with fewer parameters
+we should profile the code before optimizing anything
+the configuration file is missing a required field
+this approach scales linearly with the number of agents
+the results are consistent across all five random seeds
+I will refactor this module to reduce the coupling
+the callback is invoked on the main thread
+we measured the latency at the ninety fifth percentile
+the dataset contains about two hundred thousand samples
+this branch has not been merged into main yet
+the inference runs entirely on the processor
+we need to handle the edge case where the input is empty
+the documentation for this library is quite limited
+the gradient explodes when the learning rate is too high
+this test fails intermittently on the build server
+the memory usage grows linearly with the sequence length
+we should cache the intermediate results to avoid recomputation
+the deadline for the submission is next Friday
+this implementation is roughly twice as fast as the previous one
+the error message does not explain what actually went wrong

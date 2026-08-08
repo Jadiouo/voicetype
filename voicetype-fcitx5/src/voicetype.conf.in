@@ -1,0 +1,11 @@
+[Addon]
+Name=VoiceType
+Name[zh_TW]=語音聽寫
+Comment=Push-to-talk speech input
+Comment[zh_TW]=按住說話語音輸入
+Category=Module
+Version=@PROJECT_VERSION@
+Type=SharedLibrary
+Library=libvoicetype
+OnDemand=False
+Configurable=True

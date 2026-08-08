@@ -1,0 +1,60 @@
+[Unit]
+Description=VoiceType ASR daemon
+Documentation=https://github.com/Jadiouo/voicetype
+# 音訊來源。PipeWire 是 user service, 用 wants 而非 requires ——
+# PipeWire 重啟時不該把 daemon 一起拖下去, cpal 會在下次錄音重新開串流。
+Wants=pipewire.service
+After=pipewire.service
+
+[Service]
+# SDD §6.2 寫 Type=notify, 但 daemon 沒有實作 sd_notify (見 D12)。
+# notify 會讓 systemd 等一個永遠不會來的就緒訊號, 90 秒後判定啟動失敗。
+Type=simple
+ExecStart=%h/.local/bin/voicetyped
+Restart=on-failure
+RestartSec=2
+
+Environment=VOICETYPE_LOG=info
+
+# glibc 預設每個執行緒可以有自己的 malloc arena (上限 8×核心數)。
+# tokio 的多執行緒 runtime 因此散在十幾個 arena 上, 每個都保留自己的
+# 空閒頁 —— 實測 daemon 用一陣子後 RSS 494MB, 而同樣的推論在單執行緒
+# 行程裡跑 12 次穩定在 378MB。限制成 2 個, 代價是配置時偶爾要等鎖,
+# 而 PTT 的配置頻率遠不到會有爭用的程度。
+Environment=MALLOC_ARENA_MAX=2
+
+# --- 資源限制 (SDD §6.2) ---
+#
+# 刻意**不**設 AllowedCPUs。SDD 寫 `AllowedCPUs=0-5`, 但那是寫死的
+# 核心編號 —— 在核心數較少的機器上會把 daemon 綁到不存在的 CPU,
+# 而 systemd 對此的反應是啟動失敗。推論本身已經限制在 4 threads
+# (見 asr::sensevoice::DEFAULT_THREADS), 這才是與 `make -j$(nproc)`
+# 共存的實際手段; CPUWeight 只是讓那 200ms 的爆發插得進去。
+CPUWeight=200
+
+# 常駐約 300MB (§6.1)。MemoryHigh 先施壓回收, MemoryMax 才是硬上限 ——
+# 中間留的空間是給 60 秒錄音的環形緩衝區 (48kHz 下約 11.7MB) 與
+# 推論時的計算緩衝 (約 25MB)。
+MemoryHigh=512M
+MemoryMax=1G
+
+# --- 加固 (SDD §7) ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# 降級鏈③ 要寫轉錄檔 (session::deliver_fallback), 模型也在這底下。
+ReadWritePaths=%h/.local/share/voicetype
+ProtectKernelTunables=yes
+# ProtectKernelModules 刻意缺席: 它要調整 capability bounding set,
+# 而 systemd 的 **user** manager 沒有那個權限 —— 加了會讓 daemon 以
+# status=218/CAPABILITIES 啟動失敗。其餘加固選項在 user unit 下都可用
+# (實測逐項驗過)。daemon 本來也不載入核心模組。
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=default.target

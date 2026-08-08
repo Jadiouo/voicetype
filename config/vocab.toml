@@ -1,0 +1,82 @@
+# 詞彙修正表 (SDD §4.6 ③)
+#
+# 安裝位置: ~/.config/voicetype/vocab.toml
+# 改完不需要重新編譯, 但要重啟 daemon:
+#     systemctl --user restart voicetyped
+#
+#
+# ## 這張表能修什麼, 不能修什麼
+#
+# 修正表的前提是**錯誤穩定且可枚舉**。R1 的實測 (docs/r1-findings.md)
+# 顯示中英夾雜的錯誤大多**不**滿足這個前提 —— 同一個詞每次錯得不一樣:
+#
+#     commit  →  抗 make          rebase  →  re
+#     loop    →  路               fallback → feedback back
+#
+# 這類開放集的錯誤要靠模型或詞彙注入解決, 而 SenseVoice.cpp 不支援
+# hotwords (非自迴歸架構使然, 見 docs/sdd-deviations.md D7)。
+#
+# 所以這張表只收兩種項目:
+#
+#   1. **音譯成不合法中文詞** 的技術詞。「熱力瑞」不是中文詞, 把它改回
+#      learning rate 不可能誤傷任何人真正想說的話。
+#   2. **你自己的專案詞彙**。這是這張表真正的價值所在 —— 沒有人比你
+#      更清楚你每天會說到哪些專有名詞。
+#
+#
+# ## 不要加什麼 (重要)
+#
+# **兩邊都是合法詞的, 不要加。** 實測 cache 常被聽成 catch, 但
+#
+#     wrong = ["catch"], right = "cache"
+#
+# 會讓你講「try catch」時變成「try cache」。修正表沒有語境, 它不知道
+# 哪一次是錯的。
+#
+# 同理不要加單字中文: 「扣」→ code 會毀掉「扣款」「折扣」。
+#
+# **寧可漏掉, 不可誤改。** 漏掉的你自己補一個字就好; 誤改的你得先發現
+# 它改錯了 —— 而聽寫的東西通常不會逐字重讀。
+#
+#
+# ## 格式
+#
+#     [[entry]]
+#     wrong = ["聽成的樣子", "另一種聽成的樣子"]
+#     right = "正確的寫法"
+#
+# 比對在繁化之後進行, 且大小寫不敏感。長的 wrong 優先比對, 所以
+# "learning rate" 會先於 "rate" 命中。
+
+# --- 實測抓到的音譯錯誤 (eval/, 2026-08-08) --------------------------
+#
+# 這幾個是「聽起來像但不是中文詞」, 誤傷風險接近零。
+
+[[entry]]
+wrong = ["熱力瑞", "热力瑞", "熱力率"]
+right = "learning rate"
+
+[[entry]]
+wrong = ["庫伯內提斯", "库伯内提斯", "庫伯內特斯"]
+right = "kubernetes"
+
+[[entry]]
+wrong = ["吉特", "給特"]
+right = "git"
+
+# --- 專案詞彙 ---------------------------------------------------------
+#
+# 這裡是你該自己擴充的地方。加的時候問一句:
+# 「這個 wrong 有沒有可能是我真正想說的話?」
+
+[[entry]]
+wrong = ["isac king", "isaac king", "艾薩克心", "艾薩克辛"]
+right = "Isaac Sim"
+
+[[entry]]
+wrong = ["fcitx 5", "f city x5", "fc itx5"]
+right = "fcitx5"
+
+[[entry]]
+wrong = ["sense voice", "sensevoice"]
+right = "SenseVoice"

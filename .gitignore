@@ -1,0 +1,33 @@
+# 不公開的文件: 設計文件 (SDD)、開發日誌、評測原始結果、偏離記錄。
+# 它們含有使用者的硬體配置與工作脈絡, 留在本機。
+private/
+
+# 建置產出
+build/
+target/
+
+# 模型檔 (數百 MB, 從 HuggingFace 取得 —— 見 README)
+models/
+*.gguf
+
+# 語料錄音: 是使用者本人的聲音, 不進版控 (SDD §7 的隱私原則)
+eval/recordings/
+eval/*.json
+
+# 外部相依原始碼
+third_party/
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+
+# sense-voice-main 在 cwd 產生的特徵傾印副產品
+fbank_lfr_cmvn_feature.json
+
+# 評測用的 python venv
+.venv/

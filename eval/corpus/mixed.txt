@@ -1,0 +1,35 @@
+# 中英夾雜 (SDD §8.1) —— 這一組是整份設計最大的未驗證假設 (SDD §10/R1)
+#
+# SenseVoice 做的是 utterance 層級的語言判定, 而非句內 code-switching,
+# 中英夾雜是它的相對弱項。但「幫我 git rebase 那個 branch」正是本專案
+# 的典型輸入。
+#
+# 決策點 (SDD §8.1): 若這一組的 CER > 20%, 啟動備案 ——
+# per-app 切換引擎, 中文情境用 SenseVoice、程式情境用 whisper small。
+#
+# 參考文本的寫法: 英文術語照原樣寫, 中文用繁體。評測時會做正規化。
+幫我把那個 branch rebase 到 main 上面
+這個 function 的回傳值好像有問題
+我先 commit 一下再繼續改
+這個 model 的 accuracy 掉了大概三個百分點
+你可以幫我看一下這個 error message 嗎
+我把 config 檔改成用 relative path 了
+這個 loop 跑起來太慢了要想辦法優化
+先把 dependency 裝好再跑 build
+這個 branch 我還沒有 push 上去
+Isaac Sim 那邊的 simulation 又當掉了
+這個 dataset 的 label 好像有一些錯誤
+我用 profiler 看過了瓶頸在 memory 那邊
+把這個參數的 default value 改成零點五
+這個 test case 在 CI 上面會失敗
+我覺得應該要加一個 fallback 的機制
+這段 code 的 complexity 有點太高了
+先把 log level 調成 debug 再重跑一次
+這個 API 回傳的格式跟文件寫的不一樣
+我把 learning rate 調低之後就收斂了
+這個 thread 好像有 race condition
+你要不要試試看用 cache 把它存起來
+這個 pull request 我等一下 review
+把 batch size 從三十二改成六十四試試看
+這個 library 的 documentation 寫得很少
+我先 merge 進去然後再跑一次 regression test
