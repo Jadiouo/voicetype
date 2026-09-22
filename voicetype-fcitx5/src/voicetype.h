@@ -9,18 +9,24 @@
 #include <fcitx/event.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/instance.h>
+#include <fcitx/text.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
 #include "ipc.h"
+#include "context.h"
 
 namespace voicetype {
 
 class VoiceType : public fcitx::AddonInstance {
 public:
-    explicit VoiceType(fcitx::Instance *instance);
+    using NotificationSink = std::function<void(const std::string &, const std::string &)>;
+    using Clock = std::function<uint64_t()>;
+    explicit VoiceType(fcitx::Instance *instance, NotificationSink notification = {},
+                       Clock clock = {});
     ~VoiceType() override;
 
     void reloadConfig() override;
@@ -35,10 +41,24 @@ private:
     void startRecording(fcitx::InputContext *ic);
     void stopRecording(bool cancelled);
     void deliver(const std::string &text);
+    std::string contextId(fcitx::InputContext *ic) const;
+    void clearCorrection();
+    void maybeLearnCorrection(fcitx::InputContext *ic, bool explicitSelection);
+    void notify(fcitx::InputContext *ic, const std::string &summary,
+                const std::string &body);
+    void clearFeedback();
+    uint64_t nowUsec() const;
 
     // --- 狀態 ---
     fcitx::Instance *instance_;
     std::unique_ptr<IpcClient> ipc_;
+    NotificationSink notification_;
+    Clock clock_;
+    uint32_t notificationId_ = 0;
+    fcitx::TrackableObjectReference<fcitx::InputContext> feedbackIc_;
+    fcitx::Text feedbackPrevious_;
+    fcitx::Text feedbackRendered_;
+    std::unique_ptr<fcitx::EventSourceTime> feedbackTimer_;
 
     // PTT 熱鍵是 Control+Alt (兩個 modifier, 沒有一般按鍵), 判定寫在
     // voicetype.cpp 的 isCtrlAltPress/isCtrlAltRelease —— 純 modifier
@@ -53,6 +73,7 @@ private:
     //
     // 硬編碼 (SDD §9)。設定檔化屬於 M1。
     fcitx::Key cancelKey_{"Escape"};
+    fcitx::Key learnKey_{"Control+Caps_Lock"};
 
     bool recording_ = false;
     uint64_t sessionId_ = 0;
@@ -61,10 +82,24 @@ private:
     // 之間可能已經切換視窗, 此時不應寫進新視窗。弱參考在 IC 被銷毀時
     // 自動失效, 同時避免 use-after-free。
     fcitx::TrackableObjectReference<fcitx::InputContext> targetIc_;
+    fcitx::TrackableObjectReference<fcitx::InputContext> lastCommitIc_;
+    CorrectionTracker correctionTracker_;
+    std::string lastCommitText_;
+    uint64_t lastCommitSession_ = 0;
+    uint64_t lastCommitAt_ = 0;
+    std::string contextNonce_;
+    uint64_t contextGeneration_ = 0;
+    std::string sessionContextId_;
 
     std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>> keyHandler_;
     std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>
         focusOutHandler_;
+    std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>
+        surroundingHandler_;
+    std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>
+        resetHandler_;
+    std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>
+        capabilityHandler_;
 };
 
 class VoiceTypeFactory : public fcitx::AddonFactory {

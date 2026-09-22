@@ -1,7 +1,7 @@
 # 架構
 
 VoiceType 是 Fcitx5 的語音聽寫模組：按住熱鍵說話，放開後文字出現在
-游標處。全本機推論，0 VRAM。
+游標處。全本機推論，預設使用 CPU。
 
 這份文件記錄**為什麼這樣蓋**，而不只是有什麼。每個看起來繞路的決定
 背後通常有一次實測。
@@ -48,8 +48,16 @@ ASR 崩潰不能拖垮輸入法 —— 輸入法掛掉等於整個桌面無法�
 這個狀態問題。兩邊都要防守：daemon 送出前比對最新的 session id，
 addon 收到後也比對自己的。
 
-addon 刻意極薄：只做攔鍵、鎖定 InputContext、`commitString()`。
-所有邏輯在 daemon —— 換引擎、改後處理都不必碰 C++。
+addon 處理攔鍵、鎖定 InputContext、`commitString()`，以及只有輸入法能觀察的周邊文字／修正歸屬。模型、詞彙規則與持久化放在 daemon。
+
+### 個人化管線（2026-09-22）
+
+繁化 → 靜態詞表 → `Assistant` 個人規則 → 可選 `Refiner` → 再確認 session → 送字。
+`personalization.rs` 管理小型、可刪除的修正規則；`assistant.rs` 負責最近送字的歸屬、暫時上下文和模型協調；`refine.rs` 僅與 loopback 的文字模型溝通，逾時或不合規就保留輸入文字。詳細行為與操作見 [PERSONALIZATION.md](PERSONALIZATION.md)。
+
+addon 的 `CorrectionTracker` 只追蹤自己的 commit，必須等應用程式回報相同文字後才開始觀察。周邊文字被可靠地修正後，在下一次 PTT 送出完整 before/after；daemon 再核對 session、IC、program、五分鐘期限和先前送出的原文，才交給詞彙學習。兩次獨立觀察才啟用；選取修正句加 Ctrl+Caps Lock 是明確確認入口。
+
+X11／AT-SPI helper 在開始錄音時執行一次，與音訊擷取並行，500 ms 硬期限。畫面上下文只在記憶體裡；讀不到不會阻止辨識。未確認的歷史 ASR 不會被再次當成人名修正依據。控制用短連線不會觸發取消錄音；只有曾發出 Start 的 addon 連線斷線會取消。
 
 ---
 

@@ -41,7 +41,9 @@ fn current_uid() -> u32 {
     // 避免為了一個 getuid 引入 libc crate。/proc/self 的擁有者就是本行程
     // 的 real uid。
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(0)
+    std::fs::metadata("/proc/self")
+        .map(|m| m.uid())
+        .unwrap_or(0)
 }
 
 /// 送往 addon 的通道。複製成本低, 可以交給各處使用。
@@ -100,8 +102,8 @@ impl Server {
             }
         }
 
-        let listener = UnixListener::bind(path)
-            .with_context(|| format!("binding {}", path.display()))?;
+        let listener =
+            UnixListener::bind(path).with_context(|| format!("binding {}", path.display()))?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("chmod 0600 {}", path.display()))?;
 
@@ -135,7 +137,6 @@ impl Server {
                 if let Err(e) = serve_connection(stream, handler.clone()).await {
                     debug!("connection closed: {e}");
                 }
-                handler.on_disconnect();
                 debug!("addon disconnected");
             });
         }
@@ -152,6 +153,21 @@ async fn serve_connection<H: Handler>(
     stream: UnixStream,
     handler: std::sync::Arc<H>,
 ) -> Result<()> {
+    struct DisconnectGuard<H: Handler> {
+        handler: std::sync::Arc<H>,
+        owns_recording: bool,
+    }
+    impl<H: Handler> Drop for DisconnectGuard<H> {
+        fn drop(&mut self) {
+            if self.owns_recording {
+                self.handler.on_disconnect();
+            }
+        }
+    }
+    let mut guard = DisconnectGuard {
+        handler: handler.clone(),
+        owns_recording: false,
+    };
     let (read_half, mut write_half) = stream.into_split();
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(OUTBOUND_QUEUE);
     let responder = Responder { tx };
@@ -189,7 +205,12 @@ async fn serve_connection<H: Handler>(
             continue;
         }
         match serde_json::from_str::<ClientMessage>(trimmed) {
-            Ok(msg) => handler.handle(msg, responder.clone()),
+            Ok(msg) => {
+                if matches!(msg, ClientMessage::Start { .. }) {
+                    guard.owns_recording = true;
+                }
+                handler.handle(msg, responder.clone());
+            }
             // 無法解析的訊息不該讓連線斷掉 —— 可能只是版本不一致的
             // 新訊息型別, 忽略即可 (協定要能往前相容)。
             Err(e) => warn!("malformed message from addon: {e}"),
@@ -199,4 +220,69 @@ async fn serve_connection<H: Handler>(
     drop(responder);
     let _ = writer.await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct RecordingHandler {
+        messages: AtomicUsize,
+        disconnects: AtomicUsize,
+    }
+
+    impl Handler for RecordingHandler {
+        fn handle(&self, _msg: ClientMessage, responder: Responder) {
+            self.messages.fetch_add(1, Ordering::SeqCst);
+            responder.send(ServerMessage::Pong);
+        }
+        fn on_disconnect(&self) {
+            self.disconnects.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    async fn send_and_disconnect(messages: &str) -> Arc<RecordingHandler> {
+        let handler = Arc::new(RecordingHandler::default());
+        let (server, mut client) = UnixStream::pair().unwrap();
+        client.write_all(messages.as_bytes()).await.unwrap();
+        client.shutdown().await.unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            serve_connection(server, handler.clone()),
+        )
+        .await
+        .expect("connection should complete after EOF")
+        .unwrap();
+        handler
+    }
+
+    #[tokio::test]
+    async fn control_only_disconnect_does_not_cancel_another_clients_recording() {
+        let handler = send_and_disconnect(concat!(
+            "{\"type\":\"ping\"}\n",
+            "{\"type\":\"list_learned\"}\n",
+            "{\"type\":\"set_context\",\"text\":\"GitHub\"}\n",
+            "{\"type\":\"process_text\",\"text\":\"mabe\"}\n",
+        ))
+        .await;
+        assert_eq!(handler.messages.load(Ordering::SeqCst), 4);
+        assert_eq!(handler.disconnects.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn recording_connection_disconnect_cancels_its_session() {
+        let handler = send_and_disconnect(concat!(
+            "{\"type\":\"ping\"}\n",
+            "{\"type\":\"start\",\"session\":42,\"program\":\"test\"}\n",
+        ))
+        .await;
+        assert_eq!(handler.messages.load(Ordering::SeqCst), 2);
+        assert_eq!(handler.disconnects.load(Ordering::SeqCst), 1);
+    }
 }

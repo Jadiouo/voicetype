@@ -1,3 +1,23 @@
 add_executable(test_ipc test_ipc.cpp)
 target_link_libraries(test_ipc PRIVATE voicetype-ipc)
 add_test(NAME ipc COMMAND test_ipc)
+
+add_executable(test_context test_context.cpp)
+target_link_libraries(test_context PRIVATE voicetype-ipc)
+add_test(NAME context COMMAND test_context)
+
+add_executable(test_lifecycle test_lifecycle.cpp ../src/voicetype.cpp)
+target_link_libraries(test_lifecycle PRIVATE voicetype-ipc Fcitx5::Core)
+if(TARGET Fcitx5::Module::Notifications)
+    target_link_libraries(test_lifecycle PRIVATE Fcitx5::Module::Notifications)
+    target_compile_definitions(test_lifecycle PRIVATE VOICETYPE_HAVE_NOTIFICATIONS=1)
+endif()
+add_test(NAME lifecycle COMMAND test_lifecycle)
+
+add_executable(test_feedback test_feedback.cpp ../src/voicetype.cpp)
+target_link_libraries(test_feedback PRIVATE voicetype-ipc Fcitx5::Core)
+if(TARGET Fcitx5::Module::Notifications)
+    target_link_libraries(test_feedback PRIVATE Fcitx5::Module::Notifications)
+    target_compile_definitions(test_feedback PRIVATE VOICETYPE_HAVE_NOTIFICATIONS=1)
+endif()
+add_test(NAME feedback COMMAND test_feedback)

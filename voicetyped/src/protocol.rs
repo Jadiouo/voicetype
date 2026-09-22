@@ -20,6 +20,12 @@ pub enum ClientMessage {
         /// daemon 收到 true 仍會拒絕。
         #[serde(default)]
         is_password: bool,
+        #[serde(default)]
+        context_id: String,
+        #[serde(default)]
+        context_text: String,
+        #[serde(default)]
+        selected_text: String,
     },
     Stop {
         session: u64,
@@ -30,6 +36,45 @@ pub enum ClientMessage {
     /// 降級鏈② (SDD §4.8): addon 的目標 InputContext 已消失。
     FallbackClipboard {
         text: String,
+    },
+    Correction {
+        session: u64,
+        program: String,
+        context_id: String,
+        before: String,
+        after: String,
+        #[serde(default)]
+        confirmed: bool,
+    },
+    Learn {
+        wrong: String,
+        right: String,
+        #[serde(default)]
+        program: String,
+    },
+    ListLearned,
+    ForgetLearned {
+        wrong: String,
+        #[serde(default)]
+        context_id: Option<String>,
+    },
+    SetContext {
+        text: String,
+        #[serde(default)]
+        program: String,
+    },
+    ProcessText {
+        text: String,
+        #[serde(default)]
+        context_text: String,
+        #[serde(default)]
+        program: String,
+        #[serde(default)]
+        context_id: String,
+        #[serde(default)]
+        selected_text: String,
+        #[serde(default)]
+        mode: Option<String>,
     },
     Ping,
 }
@@ -54,6 +99,9 @@ pub enum ServerMessage {
         value: SessionState,
     },
     Pong,
+    Info {
+        value: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -110,6 +158,7 @@ mod tests {
                 session,
                 program,
                 is_password,
+                ..
             } => {
                 assert_eq!(session, 42);
                 assert_eq!(program, "kitty");
@@ -123,8 +172,7 @@ mod tests {
     /// 有些應用程式的 program() 就是空的。
     #[test]
     fn start_tolerates_missing_optional_fields() {
-        let m: ClientMessage =
-            serde_json::from_str(r#"{"type":"start","session":1}"#).unwrap();
+        let m: ClientMessage = serde_json::from_str(r#"{"type":"start","session":1}"#).unwrap();
         match m {
             ClientMessage::Start {
                 program,
@@ -200,6 +248,9 @@ mod tests {
 
     #[test]
     fn pong_wire_format() {
-        assert_eq!(ServerMessage::Pong.to_line().unwrap(), "{\"type\":\"pong\"}\n");
+        assert_eq!(
+            ServerMessage::Pong.to_line().unwrap(),
+            "{\"type\":\"pong\"}\n"
+        );
     }
 }

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "scope": "Held-out active-negative TEXT pipeline scenarios authored after the candidate selector was finalized. These are not ASR/audio measurements. No tuning against these results in this implementation round.",
+  "notes": [
+    "These correct inputs deliberately resemble allowed correction targets, so the model must reject a plausible but inappropriate candidate.",
+    "Every case requires exact preservation. Names and situations are test fixtures.",
+    "Use isolated learning state and no manual context. The evaluator does not record audio or update learning."
+  ],
+  "cases": [
+    {
+      "id": "real_word_bush",
+      "kind": "keep",
+      "text": "There is a bush beside the entrance.",
+      "context_text": "正在描述花園入口旁邊的植物。",
+      "reason": "bush is a valid noun; the available verb push is an incorrect one-letter replacement."
+    },
+    {
+      "id": "real_word_beach",
+      "kind": "keep",
+      "text": "We spent Sunday at the beach.",
+      "context_text": "描述上週末去海邊的行程。",
+      "reason": "The near technical term branch must not overwrite beach."
+    },
+    {
+      "id": "real_word_brunch",
+      "kind": "keep",
+      "text": "I am meeting my sister for brunch.",
+      "context_text": "正在約妹妹一起吃早午餐。",
+      "reason": "brunch is already correct, despite being close to branch."
+    },
+    {
+      "id": "real_word_rebate",
+      "kind": "keep",
+      "text": "The store offered a rebate on this purchase.",
+      "context_text": "描述商店提供的購物折扣。",
+      "reason": "A commercial rebate is not the Git operation rebase."
+    },
+    {
+      "id": "mabe_is_brand_name",
+      "kind": "keep",
+      "text": "這台洗衣機的品牌叫 Mabe。",
+      "context_text": "討論家電品牌，品牌拼法需要保留。",
+      "reason": "A capitalized brand name is not automatically a misspelling of maybe."
+    },
+    {
+      "id": "unquoted_literal_variable",
+      "kind": "keep",
+      "text": "程式裡的變數就叫 mabe，請保留這個名字。",
+      "context_text": "正在口述現有程式碼的變數名稱。",
+      "reason": "The transcript explicitly marks an unquoted word as a literal identifier."
+    },
+    {
+      "id": "visible_professor_explicitly_excluded",
+      "kind": "keep",
+      "text": "我想找陳博宇教授，不是網頁上那位。",
+      "context_text": "網頁顯示陳柏宇教授的公開資訊。這頁不是正在討論的教授。",
+      "reason": "A close visible name is explicitly excluded by the speaker and must not win."
+    },
+    {
+      "id": "administrator_not_supervisor",
+      "kind": "keep",
+      "text": "請找陳博宇教授，行政窗口是另外一個人。",
+      "context_text": "行政窗口：陳柏宇主任。教授名單目前未顯示。",
+      "reason": "A similar administrator name must not replace the intended professor."
+    }
+  ]
+}

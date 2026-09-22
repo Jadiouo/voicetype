@@ -48,8 +48,8 @@ impl Vocab {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("讀取詞彙表 {}", path.display()))?;
-        let table: Table = toml::from_str(&text)
-            .with_context(|| format!("解析詞彙表 {}", path.display()))?;
+        let table: Table =
+            toml::from_str(&text).with_context(|| format!("解析詞彙表 {}", path.display()))?;
 
         let mut rules = Vec::new();
         for e in table.entry {
@@ -110,7 +110,8 @@ impl Vocab {
                 .iter()
                 .find_map(|(wrong, right)| match matched_len(tail, wrong) {
                     0 => None,
-                    n => Some((n, right)),
+                    n if token_boundaries(text, pos, n, wrong) => Some((n, right)),
+                    _ => None,
                 });
 
             match hit {
@@ -127,6 +128,14 @@ impl Vocab {
         }
         out
     }
+}
+
+fn token_boundaries(text: &str, start: usize, len: usize, pattern: &str) -> bool {
+    let latin = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    !(pattern.chars().next().is_some_and(latin)
+        && text[..start].chars().next_back().is_some_and(latin))
+        && !(pattern.chars().next_back().is_some_and(latin)
+            && text[start + len..].chars().next().is_some_and(latin))
 }
 
 /// 回傳 haystack 開頭與 needle 相符的**位元組長度**, 不符則 0。
@@ -181,17 +190,33 @@ mod tests {
         assert_eq!(v.apply("用 SENSE VOICE 跑"), "用 SenseVoice 跑");
     }
 
+    #[test]
+    fn english_rules_preserve_longer_words_but_allow_chinese_neighbors() {
+        let v = vocab(&[("mabe", "maybe"), ("gthub", "GitHub")]);
+        assert_eq!(
+            v.apply("這個mabe對，push到gthub"),
+            "這個maybe對，push到GitHub"
+        );
+        assert_eq!(v.apply("Mabel mabe_id mygthub"), "Mabel mabe_id mygthub");
+    }
+
     /// 長的規則要先命中, 否則 `rate` 會把 `learning rate` 咬掉一半。
     #[test]
     fn longer_rules_win() {
         let v = vocab(&[("rate", "速率"), ("learning rate", "learning rate")]);
-        assert_eq!(v.apply("the learning rate is high"), "the learning rate is high");
+        assert_eq!(
+            v.apply("the learning rate is high"),
+            "the learning rate is high"
+        );
     }
 
     #[test]
     fn replaces_every_occurrence() {
         let v = vocab(&[("吉特", "git")]);
-        assert_eq!(v.apply("先吉特 add 再吉特 commit"), "先git add 再git commit");
+        assert_eq!(
+            v.apply("先吉特 add 再吉特 commit"),
+            "先git add 再git commit"
+        );
     }
 
     #[test]

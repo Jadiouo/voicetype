@@ -15,6 +15,7 @@ Restart=on-failure
 RestartSec=2
 
 Environment=VOICETYPE_LOG=info
+Environment=VOICETYPE_CONTEXT_HELPER=%h/.local/bin/voicetype-context
 
 # glibc 預設每個執行緒可以有自己的 malloc arena (上限 8×核心數)。
 # tokio 的多執行緒 runtime 因此散在十幾個 arena 上, 每個都保留自己的

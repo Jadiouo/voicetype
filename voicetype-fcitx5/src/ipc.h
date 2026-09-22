@@ -24,6 +24,13 @@ struct IpcMessage {
     std::string program;  // start
     std::string code;     // error
     std::string value;    // state
+    std::string contextId;    // start / correction (opaque input context ID)
+    std::string contextText;  // start (bounded surrounding text)
+    std::string selectedText; // start
+    std::string before;       // correction (full delivered dictation)
+    std::string after;        // correction (full corrected dictation)
+    bool hasConfirmed = false;
+    bool confirmed = false;
 
     bool hasIsPassword = false;
     bool isPassword = false;

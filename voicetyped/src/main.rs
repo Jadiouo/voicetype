@@ -4,10 +4,13 @@
 //! 不能拖垮輸入法)、不阻塞 fcitx5 事件迴圈、資源可透過 systemd 限制。
 
 mod asr;
+mod assistant;
 mod audio;
 mod ipc;
+mod personalization;
 mod postproc;
 mod protocol;
+mod refine;
 mod session;
 mod vad;
 
@@ -64,6 +67,7 @@ async fn main() -> Result<()> {
             vad,
             traditional,
             vocab,
+            assistant: Arc::new(crate::assistant::Assistant::load()?),
         },
     ));
 
@@ -198,11 +202,7 @@ fn transcribe_file(args: TranscribeArgs) -> Result<()> {
 }
 
 /// 連續推論 N 次並印出每次的 RSS 與耗時。
-fn repeat_transcribe(
-    transcriber: &dyn Transcriber,
-    samples: &[f32],
-    n: usize,
-) -> Result<()> {
+fn repeat_transcribe(transcriber: &dyn Transcriber, samples: &[f32], n: usize) -> Result<()> {
     println!("{:>4}  {:>10}  {:>9}  {:>8}", "次", "RSS", "Δ", "耗時");
     let mut prev = rss_kb()?;
     let base = prev;
@@ -307,9 +307,7 @@ fn load_engine(use_itn: bool) -> Result<Engine> {
     {
         let path = model_path();
         let engine = crate::asr::SenseVoice::load_with_itn(&path, use_itn).map_err(|e| {
-            anyhow::anyhow!(
-                "{e}\n\n模型路徑可用 VOICETYPE_MODEL 覆寫。下載方式見 README。"
-            )
+            anyhow::anyhow!("{e}\n\n模型路徑可用 VOICETYPE_MODEL 覆寫。下載方式見 README。")
         })?;
         let engine = Arc::new(engine);
         Ok((engine.clone(), Some(engine)))

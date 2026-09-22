@@ -9,3 +9,6 @@ Type=SharedLibrary
 Library=libvoicetype
 OnDemand=False
 Configurable=True
+
+[Addon/OptionalDependencies]
+0=notifications

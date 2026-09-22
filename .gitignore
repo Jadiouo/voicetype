@@ -13,6 +13,8 @@ models/
 # 語料錄音: 是使用者本人的聲音, 不進版控 (SDD §7 的隱私原則)
 eval/recordings/
 eval/*.json
+!eval/context_cases.json
+!eval/context_holdout.json
 
 # 外部相依原始碼
 third_party/

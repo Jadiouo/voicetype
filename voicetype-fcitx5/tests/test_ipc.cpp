@@ -64,6 +64,39 @@ static void testSerializeStop() {
     CHECK_STR_EQ(serialize(m), R"({"type":"stop","session":7})");
 }
 
+static void testContextAndCorrectionWire() {
+    IpcMessage start;
+    start.type = "start";
+    start.setSession(44);
+    start.contextId = "instance-input-context";
+    start.contextText = "前文：陳柏宇教授\n研究 GitHub";
+    start.selectedText = "陳柏宇";
+    IpcMessage back;
+    CHECK(parse(serialize(start), back));
+    CHECK_STR_EQ(back.contextId, start.contextId);
+    CHECK_STR_EQ(back.contextText, start.contextText);
+    CHECK_STR_EQ(back.selectedText, start.selectedText);
+
+    IpcMessage correction;
+    correction.type = "correction";
+    correction.setSession(44);
+    correction.program = "editor";
+    correction.contextId = "instance-input-context";
+    correction.before = "請把東西 push 到 gthub。";
+    correction.after = "請把東西 push 到 GitHub。";
+    correction.hasConfirmed = true;
+    correction.confirmed = false;
+    CHECK_STR_EQ(serialize(correction),
+        R"({"type":"correction","session":44,"program":"editor","context_id":"instance-input-context","before":"請把東西 push 到 gthub。","after":"請把東西 push 到 GitHub。","confirmed":false})");
+    CHECK(parse(serialize(correction), back));
+    CHECK_STR_EQ(back.before, correction.before);
+    CHECK_STR_EQ(back.after, correction.after);
+    CHECK(back.hasConfirmed && !back.confirmed);
+    correction.confirmed = true;
+    CHECK(parse(serialize(correction), back));
+    CHECK(back.hasConfirmed && back.confirmed);
+}
+
 // session 0 必須真的出現在線上, 不能被「空值省略」吃掉。
 static void testSessionZeroIsEmitted() {
     IpcMessage m;
@@ -186,6 +219,7 @@ static void testWhitespaceTolerance() {
 
 int main() {
     testSerializeStart();
+    testContextAndCorrectionWire();
     testSerializeStop();
     testSessionZeroIsEmitted();
     testParseResultChinese();

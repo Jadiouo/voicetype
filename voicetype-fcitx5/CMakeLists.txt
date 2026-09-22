@@ -14,6 +14,8 @@ set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 
 find_package(Fcitx5Core REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
+# Optional at build and runtime; the input-panel fallback needs no extra module.
+find_package(Fcitx5ModuleNotifications QUIET)
 
 # fcitx5 只掃描它自己編譯時決定的 addon 目錄, 不看 CMake 的安裝前綴。
 # CMake 預設的 /usr/local 因此會把 .so 裝到一個永遠不會被載入的位置 ——

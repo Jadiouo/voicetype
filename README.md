@@ -2,7 +2,7 @@
 
 按住熱鍵說話, 放開後文字出現在游標處 —— 不限應用程式, **包含終端機**。
 
-Fcitx5 語音聽寫模組。全本機推論, **0 VRAM**, 常駐記憶體 < 400MB。
+Fcitx5 語音聽寫模組。全本機推論，ASR 使用 CPU；可選的文字校正也預設 CPU。記憶體依使用狀態與是否啟用文字模型而變，不保證低於 400 MB。
 
 架構與設計理由: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
@@ -14,6 +14,11 @@ Fcitx5 語音聽寫模組。全本機推論, **0 VRAM**, 常駐記憶體 < 400MB
 |---|---|
 | 按住 `Ctrl` + `Alt` | 開始錄音, 放開任一鍵即送出 |
 | 錄音中按 `Esc` | 取消, 不送出任何文字 |
+| 選取完整修正句，按 `Ctrl+Caps Lock` | 立即學習上一句的詞彙修正 |
+
+新版支援觀察修正、個人詞彙、目前視窗上下文及可選的本機文字模型。
+操作、限制、停用方式見 [個人化說明](docs/PERSONALIZATION.md)。
+自動學習在能確認歸屬時，累積兩次獨立修正才啟用；不會重新訓練 ASR 權重。
 
 `Ctrl+Alt` 是桌面環境許多快捷鍵的前綴（`Ctrl+Alt+T` 開終端、
 `Ctrl+Alt+方向鍵` 切工作區）。按住它說話時再碰到其他鍵, 那些快捷鍵
@@ -112,7 +117,8 @@ GNOME 右上角的麥克風指示燈在這段期間會持續亮著。
 
 裝 daemon 到 `~/.local/bin`、模型到 `~/.local/share/voicetype/models`、
 詞彙表到 `~/.config/voicetype/vocab.toml`, 註冊成 systemd user service
-(開機自動啟動)。addon 需要 sudo, 腳本會印出指令但不代勞。
+(登入後自動啟動)。addon 可用 `./scripts/install-addon-user.sh` 安裝到使用者目錄，
+再 `fcitx5 -rd` 重啟，不需要 sudo；詳見個人化說明。
 
 需要先建置過 daemon (見下)。腳本會在執行檔不含 ASR 引擎時直接中止 ——
 那種執行檔跑起來一切正常, 只是辨識結果是 `[null asr: 3.48s]`。
@@ -161,7 +167,7 @@ right = "Isaac Sim"
 ```bash
 sudo apt install libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev \
                  fcitx5-modules-dev extra-cmake-modules libopencc-dev \
-                 libasound2-dev pkg-config build-essential
+                 libasound2-dev libnotify-bin pkg-config build-essential
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 

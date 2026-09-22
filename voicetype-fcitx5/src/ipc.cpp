@@ -289,6 +289,23 @@ std::string serialize(const IpcMessage &msg) {
         out += ",\"value\":";
         appendEscaped(out, msg.value);
     }
+    const auto appendString = [&out](const char *key, const std::string &value) {
+        if (!value.empty()) {
+            out += ",\"";
+            out += key;
+            out += "\":";
+            appendEscaped(out, value);
+        }
+    };
+    appendString("context_id", msg.contextId);
+    appendString("context_text", msg.contextText);
+    appendString("selected_text", msg.selectedText);
+    appendString("before", msg.before);
+    appendString("after", msg.after);
+    if (msg.hasConfirmed) {
+        out += ",\"confirmed\":";
+        out += msg.confirmed ? "true" : "false";
+    }
     out += "}";
     return out;
 }
@@ -348,6 +365,19 @@ bool parse(const std::string &line, IpcMessage &out) {
         } else if (key == "is_password" && kind == 2) {
             out.isPassword = bv;
             out.hasIsPassword = true;
+        } else if (key == "context_id" && kind == 0) {
+            out.contextId = sv;
+        } else if (key == "context_text" && kind == 0) {
+            out.contextText = sv;
+        } else if (key == "selected_text" && kind == 0) {
+            out.selectedText = sv;
+        } else if (key == "before" && kind == 0) {
+            out.before = sv;
+        } else if (key == "after" && kind == 0) {
+            out.after = sv;
+        } else if (key == "confirmed" && kind == 2) {
+            out.confirmed = bv;
+            out.hasConfirmed = true;
         }
         // 未知欄位一律忽略——協定要能往前相容。
 

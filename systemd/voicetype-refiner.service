@@ -1,0 +1,21 @@
+[Unit]
+Description=VoiceType local text refiner (CPU)
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/voicetype/llama/llama-server -m %h/.local/share/voicetype/models/Qwen3-0.6B-Q8_0.gguf --host 127.0.0.1 --port 18765 --alias local --device none --no-op-offload -ngl 0 -c 4096 -t 4 -tb 4 --parallel 1 --jinja --reasoning-budget 0 --sleep-idle-seconds 120 --cors-origins http://127.0.0.1:18765
+Restart=on-failure
+RestartSec=3
+Environment=MALLOC_ARENA_MAX=2
+Environment=LD_LIBRARY_PATH=%h/.local/share/voicetype/llama
+CPUWeight=50
+Nice=5
+MemoryHigh=1536M
+MemoryMax=2G
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

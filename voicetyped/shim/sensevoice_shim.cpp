@@ -169,6 +169,12 @@ int vt_sv_transcribe(vt_sv_context *wrapper, const float *samples,
         sense_voice_full_default_params(SENSE_VOICE_SAMPLING_GREEDY);
     params.n_threads = wrapper->n_threads;
     params.language = (language && *language) ? language : "auto";
+    const int language_id = sense_voice_lang_id(params.language);
+    if (language_id < 0) {
+        wrapper->last_error = "unsupported language";
+        return VT_SV_ERR_INVALID_ARG;
+    }
+    wrapper->ctx->language_id = language_id;
     params.no_timestamps = true;
     params.print_progress = false;
     params.print_timestamps = false;

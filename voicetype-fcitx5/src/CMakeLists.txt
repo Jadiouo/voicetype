@@ -1,6 +1,6 @@
 # NDJSON 編解碼拆成獨立的靜態目標, 讓測試可以連結它而不必連進整個
 # addon module (module 目標無法被 link)。
-add_library(voicetype-ipc STATIC ipc.cpp)
+add_library(voicetype-ipc STATIC ipc.cpp context.cpp)
 target_include_directories(voicetype-ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(voicetype-ipc PUBLIC Fcitx5::Utils)
 set_target_properties(voicetype-ipc PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -8,6 +8,10 @@ set_target_properties(voicetype-ipc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(voicetype MODULE voicetype.cpp)
 set_target_properties(voicetype PROPERTIES PREFIX "lib")
 target_link_libraries(voicetype PRIVATE voicetype-ipc Fcitx5::Core Fcitx5::Utils)
+if(TARGET Fcitx5::Module::Notifications)
+    target_link_libraries(voicetype PRIVATE Fcitx5::Module::Notifications)
+    target_compile_definitions(voicetype PRIVATE VOICETYPE_HAVE_NOTIFICATIONS=1)
+endif()
 
 install(TARGETS voicetype DESTINATION "${FCITX_INSTALL_LIBDIR}/fcitx5")
 

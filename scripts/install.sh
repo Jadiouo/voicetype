@@ -20,6 +20,9 @@ UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m錯誤: %s\033[0m\n' "$*" >&2; exit 1; }
 
+command -v notify-send >/dev/null 2>&1 || die "學習結果通知需要 notify-send。
+Debian/Ubuntu 可先安裝: sudo apt install libnotify-bin"
+
 # --- 1. daemon 執行檔 -------------------------------------------------
 
 [[ -x "$BIN_SRC" ]] || die "找不到 daemon 執行檔: $BIN_SRC
@@ -43,7 +46,10 @@ fi
 
 say "安裝 daemon → $BIN_DST"
 mkdir -p "$(dirname "$BIN_DST")"
-install -m 755 "$BIN_SRC" "$BIN_DST"
+install -m 755 "$BIN_SRC" "$BIN_DST.new"
+mv "$BIN_DST.new" "$BIN_DST"
+install -m 755 "$REPO/scripts/voicetype-control.py" "$HOME/.local/bin/voicetype-control"
+install -m 755 "$REPO/scripts/context-desktop.py" "$HOME/.local/bin/voicetype-context"
 
 case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
@@ -91,11 +97,20 @@ fi
 # 未定義的)。先停掉 service 自己的實例, 剩下的就是手動跑的。
 systemctl --user stop voicetyped.service 2>/dev/null || true
 SOCK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/voicetype/ipc.sock"
-if [[ -S "$SOCK" ]] && pgrep -u "$USER" -x voicetyped >/dev/null 2>&1; then
+if [[ -S "$SOCK" ]] && python3 - "$SOCK" <<'PY'
+import socket, sys
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+    probe.settimeout(0.5)
+    try:
+        probe.connect(sys.argv[1])
+    except OSError:
+        sys.exit(1)
+PY
+then
     die "有一個手動啟動的 voicetyped 正在跑, 佔著 $SOCK
 
-先停掉它 (跑它的那個終端按 Ctrl-C), 或:
-  pkill -u $USER -x voicetyped
+先停掉佔用這個 socket 的實例 (跑它的那個終端按 Ctrl-C)。
+其他使用不同 socket 的評測 daemon 不需要停止。
 
 然後重跑這個腳本。"
 fi
