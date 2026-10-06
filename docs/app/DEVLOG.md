@@ -223,3 +223,7 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
 - Next priority is the actual app provider transport and Fcitx delivery path,
   using the versioned contract and explicit runtime ownership. Google status,
   shared data UI, packaging assets and Windows work remain; Goal stays active.
+- At source `bd6f3e8`, [engine CI 37514581633](https://github.com/Jadiouo/voicetype/actions/runs/37514581633)
+  and [both desktop jobs 37514581670](https://github.com/Jadiouo/voicetype/actions/runs/37514581670)
+  passed. The remote tree matched all 171 local source blobs. Desktop speech
+  adapters are still unconnected; these green checks do not complete M2 or M3.
