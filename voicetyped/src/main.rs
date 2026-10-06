@@ -6,8 +6,12 @@
 mod asr;
 mod assistant;
 mod audio;
+mod csc;
 mod ipc;
 mod personalization;
+mod output;
+mod replay;
+mod review;
 mod postproc;
 mod protocol;
 mod refine;
@@ -25,15 +29,20 @@ use crate::asr::NullTranscriber;
 use crate::asr::Transcriber;
 use crate::audio::{AudioCapture, StreamMode};
 use crate::session::{Pipeline, SessionManager};
-use crate::vad::SpeechDetector;
+use crate::vad::AudioPreparation;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_env("VOICETYPE_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    if let Some(input) = replay::requested()? {
+        return replay::run(&input);
+    }
 
     // 評測模式 (SDD §8.1)。放在 daemon 啟動之前 —— 它不開 socket、
     // 不碰麥克風, 只跑推論管線。
@@ -43,8 +52,9 @@ async fn main() -> Result<()> {
 
     info!(version = env!("CARGO_PKG_VERSION"), "voicetyped starting");
 
+    let traditional = Some(Arc::new(crate::postproc::Traditional::load()
+        .ok_or_else(|| anyhow::anyhow!("OpenCC s2tw 資料檔缺失，無法保證繁體輸出"))?));
     let (asr, vad) = load_engine(true)?;
-    let traditional = crate::postproc::Traditional::load().map(Arc::new);
     let vocab = Arc::new(crate::postproc::Vocab::load_or_empty(&vocab_path()));
     info!(
         engine = asr.name(),
@@ -68,6 +78,7 @@ async fn main() -> Result<()> {
             traditional,
             vocab,
             assistant: Arc::new(crate::assistant::Assistant::load()?),
+            review: crate::review::Collector::start(),
         },
     ));
 
@@ -96,6 +107,9 @@ struct TranscribeArgs {
     wav: std::path::PathBuf,
     use_vad: bool,
     use_itn: bool,
+    /// Opt-in evaluation of the actual bounded production language policy.
+    /// Default raw transcription (including tags) is deliberately unchanged.
+    production_language_policy: bool,
     /// `--vad-report`: 印出逐窗語音機率的分布, 不做轉錄。
     ///
     /// 存在的理由: VAD 判定「有語音」時, 從輸出看不出來它是**險過**
@@ -117,6 +131,7 @@ impl TranscribeArgs {
         let mut wav = None;
         let mut use_vad = true;
         let mut use_itn = true;
+        let mut production_language_policy = false;
         let mut vad_report = false;
         let mut repeat = 1usize;
         let mut asked = false;
@@ -129,6 +144,7 @@ impl TranscribeArgs {
                 }
                 "--no-vad" => use_vad = false,
                 "--no-itn" => use_itn = false,
+                "--production-language-policy" => production_language_policy = true,
                 "--vad-report" => vad_report = true,
                 "--repeat" => {
                     repeat = args
@@ -139,6 +155,9 @@ impl TranscribeArgs {
                 other => anyhow::bail!("未知的參數: {other}"),
             }
         }
+        if production_language_policy && (!asked || vad_report || repeat != 1) {
+            anyhow::bail!("--production-language-policy requires --transcribe without --repeat/--vad-report");
+        }
         if !asked {
             return Ok(None);
         }
@@ -147,6 +166,7 @@ impl TranscribeArgs {
             wav,
             use_vad,
             use_itn,
+            production_language_policy,
             vad_report,
             repeat,
         }))
@@ -162,12 +182,17 @@ fn transcribe_file(args: TranscribeArgs) -> Result<()> {
         let Some(detector) = detector.as_deref() else {
             anyhow::bail!("這個建置沒有 VAD");
         };
-        return vad_report(detector, &samples);
+        if let Some(probability_detector) = detector.probability_detector() {
+            return vad_report(probability_detector, &samples);
+        }
+        let accepted = detector.prepare(&samples)?.is_some();
+        println!("{}", serde_json::json!({"kind":"full_waveform_speech_gate", "speech":accepted, "samples":samples.len()}));
+        return Ok(());
     }
 
     if args.use_vad {
         if let Some(detector) = detector.as_deref() {
-            match crate::vad::trim(detector, &samples, &crate::vad::VadConfig::default())? {
+            match detector.prepare(&samples)? {
                 Some(speech) => {
                     samples.truncate(speech.end);
                     samples.drain(..speech.start);
@@ -184,6 +209,13 @@ fn transcribe_file(args: TranscribeArgs) -> Result<()> {
 
     if args.repeat > 1 {
         return repeat_transcribe(transcriber.as_ref(), &samples, args.repeat);
+    }
+
+    if args.production_language_policy {
+        // The flag changes only language recovery/tag stripping. It still does
+        // not run vocabulary, learning or final output conversion during ASR eval.
+        println!("{}", crate::asr::policy::transcribe(transcriber.as_ref(), &samples)?.unwrap_or_default());
+        return Ok(());
     }
 
     let raw = transcriber.transcribe(crate::asr::Utterance {
@@ -293,16 +325,30 @@ fn vad_report(detector: &dyn crate::vad::SpeechDetector, samples: &[f32]) -> Res
 
 /// 選定並載入 ASR 引擎, 一併回傳 VAD (SDD §4.1 / §4.4)。
 ///
-/// R1 的實測結論 (docs/r1-findings.md) 是維持 SenseVoice 單一引擎 ——
-/// SDD §8.1 的 per-app 切換備案因 whisper 的延遲 (慢 16 倍) 作廢。
-/// `asr::Transcriber` 這層抽象仍保留: terminal 情境的問題還沒有解,
-/// 未來換引擎時不必動 session 與 IPC。
-///
-/// VAD 與 ASR 是同一個物件 —— Silero 的權重就在 SenseVoice 的 GGUF 裡,
-/// 分開載入等於把 291MB 的模型讀兩次。
-type Engine = (Arc<dyn Transcriber>, Option<Arc<dyn SpeechDetector>>);
+/// 依明確 profile 只載入一個 ASR recognizer，session 與 IPC 共用相同抽象。
+/// SenseVoice 的 Silero 與 ASR 共用 GGUF/context，避免重載同一份權重；
+/// Nano 則在單一 wrapper 中持有 recognizer 與獨立的小型 Silero VAD。
+/// 各 profile 保留自己的音訊準備契約：SV 首尾修剪，Nano 全波形 gate
+/// 加上長錄音分段。沒有同時常駐兩個 ASR 模型。
+type Engine = (Arc<dyn Transcriber>, Option<Arc<AudioPreparation>>);
 
 fn load_engine(use_itn: bool) -> Result<Engine> {
+    let requested = std::env::var("VOICETYPE_ASR_PROFILE");
+    let value = match &requested {
+        Ok(value) => Some(value.as_str()),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => anyhow::bail!("invalid VOICETYPE_ASR_PROFILE: {error}"),
+    };
+    if asr::profile::Profile::parse(value)? == asr::profile::Profile::Nano {
+        #[cfg(feature = "sherpa-nano")]
+        {
+            let engine = Arc::new(asr::nano::Nano::from_env(use_itn)?);
+            let gate = AudioPreparation::FullWaveformGate(engine.clone());
+            return Ok((engine, Some(Arc::new(gate))));
+        }
+        #[cfg(not(feature = "sherpa-nano"))]
+        anyhow::bail!("nano profile requested but this build lacks the sherpa-nano feature; no fallback model loaded");
+    }
     #[cfg(feature = "sensevoice")]
     {
         let path = model_path();
@@ -310,7 +356,7 @@ fn load_engine(use_itn: bool) -> Result<Engine> {
             anyhow::anyhow!("{e}\n\n模型路徑可用 VOICETYPE_MODEL 覆寫。下載方式見 README。")
         })?;
         let engine = Arc::new(engine);
-        Ok((engine.clone(), Some(engine)))
+        Ok((engine.clone(), Some(Arc::new(AudioPreparation::Trim(engine)))))
     }
     #[cfg(not(feature = "sensevoice"))]
     {
@@ -355,6 +401,10 @@ fn load_engine(use_itn: bool) -> Result<Engine> {
 /// 用 1 秒的靜音: 夠讓所有層都跑過一遍, 又不會讓啟動明顯變慢。
 /// 輸出直接丟棄 (靜音會讓引擎產生幻覺文字, 那正是 VAD 存在的理由)。
 fn warm_up(asr: &dyn Transcriber) {
+    if !asr.warmup_with_silence() {
+        info!(engine = asr.name(), "model load ready; skipping non-representative silence warmup");
+        return;
+    }
     let t = std::time::Instant::now();
     let silence = vec![0.0f32; 16_000];
     match asr.transcribe(crate::asr::Utterance {

@@ -77,6 +77,8 @@ pub enum ClientMessage {
         mode: Option<String>,
     },
     Ping,
+    /// Read-only sampling diagnostics; never starts capture.
+    ReviewStatus,
 }
 
 /// Daemon → Addon

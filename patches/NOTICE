@@ -1,0 +1,10 @@
+The Nano integrity patch modifies sherpa-onnx by k2-fsa and its contributors,
+upstream commit 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf (v1.13.8).
+Upstream source: https://github.com/k2-fsa/sherpa-onnx
+License: Apache License, Version 2.0; see LICENSE.sherpa-onnx.
+
+VoiceType modifications add explicit decode-completion status, reject truncated
+audio/unfinished text, reset reused stream state, and check LFR/model boundaries.
+The patch changes offline-recognizer-funasr-nano-impl.cc and .h.
+Upstream copyright notices remain applicable. Native binaries, model weights,
+and third-party dependencies are not distributed in this repository.

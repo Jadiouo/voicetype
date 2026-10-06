@@ -27,6 +27,7 @@ pub struct Assistant {
     recent: Mutex<VecDeque<Delivered>>,
     manual_context: Mutex<(String, String, Instant)>,
     refiner: Option<Refiner>,
+    spelling: Option<crate::csc::CscClient>,
 }
 
 impl Assistant {
@@ -41,19 +42,33 @@ impl Assistant {
             );
             Personalization::memory()
         });
-        Ok(Self::new(learned, Refiner::from_env()))
+        let mut assistant = Self::new(learned, Refiner::from_env());
+        assistant.spelling = crate::csc::CscClient::from_env();
+        Ok(assistant)
     }
 
-    fn new(learned: Personalization, refiner: Option<Refiner>) -> Self {
+    pub(crate) fn new(learned: Personalization, refiner: Option<Refiner>) -> Self {
         Self {
             learned: Mutex::new(learned),
             recent: Mutex::new(VecDeque::new()),
             manual_context: Mutex::new((String::new(), String::new(), Instant::now())),
             refiner,
+            spelling: None,
         }
     }
 
     pub fn process(&self, text: &str, scope: &ContextSnapshot, mode: Option<&str>) -> String {
+        self.process_with_terms(text, scope, mode, &[], &[])
+    }
+
+    pub fn process_with_terms(
+        &self,
+        text: &str,
+        scope: &ContextSnapshot,
+        mode: Option<&str>,
+        dictionary_terms: &[String],
+        canonical_names: &[String],
+    ) -> String {
         let mut scope = scope.bounded();
         {
             let manual = self
@@ -71,14 +86,21 @@ impl Assistant {
             }
         }
         let scope = scope.bounded();
-        let (text, terms) = {
+        let (text, mut terms) = {
             let learned = self.learned.lock().unwrap_or_else(|e| e.into_inner());
-            (learned.apply(text, &scope), learned.candidates(&scope))
+            (
+                learned.apply_preserving_names(text, &scope, canonical_names),
+                learned.candidates(&scope),
+            )
         };
-        let terms = prioritized_terms(terms);
+        terms.extend_from_slice(dictionary_terms);
         if mode == Some("off") {
             return text;
         }
+        if let Some(spelling) = &self.spelling {
+            return spelling.correct(&text, &terms);
+        }
+        let terms = prioritized_terms(terms);
         let Some(refiner) = &self.refiner else {
             return text;
         };
@@ -237,8 +259,30 @@ fn prioritized_terms(mut terms: Vec<String>) -> Vec<String> {
 
 /// A single executable path, never a shell command. Fail closed on unavailable
 /// accessibility providers. Runs in spawn_blocking while the user is speaking.
+pub fn desktop_context_enabled() -> bool {
+    screen_context_helper(
+        std::env::var_os("VOICETYPE_ENABLE_SCREEN_CONTEXT").as_deref(),
+        std::env::var_os("VOICETYPE_CONTEXT_HELPER").as_deref(),
+    ).is_some()
+}
+
+fn screen_context_opt_in(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
 pub fn desktop_context() -> String {
-    let Some(helper) = std::env::var_os("VOICETYPE_CONTEXT_HELPER") else {
+    desktop_context_with(
+        std::env::var_os("VOICETYPE_ENABLE_SCREEN_CONTEXT").as_deref(),
+        std::env::var_os("VOICETYPE_CONTEXT_HELPER").as_deref(),
+    )
+}
+
+fn screen_context_helper<'a>(enabled: Option<&std::ffi::OsStr>, helper: Option<&'a std::ffi::OsStr>) -> Option<&'a std::ffi::OsStr> {
+    helper.filter(|path| screen_context_opt_in(enabled) && !path.is_empty())
+}
+
+fn desktop_context_with(enabled: Option<&std::ffi::OsStr>, helper: Option<&std::ffi::OsStr>) -> String {
+    let Some(helper) = screen_context_helper(enabled, helper) else {
         return String::new();
     };
     let Ok(mut child) = Command::new(helper)
@@ -282,6 +326,37 @@ pub fn desktop_context() -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn screen_context_requires_explicit_opt_in() {
+        use std::ffi::OsStr;
+        for value in [None, Some(OsStr::new("")), Some(OsStr::new("0")), Some(OsStr::new("true"))] {
+            assert!(!screen_context_opt_in(value));
+        }
+        assert!(screen_context_opt_in(Some(OsStr::new("1"))));
+    }
+
+    #[test]
+    fn configured_screen_helper_does_not_run_without_opt_in() {
+        use std::ffi::OsStr;
+        use std::os::unix::fs::PermissionsExt;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("voicetype-helper-test-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let helper = dir.join("helper");
+        let marker = dir.join("helper.marker");
+        std::fs::write(&helper, "#!/bin/sh\nprintf ran > \"$0.marker\"\nprintf '%s' '{\"text\":\"explicitly enabled\"}'\n").unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Exercise the same gating/executor used by desktop_context(), with
+        // configuration passed explicitly so parallel tests never mutate env.
+        for enabled in [None, Some(OsStr::new("0"))] {
+            assert_eq!(desktop_context_with(enabled, Some(helper.as_os_str())), "");
+            assert!(!marker.exists(), "disabled helper was executed");
+        }
+        assert_eq!(desktop_context_with(Some(OsStr::new("1")), Some(helper.as_os_str())), "explicitly enabled");
+        assert!(marker.exists(), "positive control did not execute configured helper");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn scope(id: &str) -> ContextSnapshot {
         ContextSnapshot {
             program: "browser".into(),
@@ -292,6 +367,246 @@ mod tests {
 
     fn assistant() -> Assistant {
         Assistant::new(Personalization::memory(), None)
+    }
+
+    #[test]
+    fn confirmed_name_correction_does_not_merge_distinct_roles() {
+        let assistant = assistant();
+        let initial = scope("first");
+        let before = "林志豪老師剛才提到的方向，我想先整理成一頁摘要。";
+        let after = "林智豪老師剛才提到的方向，我想先整理成一頁摘要。";
+        assistant.remember(51, initial, before.into());
+        assert!(assistant.correction(51, "browser", "first", before, after, true).unwrap());
+        let current = ContextSnapshot {
+            text: "聯絡人：行政窗口林志豪；研究指導林智豪老師。".into(),
+            ..scope("later")
+        };
+        // The recognizer used the same spelling for two roles. Only the first
+        // is correct; a term-wide replacement silently destroys that correct name.
+        let heard = "窗口叫林志豪，老師叫林志豪記性的時候，不要填成同一個人。";
+        assert_eq!(assistant.process(heard, &current, Some("off")), heard);
+    }
+
+    #[test]
+    fn explicit_rule_abstains_when_context_contains_both_spellings() {
+        let assistant = assistant();
+        assistant.learn("陳博宇", "陳柏宇", "browser").unwrap();
+        let current = ContextSnapshot {
+            text: "窗口陳博宇與老師陳柏宇是不同人。".into(),
+            ..scope("later")
+        };
+        let heard = "請找窗口陳博宇。";
+        assert_eq!(assistant.process(heard, &current, Some("off")), heard);
+    }
+
+    #[test]
+    fn learned_rule_preserves_distinct_spellings_already_in_the_utterance() {
+        let assistant = assistant();
+        assistant.learn("陳博宇", "陳柏宇", "browser").unwrap();
+        let heard = "窗口是陳博宇，老師是陳柏宇。";
+        assert_eq!(assistant.process(heard, &scope("later"), Some("off")), heard);
+    }
+
+    #[test]
+    fn confirmed_rule_does_not_override_an_explicit_source_spelling_in_context() {
+        let assistant = assistant();
+        assistant.learn("陳博宇", "陳柏宇", "browser").unwrap();
+        let current = ContextSnapshot {
+            text: "窗口姓名登記為陳博宇，請沿用原名。".into(),
+            ..scope("later")
+        };
+        assert_eq!(assistant.process("請找陳博宇。", &current, Some("off")), "請找陳博宇。");
+    }
+
+    #[test]
+    fn single_unambiguous_spelling_still_applies_but_repetitions_abstain() {
+        let assistant = assistant();
+        assistant.learn("mabe", "maybe", "browser").unwrap();
+        let current = scope("later");
+        assert_eq!(assistant.process("這個mabe是對的", &current, Some("off")), "這個maybe是對的");
+        // A deliberate recall tradeoff: no per-occurrence evidence for repeats.
+        assert_eq!(assistant.process("mabe 和 mabe", &current, Some("off")), "mabe 和 mabe");
+    }
+
+    #[test]
+    fn boundary_spacing_does_not_hide_a_confirmed_ascii_spelling_observation() {
+        use crate::personalization::LearningStatus;
+        let assistant = assistant();
+        let current = scope("field-a");
+        let before = "這個東西mabe是對的，但我想先確認一下再決定。";
+        let after = "這個東西 maybe 是對的，但我想先確認一下再決定。";
+        for session in [11, 12] {
+            assistant.remember(session, current.clone(), before.into());
+            let outcome = assistant
+                .correction_detailed(session, "browser", "field-a", before, after, false)
+                .unwrap();
+            assert_eq!(
+                outcome.status,
+                if session == 11 {
+                    LearningStatus::Pending
+                } else {
+                    LearningStatus::Activated
+                }
+            );
+            if session == 11 {
+                assert_eq!(assistant.process(before, &current, Some("off")), before);
+            }
+        }
+        // Formatting was normalized for comparison only, not for delivery.
+        assert_eq!(
+            assistant.process(before, &current, Some("off")),
+            "這個東西maybe是對的，但我想先確認一下再決定。"
+        );
+        assert_eq!(
+            assistant.process(before, &scope("different-field"), Some("off")),
+            before
+        );
+    }
+
+    #[test]
+    fn sentence_feedback_does_not_learn_chinese_word_reordering() {
+        use crate::personalization::{LearningStatus, RejectionReason};
+        let assistant = assistant();
+        let before = "請幫我把剛才討論的重點寫下來，我等一下會自己檢查。";
+        let after = "請幫我把剛才討論的重點寫下來，等一下我會自己檢查。";
+        assistant.remember(5, scope("field-a"), before.into());
+        let outcome = assistant
+            .correction_detailed(5, "browser", "field-a", before, after, false)
+            .unwrap();
+        assert_eq!(outcome.status, LearningStatus::Rejected);
+        assert_eq!(outcome.reason, Some(RejectionReason::NotSingleTerm));
+        assert_eq!(assistant.list().unwrap(), json!([]));
+    }
+
+    #[test]
+    fn spacing_fallback_never_learns_phrase_formatting_or_multiple_edits() {
+        use crate::personalization::LearningStatus;
+        let assistant = assistant();
+        for (index, (before, after)) in [
+            (
+                "這個mabe可以push到gthub上面",
+                "這個 maybe 可以 push 到 GitHub 上面",
+            ),
+            ("這個side project可以完成", "這個 sideproject 可以完成"),
+            ("這個sideproject可以完成", "這個 side project 可以完成"),
+            ("這個maybe是對的", "這個 maybe 是對的"),
+            ("這個mabe用32個參數", "這個 maybe 用三十二個參數"),
+            ("這個mabe對，後面再看", "這個 maybe 對。後面再看"),
+            ("檔案/srv/mabe保持不變", "檔案 /srv/maybe 保持不變"),
+            ("這個mabe_value保持不變", "這個 maybe_value 保持不變"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let session = 100 + index as u64;
+            assistant.remember(session, scope("field-a"), before.into());
+            let outcome = assistant
+                .correction_detailed(session, "browser", "field-a", before, after, false)
+                .unwrap();
+            assert_eq!(
+                outcome.status,
+                LearningStatus::Rejected,
+                "{before:?} -> {after:?}"
+            );
+        }
+        assert_eq!(assistant.list().unwrap(), json!([]));
+    }
+
+    #[test]
+    fn spacing_fallback_cannot_borrow_an_unchanged_word_to_validate_a_path_edit() {
+        use crate::personalization::LearningStatus;
+        let assistant = assistant();
+        let before = "這個mabe用作標籤，maybe是另一個字，文件/srv/mabe保持不變";
+        let after = "這個 mabe 用作標籤，maybe是另一個字，文件/srv/maybe保持不變";
+        assistant.remember(15, scope("field-a"), before.into());
+        let outcome = assistant
+            .correction_detailed(15, "browser", "field-a", before, after, false)
+            .unwrap();
+        assert_eq!(outcome.status, LearningStatus::Rejected);
+        assert_eq!(assistant.list().unwrap(), json!([]));
+    }
+
+    #[test]
+    fn sentence_feedback_never_learns_paths_literals_identifiers_or_options() {
+        use crate::personalization::LearningStatus;
+        let assistant = assistant();
+        for (index, (before, after)) in [
+            ("文件/srv/mabe保持不變", "文件/srv/maybe保持不變"),
+            ("保留`mabe`這個字", "保留`maybe`這個字"),
+            ("這個mabe_value保持不變", "這個maybe_value保持不變"),
+            ("使用--mabe參數", "使用--maybe參數"),
+            ("保留'mabe'字串", "保留'maybe'字串"),
+            ("開啟mabe.json", "開啟maybe.json"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let session = 200 + index as u64;
+            assistant.remember(session, scope("field-a"), before.into());
+            let outcome = assistant
+                .correction_detailed(session, "browser", "field-a", before, after, false)
+                .unwrap();
+            assert_eq!(
+                outcome.status,
+                LearningStatus::Rejected,
+                "{before:?} -> {after:?}"
+            );
+        }
+        assert_eq!(assistant.list().unwrap(), json!([]));
+    }
+
+    #[test]
+    fn sentence_extraction_abstains_on_transposed_name_but_explicit_pair_remains_available() {
+        use crate::personalization::LearningStatus;
+        let assistant = assistant();
+        let before = "我要請王安以老師幫忙。";
+        let after = "我要請王以安老師幫忙。";
+        assistant.remember(6, scope("field-a"), before.into());
+        let outcome = assistant
+            .correction_detailed(6, "browser", "field-a", before, after, true)
+            .unwrap();
+        assert_eq!(outcome.status, LearningStatus::Rejected);
+        assistant.learn("王安以", "王以安", "browser").unwrap();
+        assert_eq!(
+            assistant.process(before, &scope("field-a"), Some("off")),
+            after
+        );
+    }
+
+    #[test]
+    fn strict_sentence_case_preference_is_still_learned() {
+        use crate::personalization::LearningStatus;
+        let assistant = assistant();
+        assistant.remember(7, scope("field-a"), "推到github上面".into());
+        let outcome = assistant
+            .correction_detailed(
+                7,
+                "browser",
+                "field-a",
+                "推到github上面",
+                "推到GitHub上面",
+                true,
+            )
+            .unwrap();
+        assert_eq!(outcome.status, LearningStatus::Confirmed);
+        assert_eq!(
+            assistant.process("github 和 github", &scope("later"), Some("off")),
+            "GitHub 和 GitHub"
+        );
+    }
+
+    #[test]
+    fn repeated_capitalization_preference_preserves_literals_and_paths() {
+        let assistant = assistant();
+        assistant.learn("github", "GitHub", "browser").unwrap();
+        let current = ContextSnapshot {
+            text: "github GitHub".into(),
+            ..scope("later")
+        };
+        assert_eq!(assistant.process("github 和 github", &current, Some("off")), "GitHub 和 GitHub");
+        assert_eq!(assistant.process("github 和 /tmp/github 和 github.com", &current, Some("off")),
+            "GitHub 和 /tmp/github 和 github.com");
+        assert_eq!(assistant.process("`github` 和 github", &current, Some("off")), "`github` 和 github");
     }
 
     fn observe_twice(assistant: &Assistant, context_id: &str) {

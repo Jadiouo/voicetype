@@ -1,5 +1,6 @@
 #include "voicetype.h"
 
+#include <fcitx-config/iniparser.h>
 #include <fcitx-utils/log.h>
 #include <fcitx-utils/utf8.h>
 #include <fcitx/inputpanel.h>
@@ -64,19 +65,22 @@ std::optional<TextSnapshot> snapshot(fcitx::InputContext *ic) {
     return TextSnapshot{s.text(), s.cursor(), s.anchor()};
 }
 
-bool isEditingKey(const fcitx::Key &key) {
-    const auto sym = key.sym();
-    if (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete) {
-        return true;
+std::optional<EditIntent> editingIntent(const fcitx::KeyEvent &event) {
+    // rawKey is after layout conversion but before normalization, preserving
+    // uppercase/shifted ASCII. Unknown forwarding/composition is not a literal.
+    const auto raw = event.rawKey();
+    const auto allowed = fcitx::KeyStates(fcitx::KeyState::Shift) |
+        fcitx::KeyState::CapsLock | fcitx::KeyState::NumLock | fcitx::KeyState::Repeat;
+    if (event.forward() || event.isVirtual() || (raw.states() & ~allowed)) { return std::nullopt; }
+    if (raw.sym() == FcitxKey_BackSpace) { return EditIntent{EditIntent::Kind::Backspace}; }
+    if (raw.sym() == FcitxKey_Delete && !raw.states().test(fcitx::KeyState::Shift)) {
+        return EditIntent{EditIntent::Kind::Delete};
     }
-    // Include paste, but exclude shortcuts/navigation/modifiers. A key alone
-    // never learns anything: the resulting anchored text change must match.
-    if (key.states().test(fcitx::KeyState::Ctrl)) {
-        return sym == FcitxKey_v || sym == FcitxKey_V ||
-               sym == FcitxKey_x || sym == FcitxKey_X;
+    const auto unicode = fcitx::Key::keySymToUnicode(raw.sym());
+    if (unicode >= 0x20 && unicode <= 0x7e) {
+        return EditIntent{EditIntent::Kind::Insert, static_cast<char>(unicode)};
     }
-    return !key.states().test(fcitx::KeyState::Alt) &&
-           fcitx::Key::keySymToUnicode(sym) >= 0x20;
+    return std::nullopt;
 }
 
 bool sameText(const fcitx::Text &left, const fcitx::Text &right) {
@@ -89,11 +93,39 @@ bool sameText(const fcitx::Text &left, const fcitx::Text &right) {
     return true;
 }
 
+std::string safeErrorBody(const std::string &source) {
+    if (source.empty() || !fcitx::utf8::validate(source)) {
+        return "辨識或文字處理失敗，請重試。";
+    }
+    std::string result;
+    size_t characters = 0;
+    for (unsigned char c : source) {
+        if ((c & 0xc0) != 0x80 && ++characters > 240) {
+            result += "…";
+            break;
+        }
+        if (c < 0x20 || c == 0x7f) { result += ' '; }
+        else if (c == '<') { result += "&lt;"; }
+        else if (c == '>') { result += "&gt;"; }
+        else if (c == '&') { result += "&amp;"; }
+        else { result += static_cast<char>(c); }
+    }
+    return result;
+}
+
 } // namespace
 
 VoiceType::VoiceType(fcitx::Instance *instance, NotificationSink notification,
-                     Clock clock)
+                     Clock clock, std::optional<VoiceTypeConfig> configuration)
     : instance_(instance), notification_(std::move(notification)), clock_(std::move(clock)) {
+    if (configuration) {
+        config_ = *configuration;
+    } else {
+        fcitx::readAsIni(config_, "conf/voicetype.conf");
+    }
+    learnKey_ = *config_.learnKey;
+    capsLockGuard_ = std::make_unique<CapsLockGuard>(instance_);
+    selectionReader_ = std::make_unique<SelectionReader>(&instance_->eventLoop());
     contextNonce_ = std::to_string(getpid()) + "-" +
                     std::to_string(fcitx::now(CLOCK_MONOTONIC));
 
@@ -115,8 +147,8 @@ VoiceType::VoiceType(fcitx::Instance *instance, NotificationSink notification,
         fcitx::EventType::InputContextFocusOut,
         fcitx::EventWatcherPhase::Default, [this](fcitx::Event &event) {
             auto &icEvent = static_cast<fcitx::InputContextEvent &>(event);
-            ++contextGeneration_;
-            if (recording_ && targetIc_.get() == icEvent.inputContext()) {
+            if (contextIc_.get() == icEvent.inputContext()) { ++contextGeneration_; }
+            if (deliveryPending_ && targetIc_.get() == icEvent.inputContext()) {
                 stopRecording(/*cancelled=*/true);
             }
             if (lastCommitIc_.get() == icEvent.inputContext()) {
@@ -132,17 +164,26 @@ VoiceType::VoiceType(fcitx::Instance *instance, NotificationSink notification,
                 return;
             }
             if (const auto s = snapshot(ic)) {
+                if (auto candidate = correctionTracker_.correctionBeforeClear(*s, nowUsec())) {
+                    maybeLearnCorrection(ic, false, std::move(candidate));
+                }
                 correctionTracker_.observe(*s, nowUsec());
             } else {
-                clearCorrection();
+                // Some frontends publish no valid surrounding snapshot at all.
+                // Drop automatic attribution, retaining only the bounded last
+                // delivery for a later explicit selected-sentence confirmation.
+                correctionTracker_.clear();
             }
         });
     resetHandler_ = instance_->watchEvent(
         fcitx::EventType::InputContextReset,
         fcitx::EventWatcherPhase::Default, [this](fcitx::Event &event) {
-            ++contextGeneration_;
-            if (static_cast<fcitx::InputContextEvent &>(event).inputContext() ==
-                lastCommitIc_.get()) {
+            auto *ic = static_cast<fcitx::InputContextEvent &>(event).inputContext();
+            if (contextIc_.get() == ic) { ++contextGeneration_; }
+            if (deliveryPending_ && targetIc_.get() == ic) {
+                stopRecording(/*cancelled=*/true);
+            }
+            if (ic == lastCommitIc_.get()) {
                 clearCorrection();
             }
         });
@@ -150,6 +191,10 @@ VoiceType::VoiceType(fcitx::Instance *instance, NotificationSink notification,
         fcitx::EventType::InputContextCapabilityChanged,
         fcitx::EventWatcherPhase::Default, [this](fcitx::Event &event) {
             auto *ic = static_cast<fcitx::InputContextEvent &>(event).inputContext();
+            if (contextIc_.get() == ic && isSensitive(ic)) { ++contextGeneration_; }
+            if (deliveryPending_ && ic == targetIc_.get() && isSensitive(ic)) {
+                stopRecording(/*cancelled=*/true);
+            }
             if (ic == lastCommitIc_.get() && isSensitive(ic)) {
                 clearCorrection();
             }
@@ -163,22 +208,34 @@ VoiceType::VoiceType(fcitx::Instance *instance, NotificationSink notification,
         [this]() { onDaemonDisconnected(); });
 }
 
-VoiceType::~VoiceType() { clearFeedback(); }
+VoiceType::~VoiceType() { capsLockGuard_.reset(); selectionReader_.reset(); clearFeedback(); }
 
 void VoiceType::reloadConfig() {
-    // M0 的熱鍵是硬編碼的, 設定全在 daemon 端的 TOML。
-    // addon 自身的設定 (熱鍵) 屬於 M1。
+    fcitx::readAsIni(config_, "conf/voicetype.conf");
+    learnKey_ = *config_.learnKey;
+}
+
+void VoiceType::setConfig(const fcitx::RawConfig &raw) {
+    config_.load(raw, true);
+    fcitx::safeSaveAsIni(config_, "conf/voicetype.conf");
+    learnKey_ = *config_.learnKey;
+}
+
+std::string VoiceType::learnKeyLabel() const {
+    return learnKey_.toString(fcitx::KeyStringFormat::Localized);
 }
 
 bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
     auto key = event.key();
-    if (!event.isRelease() && key.check(learnKey_)) {
+    const bool learnPress = !event.isRelease() && key.check(learnKey_);
+    if (capsLockGuard_->filter(event, learnPress)) { return true; }
+    if (learnPress) {
         auto *ic = event.inputContext();
         clearFeedback();
         if (isSensitive(ic)) {
             notify(ic, "此欄位無法學習", "請在一般文字欄位使用詞彙學習。");
         } else if (recording_) {
-            notify(ic, "正在錄音，尚未學習", "請先放開語音鍵，等文字送出並修正後再按 Ctrl+Caps Lock。");
+            notify(ic, "正在錄音，尚未學習", "請先放開語音鍵，等文字送出並修正後再按 " + learnKeyLabel() + "。");
         } else if (!ipc_ || !ipc_->connected()) {
             notify(ic, "語音服務未連線", "這次修正尚未送出，請確認 VoiceType 服務已啟動後再試。");
         } else {
@@ -186,13 +243,41 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
         }
         return true;
     }
-    if (!event.isRelease() && event.inputContext() == lastCommitIc_.get() &&
-        isEditingKey(key)) {
-        correctionTracker_.noteUserEditKey(nowUsec());
+    if (!event.isRelease() && event.inputContext() == lastCommitIc_.get()) {
+        const auto sym = key.sym();
+        const bool clipboardOrUndo =
+            (key.states().test(fcitx::KeyState::Ctrl) &&
+             (sym == FcitxKey_v || sym == FcitxKey_V || sym == FcitxKey_x ||
+              sym == FcitxKey_X || sym == FcitxKey_z || sym == FcitxKey_Z ||
+              sym == FcitxKey_y || sym == FcitxKey_Y)) ||
+            (key.states().test(fcitx::KeyState::Shift) &&
+             (sym == FcitxKey_Insert || sym == FcitxKey_Delete));
+        const auto &panel = event.inputContext()->inputPanel();
+        const bool composing = !panel.preedit().empty() || !panel.clientPreedit().empty() || panel.candidateList();
+        if (clipboardOrUndo || sym == FcitxKey_Escape || composing) {
+            // Keep lastCommitText_ for the explicit LearnKey workflow.
+            correctionTracker_.clear();
+        } else if (auto intent = editingIntent(event)) {
+            if (const auto before = snapshot(event.inputContext())) {
+                correctionTracker_.noteUserEditKey(*intent, *before, nowUsec());
+            } else { correctionTracker_.clear(); }
+        } else if (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete ||
+                   fcitx::Key::keySymToUnicode(event.rawKey().sym()) >= 0x20) {
+            // Unsupported text/word/modified edits cannot authorize a later
+            // arbitrary update; explicit selected-text confirmation remains.
+            correctionTracker_.clear();
+        } else if ((sym == FcitxKey_Return || sym == FcitxKey_KP_Enter) &&
+                   !key.states().test(fcitx::KeyState::Shift) &&
+                   !key.states().test(fcitx::KeyState::Alt)) {
+            const auto &panel = event.inputContext()->inputPanel();
+            if (panel.preedit().empty() && panel.clientPreedit().empty() && !panel.candidateList()) {
+                correctionTracker_.noteSubmitKey(nowUsec());
+            }
+        }
     }
 
-    // 錄音中的取消鍵
-    if (recording_ && !event.isRelease() && key.check(cancelKey_)) {
+    // Escape also cancels a released recording while its result is pending.
+    if (deliveryPending_ && !event.isRelease() && key.check(cancelKey_)) {
         stopRecording(/*cancelled=*/true);
         return true;
     }
@@ -215,6 +300,10 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
         }
 
         auto *ic = event.inputContext();
+
+        // A stale frontend key cannot create a new delivery session for an
+        // unfocused field, even if that field regains focus before the result.
+        if (!ic->hasFocus()) { return false; }
 
         // SDD §7: 密碼欄位直接拒絕啟動錄音。
         // (SDD §4.2.4 的範例把 is_password 交給 daemon 判斷; 在 addon 端
@@ -245,8 +334,10 @@ void VoiceType::startRecording(fcitx::InputContext *ic) {
     maybeLearnCorrection(ic, false);
     clearCorrection();
     recording_ = true;
+    deliveryPending_ = true;
     sessionId_++;
     targetIc_ = ic->watch();
+    contextIc_ = ic->watch();
 
     IpcMessage msg;
     msg.type = "start";
@@ -268,38 +359,51 @@ void VoiceType::startRecording(fcitx::InputContext *ic) {
 
     if (!ipc_->send(msg)) {
         // 送不出去就別讓自己停在 recording 狀態
-        recording_ = false;
-        targetIc_.unwatch();
+        clearDelivery();
         notify(ic, "錄音要求未送出", "語音服務連線中斷，請稍後再試。");
     }
 }
 
 void VoiceType::stopRecording(bool cancelled) {
-    recording_ = false;
-
     IpcMessage msg;
     msg.type = cancelled ? "cancel" : "stop";
     msg.setSession(sessionId_);
-    ipc_->send(msg);
-
     if (cancelled) {
-        targetIc_.unwatch();
+        clearDelivery();
+    } else {
+        recording_ = false;
     }
+    // send() can synchronously report disconnect. Invalidate first.
+    ipc_->send(msg);
+}
+
+void VoiceType::clearDelivery() {
+    recording_ = false;
+    deliveryPending_ = false;
+    targetIc_.unwatch();
+    sessionContextId_.clear();
 }
 
 void VoiceType::onDaemonMessage(const IpcMessage &msg) {
     if (msg.type == "result") {
         // 丟棄過期結果: 使用者已經開始下一次錄音, 舊結果不該蓋掉新的。
-        if (!msg.hasSession || msg.session != sessionId_) {
+        if (!deliveryPending_ || !msg.hasSession || msg.session != sessionId_) {
             FCITX_DEBUG() << "voicetype: dropping stale result";
             return;
         }
         deliver(msg.text);
     } else if (msg.type == "error") {
-        // Server-side errors and final learning outcomes are notified by daemon.
-        FCITX_WARN() << "voicetyped error [" << msg.code << "]: " << msg.text;
-        if (msg.hasSession && msg.session == sessionId_) {
-            targetIc_.unwatch();
+        // Learning/control errors already have daemon notifications and no live
+        // delivery target. A stale ASR error must not cancel a newer dictation.
+        if (!deliveryPending_ || !msg.hasSession || msg.session != sessionId_) {
+            return;
+        }
+        auto *ic = targetIc_.get();
+        const auto expectedContext = sessionContextId_;
+        clearDelivery();
+        if (ic && msg.code != "empty_result" && ic->hasFocus() &&
+            contextId(ic) == expectedContext && !isSensitive(ic)) {
+            notify(ic, "語音輸入未送出", safeErrorBody(msg.text));
         }
     } else if (msg.type == "state") {
         FCITX_DEBUG() << "voicetyped state: " << msg.value;
@@ -308,20 +412,19 @@ void VoiceType::onDaemonMessage(const IpcMessage &msg) {
 
 void VoiceType::onDaemonDisconnected() {
     FCITX_INFO() << "voicetype: daemon disconnected";
+    ++contextGeneration_;
+    clearDelivery();
     clearCorrection();
-    if (recording_) {
-        recording_ = false;
-        targetIc_.unwatch();
-    }
 }
 
 void VoiceType::deliver(const std::string &text) {
-    if (text.empty()) {
-        targetIc_.unwatch();
-        return;
-    }
-
-    auto *ic = targetIc_.get();
+    const auto expectedContext = sessionContextId_;
+    const auto expectedSession = sessionId_;
+    auto target = targetIc_;
+    auto *ic = target.get();
+    // Consume before commit/IPC callbacks: one result has at most one effect.
+    clearDelivery();
+    if (text.empty()) { return; }
     if (!ic) {
         // 目標視窗已消失 → 降級鏈② (SDD §4.8): 交給 daemon 放進剪貼簿並通知。
         IpcMessage msg;
@@ -332,9 +435,8 @@ void VoiceType::deliver(const std::string &text) {
     }
 
     // The field may have become sensitive while CPU decoding was in progress.
-    if (isSensitive(ic)) {
+    if (!ic->hasFocus() || contextId(ic) != expectedContext || isSensitive(ic)) {
         clearCorrection();
-        targetIc_.unwatch();
         return;
     }
 
@@ -347,11 +449,15 @@ void VoiceType::deliver(const std::string &text) {
         ic->inputPanel().reset();
         ic->updatePreedit();
     }
+    // Frontends may synchronously reset/unfocus/destroy the field or start a
+    // new session while receiving the preedit update. Recheck the weak target.
+    ic = target.get();
+    if (!ic || !ic->hasFocus() || contextId(ic) != expectedContext ||
+        isSensitive(ic) || sessionId_ != expectedSession) {
+        return;
+    }
     clearCorrection();
-    // A result delivered after a focus/reset boundary cannot be attributed to
-    // this editing session. It may still be delivered by the existing path.
-    if (ic->hasFocus() && contextId(ic) == sessionContextId_ &&
-        fcitx::utf8::validate(text) && fcitx::utf8::length(text) <= 512) {
+    if (fcitx::utf8::validate(text) && fcitx::utf8::length(text) <= 512) {
         lastCommitIc_ = ic->watch();
         lastCommitText_ = text;
         lastCommitSession_ = sessionId_;
@@ -361,7 +467,6 @@ void VoiceType::deliver(const std::string &text) {
         }
     }
     ic->commitString(text);
-    targetIc_.unwatch();
 }
 
 std::string VoiceType::contextId(fcitx::InputContext *ic) const {
@@ -376,6 +481,7 @@ std::string VoiceType::contextId(fcitx::InputContext *ic) const {
 }
 
 void VoiceType::clearCorrection() {
+    if (selectionReader_) { selectionReader_->cancel(); }
     correctionTracker_.clear();
     lastCommitIc_.unwatch();
     lastCommitText_.clear();
@@ -383,8 +489,9 @@ void VoiceType::clearCorrection() {
 }
 
 void VoiceType::maybeLearnCorrection(fcitx::InputContext *ic,
-                                    bool explicitSelection) {
-    const auto reject = [this, ic, explicitSelection](const char *summary, const char *body) {
+                                    bool explicitSelection,
+                                    std::optional<Correction> beforeClear) {
+    const auto reject = [this, ic, explicitSelection](const char *summary, const std::string &body) {
         if (explicitSelection) { notify(ic, summary, body); }
     };
     if (isSensitive(ic)) {
@@ -408,13 +515,13 @@ void VoiceType::maybeLearnCorrection(fcitx::InputContext *ic,
     }
     const auto s = snapshot(ic);
     if (!s) {
-        reject("這個程式未提供選取文字", "無法讀取這次修正。可改用 VoiceType 的 learn 指令指定錯字與正確詞彙。");
+        if (explicitSelection) { readExplicitSelection(ic); }
         return;
     }
     std::optional<Correction> correction;
     if (explicitSelection) {
         if (s->cursor == s->anchor) {
-            reject("請先選取修正後的完整句子", "Ctrl+Caps Lock 會學習上一句與所選句子的差異；目前沒有選取文字。");
+            reject("請先選取修正後的完整句子", learnKeyLabel() + " 會學習上一句與所選句子的差異；目前沒有選取文字。");
             return;
         }
         if (std::max(s->cursor, s->anchor) - std::min(s->cursor, s->anchor) > 512) {
@@ -432,28 +539,94 @@ void VoiceType::maybeLearnCorrection(fcitx::InputContext *ic,
         }
         correction = Correction{lastCommitText_, context->selection};
     } else {
-        correction = correctionTracker_.correction(*s, now);
+        correction = beforeClear ? std::move(beforeClear)
+                                 : correctionTracker_.correction(*s, now);
     }
     if (!correction) {
         return;
     }
+    sendCorrection(ic, *correction, explicitSelection);
+}
+
+void VoiceType::sendCorrection(fcitx::InputContext *ic, const Correction &correction, bool explicitSelection) {
     IpcMessage msg;
     msg.type = "correction";
     msg.setSession(lastCommitSession_);
     msg.program = ic->program();
     msg.contextId = contextId(ic);
-    msg.before = correction->before;
-    msg.after = correction->after;
+    msg.before = correction.before;
+    msg.after = correction.after;
     msg.hasConfirmed = true;
     msg.confirmed = explicitSelection;
-    const bool sent = ipc_->send(msg);
     clearCorrection();
+    const bool sent = ipc_->send(msg);
     if (explicitSelection) {
         if (sent) {
             notify(ic, "已送出修正，等待確認", "這還不是學習成功；VoiceType 會再通知是否已記住詞彙。");
         } else {
             notify(ic, "修正未送出", "語音服務連線中斷，這次沒有新增規則。請稍後再試。");
         }
+    }
+}
+
+void VoiceType::readExplicitSelection(fcitx::InputContext *ic) {
+    if (selectionReader_->busy()) {
+        notify(ic, "正在讀取所選句子", "請稍候，這次尚未新增規則。");
+        return;
+    }
+    const auto program = ic->program();
+    const auto expectedContext = contextId(ic);
+    const auto expectedSession = lastCommitSession_;
+    const auto expectedAt = lastCommitAt_;
+    const char *overridePath = std::getenv("VOICETYPE_SELECTION_HELPER");
+    const char *home = std::getenv("HOME");
+    const std::string helper = overridePath ? overridePath :
+        (home ? std::string(home) + "/.local/bin/voicetype-selection" : "");
+    const bool started = selectionReader_->start(helper, program,
+        [this, program, expectedContext, expectedSession, expectedAt](const IpcMessage &reply) {
+            auto *target = lastCommitIc_.get();
+            const auto now = nowUsec();
+            if (!target || !target->hasFocus() || isSensitive(target) || recording_ ||
+                lastCommitSession_ != expectedSession || lastCommitAt_ != expectedAt ||
+                contextId(target) != expectedContext || target->program() != program ||
+                now < expectedAt || now - expectedAt > 5 * 60 * 1000000ULL) { return; }
+            if (!target->inputPanel().preedit().empty() ||
+                !target->inputPanel().clientPreedit().empty() || target->inputPanel().candidateList()) {
+                notify(target, "修正未送出", "請先完成輸入法組字，再選取完整句子確認。");
+                return;
+            }
+            if (reply.type != "selection") {
+                std::string body = "目前程式未提供可核對的選取欄位；這次沒有新增規則。可使用 VoiceType 的 learn 指令。";
+                if (reply.code == "no_selection") {
+                    body = "請先選取上一句修正後的完整句子，再按 " + learnKeyLabel() + "。";
+                } else if (reply.code == "timeout" || reply.code == "tree_limit") {
+                    body = "頁面太大或讀取超時；這次沒有新增規則。請重新選取後再試，或使用 VoiceType 的 learn 指令。";
+                } else if (reply.code == "selection_too_long") {
+                    body = "請只選取上一句修正後的完整句子，最多 512 個字。";
+                } else if (reply.code == "missing_atspi_dependency" || reply.code == "missing_xprop_dependency") {
+                    body = "選取工具缺少依賴：python3-gi、gir1.2-atspi-2.0、x11-utils。這次沒有新增規則。";
+                } else if (reply.code == "focus_changed" || reply.code == "selection_changed") {
+                    body = "讀取時焦點或選取內容改變；請重新選取完整句子後再試。";
+                }
+                notify(target, "無法讀取修正，尚未學習", body);
+                return;
+            }
+            if (reply.program != program || reply.contextId.empty() || reply.value.empty() ||
+                !fcitx::utf8::validate(reply.text) || reply.text.empty() ||
+                reply.text.find('\0') != std::string::npos || fcitx::utf8::length(reply.text) > 512) {
+                notify(target, "修正未送出", "選取工具回傳的欄位資訊無效，這次沒有新增規則。");
+                return;
+            }
+            if (reply.text == lastCommitText_) {
+                notify(target, "選取的句子還沒有修正", "選取內容與上一句完全相同，這次沒有新增規則。");
+                return;
+            }
+            // No original AT-SPI identity was captured at dictation delivery.
+            // This is explicit user confirmation, never automatic attribution.
+            sendCorrection(target, Correction{lastCommitText_, reply.text}, true);
+        });
+    if (!started) {
+        notify(ic, "選取工具尚未安裝", "請重新執行 VoiceType addon 安裝腳本；這次沒有新增規則。");
     }
 }
 

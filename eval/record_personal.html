@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-Hant">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceType · 100 句錄音測驗</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,sans-serif;background:#f2f3ed;color:#17251e}*{box-sizing:border-box}body{max-width:920px;margin:auto;padding:32px 22px}header{display:flex;justify-content:space-between;align-items:center;gap:20px}h1{font-size:25px;margin:4px 0}small,.muted{color:#57675c}progress{width:100%;height:8px;accent-color:#21674a;margin:20px 0}.card{background:#fff;border:1px solid #dce3d9;border-radius:20px;padding:30px;margin:16px 0;box-shadow:0 6px 30px #173d2010}.eyebrow{font-size:13px;letter-spacing:1px;color:#57675c}#sentence{font-size:30px;line-height:1.65;margin:20px 0;overflow-wrap:anywhere}#context{background:#f4f6f1;border-radius:10px;padding:14px;line-height:1.6}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0}button,select{font:inherit;border:1px solid #c7d3c7;border-radius:10px;padding:12px 18px;background:#fff;cursor:pointer}button:disabled{cursor:default;opacity:.4}.primary{background:#21674a;color:white;border-color:#21674a}.stop{background:#a63c36;color:white;border-color:#a63c36}#status{min-height:26px;line-height:1.5}#error{color:#a22727;white-space:pre-wrap}audio{width:100%;margin:12px 0}label{display:block;line-height:1.6}footer{line-height:1.8;font-size:14px}#quality{font-size:14px;color:#57675c}#position{min-width:140px}details{margin-top:18px;line-height:1.7}@media(max-width:600px){body{padding:20px 14px}.card{padding:22px}#sentence{font-size:25px}header{align-items:start;flex-direction:column}}
+</style>
+<header><div><div class="eyebrow">VOICETYPE / PERSONAL VOICE BENCHMARK</div><h1>100 句，找出真正適合你的辨識方式。</h1></div><strong id="progressText">載入中</strong></header>
+<progress id="progress" max="100" value="0"></progress>
+<div class="muted">可以分次完成。只讀白色卡片中的大字；上下文不用唸。先錄幾句、回放確認音量，再繼續。</div>
+<main class="card">
+  <div class="eyebrow" id="category"></div>
+  <div id="sentence"></div>
+  <div id="context"></div>
+  <p class="muted" id="notes"></p>
+  <div class="actions"><button id="start" class="primary">開始錄音</button><button id="stop" class="stop" disabled>結束錄音</button><span id="status" role="status" aria-live="polite"></span></div>
+  <div id="error" role="alert"></div>
+  <div id="review" hidden>
+    <audio id="audio" controls preload="none"></audio>
+    <div id="quality"></div>
+    <label><input id="confirmed" type="checkbox"> 我照稿讀完，沒有漏字、換詞或中途重唸；錄音聽得清楚。</label>
+    <div class="actions"><button id="save" class="primary" disabled>確認存檔，下一句</button><button id="redo">重錄這句</button></div>
+  </div>
+</main>
+<div class="actions"><button id="previous">上一句</button><select id="position" aria-label="選擇題目"></select><button id="next">下一句</button><button id="unfinished">第一句未完成</button></div>
+<footer>用平常說話的速度和音量，不需要刻意咬字。英文縮寫可以照你平常的唸法。<br>錄音留在本機；這個頁面不會辨識、訓練模型或把內容送出去。每句最長 45 秒。</footer>
+<details><summary>如何讓這份測驗可信</summary>讀錯請重錄，不要把漏唸算成模型辨識錯誤。前後處理要分開比較；60 句用於調整、40 句留到最後驗收。先前的錄音會保留到你明確確認新的錄音為止。錄音期間離開頁面會持續錄到 45 秒上限，請先按「結束錄音」。</details>
+<script>
+const token='__TOKEN__';
+const $=id=>document.getElementById(id);
+let state,index=0,busy=false,started=0,polling=false,revision=0;
+const categoryNames={daily_zh:'日常中文',code_switch:'中英夾雜',developer_workflow:'程式開發',robotics_navigation:'機器人與導航',admissions_context:'申請討論',person_names:'人名與上下文',filler_self_repair:'口語與自我修正',negative_controls:'保留正確用詞',negation_numbers_code:'否定、數字與程式',english:'英文句子'};
+const categoryName=c=>categoryNames[c.category]||c.category;
+async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET',headers:{'X-Recorder-Token':token,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined});const out=await r.json();if(!r.ok)throw Error(out.error);return out;}
+function buttons(){const rec=state?.recording;for(const id of ['previous','next','position','unfinished'])$(id).disabled=busy||rec;$('start').disabled=busy||rec;$('stop').disabled=busy||!rec;$('redo').disabled=busy||rec;$('save').disabled=busy||rec||!$('confirmed').checked;}
+function render(){const c=state.cases[index];$('sentence').textContent=c.reference;$('category').textContent=`${c.id} · ${categoryName(c)} · ${index+1} / 100`;$('context').textContent=c.context?`背景參考，不用唸：${c.context}`:'這句沒有額外上下文。';$('notes').textContent=(c.notes||'').replace('只朗讀 reference；context 只看不念。若漏字、換字或口誤，請重錄；播放確認後才能把提示稿當作逐字正解。','請用平常語速朗讀。若漏字、換字或口誤，請重錄。');$('progress').value=state.done.length;$('progressText').textContent=`已完成 ${state.done.length} / 100`;$('position').replaceChildren(...state.cases.map((c,i)=>{let o=document.createElement('option');o.value=i;o.textContent=`${state.done.includes(c.id)?'✓':'○'} ${c.id} · ${categoryName(c)}`;o.selected=i===index;return o;}));const take=state.current===c.id&&state.quality&&!state.recording;const saved=state.done.includes(c.id);$('review').hidden=!take&&!saved;$('confirmed').checked=false;$('confirmed').disabled=!take;$('save').hidden=!take;$('quality').textContent=take?`長度 ${state.quality.seconds} 秒${state.quality.clipped_fraction>.01?' · 音量可能過大，建議降低後重錄':''}`:'';if(take||saved)$('audio').src=`/audio/${take?'take':c.id}.wav?t=${Date.now()}`;else{$('audio').removeAttribute('src');$('audio').load();}$('status').textContent=state.recording?'錄音中…':take?'先回放，再確認存檔。':saved?'這句已存檔，可以重錄或繼續。':'';$('error').textContent=state.error||'';buttons();}
+async function action(fn){if(busy)return;busy=true;revision++;$('error').textContent='';buttons();try{await fn();}catch(e){try{state=await api('/api/state');if(!state.recording)started=0;render();}catch(_){}$('error').textContent=e.message;}finally{busy=false;buttons();}}
+async function start(){await action(async()=>{$('audio').pause();state=await api('/api/start',{id:state.cases[index].id});started=Date.now();render();});}
+// Observe backend auto-stop even when this tab was reloaded during recording.
+// The revision check prevents an old poll from overwriting a newer button action.
+setInterval(async()=>{
+  if(!state?.recording||busy||polling)return;
+  polling=true;const requestRevision=revision;
+  try{
+    const latest=await api('/api/state');
+    if(busy||revision!==requestRevision)return;
+    state=latest;
+    if(!state.recording){started=0;render();}
+    else $('status').textContent=started?`● 錄音中 ${Math.floor((Date.now()-started)/1000)} 秒`:'● 錄音中…';
+  }catch(e){if(!busy&&revision===requestRevision)$('error').textContent=e.message;}
+  finally{polling=false;}
+},1000);
+$('start').onclick=start;$('redo').onclick=start;
+$('stop').onclick=()=>action(async()=>{state=await api('/api/stop',{});started=0;render();});
+$('confirmed').onchange=buttons;
+$('save').onclick=()=>action(async()=>{state=await api('/api/accept',{id:state.cases[index].id,confirmed:$('confirmed').checked});const later=state.cases.findIndex((c,i)=>i>index&&!state.done.includes(c.id));if(later>=0)index=later;else{const remaining=state.cases.findIndex(c=>!state.done.includes(c.id));if(remaining>=0)index=remaining;}render();if(state.done.length===100)$('status').textContent='100 句全部完成，可以開始比較模型了。';});
+function move(i){$('audio').pause();index=Math.max(0,Math.min(99,i));render();}
+$('previous').onclick=()=>move(index-1);$('next').onclick=()=>move(index+1);$('position').onchange=e=>move(Number(e.target.value));$('unfinished').onclick=()=>{let i=state.cases.findIndex(c=>!state.done.includes(c.id));if(i>=0)move(i);};
+window.addEventListener('beforeunload',e=>{if(state?.recording){e.preventDefault();e.returnValue='';}});
+api('/api/state').then(s=>{state=s;index=state.cases.findIndex(c=>c.id===state.current);if(index<0)index=Math.max(0,state.cases.findIndex(c=>!state.done.includes(c.id)));render();}).catch(e=>$('error').textContent=e.message);
+</script>
+</html>

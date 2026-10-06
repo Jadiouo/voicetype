@@ -49,7 +49,7 @@ int main() {
         client->inputPanel().setPreedit(fcitx::Text("仍在組字"));
         client->inputPanel().setAuxDown(fcitx::Text("原本候選提示"));
         {
-            voicetype::VoiceType addon(&instance);
+            voicetype::VoiceType addon(&instance, {}, {}, voicetype::VoiceTypeConfig{});
             learn(instance, *client);
             CHECK(client->inputPanel().preedit().toString() == "仍在組字");
             CHECK(client->inputPanel().auxDown().toString().find("原本候選提示\n語音服務未連線") == 0);
@@ -61,14 +61,14 @@ int main() {
         CHECK(client->inputPanel().auxDown().toString() == "原本候選提示");
         CHECK(client->inputPanel().preedit().toString() == "仍在組字");
         {
-            voicetype::VoiceType addon(&instance);
+            voicetype::VoiceType addon(&instance, {}, {}, voicetype::VoiceTypeConfig{});
             learn(instance, *client);
             // A newer input-method update belongs to that input method, not us.
             client->inputPanel().setAuxDown(fcitx::Text("新的候選提示"));
         }
         CHECK(client->inputPanel().auxDown().toString() == "新的候選提示");
         {
-            voicetype::VoiceType addon(&instance);
+            voicetype::VoiceType addon(&instance, {}, {}, voicetype::VoiceTypeConfig{});
             learn(instance, *client);
             client.reset(); // pending fallback holds only a weak IC reference
         }

@@ -1,0 +1,53 @@
+{
+  "description": "Synthetic regression examples, not unseen quality evaluation.",
+  "cases": [
+    {
+      "id": "smoke-1",
+      "kind": "fix",
+      "text": "今天新情很好。",
+      "expected": "今天心情很好。"
+    },
+    {
+      "id": "smoke-2",
+      "kind": "keep",
+      "text": "今天心情很好。",
+      "expected": "今天心情很好。"
+    },
+    {
+      "id": "smoke-3",
+      "kind": "keep",
+      "text": "他做事一向很仔細。",
+      "expected": "他做事一向很仔細。"
+    },
+    {
+      "id": "smoke-4",
+      "kind": "keep",
+      "text": "他說'今天新情很好。'",
+      "expected": "他說'今天新情很好。'"
+    },
+    {
+      "id": "smoke-5",
+      "kind": "keep",
+      "text": "`新情` 是字串。",
+      "expected": "`新情` 是字串。"
+    },
+    {
+      "id": "smoke-6",
+      "kind": "keep",
+      "text": "這是 0.05，不要改。",
+      "expected": "這是 0.05，不要改。"
+    },
+    {
+      "id": "smoke-7",
+      "kind": "keep",
+      "text": "Please review this pull request.",
+      "expected": "Please review this pull request."
+    },
+    {
+      "id": "smoke-8",
+      "kind": "fix",
+      "text": "It's 今天新情很好。",
+      "expected": "It's 今天心情很好。"
+    }
+  ]
+}

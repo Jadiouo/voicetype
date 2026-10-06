@@ -6,6 +6,10 @@ Fcitx5 語音聽寫模組。全本機推論，ASR 使用 CPU；可選的文字�
 
 架構與設計理由: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
+目前包含[詞庫 GUI 與圖示](docs/SETTINGS-GUI.md)、[抽樣校對](docs/REVIEW-QUEUE.md)、
+[CPU 校字](docs/CPU-SPELLING.md)及可選的[Nano CPU 引擎](docs/NANO-PREVIEW.md)。
+完整功能變更見[開發紀錄](docs/CHANGELOG.md)。錄音、模型與個人詞庫不隨程式發布。
+
 ---
 
 ## 用法
@@ -19,6 +23,10 @@ Fcitx5 語音聽寫模組。全本機推論，ASR 使用 CPU；可選的文字�
 新版支援觀察修正、個人詞彙、目前視窗上下文及可選的本機文字模型。
 操作、限制、停用方式見 [個人化說明](docs/PERSONALIZATION.md)。
 自動學習在能確認歸屬時，累積兩次獨立修正才啟用；不會重新訓練 ASR 權重。
+
+學習快捷鍵可用Fcitx addon設定的`LearnKey`更改，例如`Control+Shift+Caps_Lock`，
+避免與其他工具衝突。若輸入框不支援可靠的周邊文字，可用詞庫GUI直接編輯，
+或開啟抽樣校對，之後重聽再確認詞對；抽樣預設關閉。
 
 `Ctrl+Alt` 是桌面環境許多快捷鍵的前綴（`Ctrl+Alt+T` 開終端、
 `Ctrl+Alt+方向鍵` 切工作區）。按住它說話時再碰到其他鍵, 那些快捷鍵
@@ -36,15 +44,16 @@ GNOME 右上角的麥克風指示燈在這段期間會持續亮著。
 這是為了消除首字延遲: 按下熱鍵到音訊串流真正開始有 50–100ms 的落差,
 冷啟動會吃掉你說的第一個字。
 
-**沒有任何音訊在這段期間被儲存或送出。** 音訊只存在於記憶體的環形
-緩衝區, 不寫檔案、不外送。若仍不希望指示燈持續亮著, 改用 `strict`
-模式 —— 代價是每次都會損失第一個字。
+閒置期間不另外建立錄音樣本。預設音訊只留在記憶體；若明確啟用抽樣校對，
+剛完成的主動聽寫可能在背景保存成本機樣本，7天後清理。抽樣不延長warm串流。
+程式另有`strict`串流模式，但預設daemon使用warm，以減少每次開啟串流的等待。
 
 ---
 
 ## 現況
 
-**M0 完成, M1 進行中** (SDD §9)。
+下表保留早期SenseVoice版本的量測紀錄；不代表Nano、CPU校字或抽樣校對的效果。
+實際資源與完整送字延遲需依使用的引擎、語料及桌面環境重新量測。
 
 | 項目 | 狀態 |
 |---|---|
@@ -54,7 +63,7 @@ GNOME 右上角的麥克風指示燈在這段期間會持續亮著。
 | SenseVoice 引擎接進 daemon (FFI) | ✅ 端到端 194ms |
 | 中英夾雜品質驗證 | ✅ 125 句實測 |
 | Silero VAD (空錄音防護 + 首尾修剪) | ✅ 5.4ms, 100 句零誤判 |
-| 繁化 §4.6 ② (OpenCC s2twp) | ✅ 繁體台灣用語 |
+| 繁化 (OpenCC s2tw) | ✅ 繁體字形，保留原用詞 |
 | 詞彙修正表 §4.6 ③ | ✅ 使用者可編輯, 範圍刻意收窄 (見下) |
 | systemd user service | ✅ `scripts/install.sh` 一鍵安裝 |
 | fcitx5 addon (攔鍵 / commitString) | ✅ 已在 fcitx5 5.1.7 載入並實測 |
@@ -126,14 +135,14 @@ GNOME 右上角的麥克風指示燈在這段期間會持續亮著。
 ```bash
 systemctl --user status voicetyped     # 狀態
 journalctl --user -u voicetyped -f     # 即時 log
-systemctl --user restart voicetyped    # 換了新版本或改了詞彙表之後
+systemctl --user restart voicetyped    # 換了新版本之後；詞彙表自動重載
 ```
 
 ---
 
 ## 詞彙修正表
 
-`~/.config/voicetype/vocab.toml`。改完 `systemctl --user restart voicetyped`。
+`~/.config/voicetype/vocab.toml` 儲存後下一句自動重載，無效更新沿用上一份。支援明確名字字形與選配 CPU 單字校正；設定及限制見 [快速詞庫與 CPU 校字](docs/CPU-SPELLING.md)。
 
 ```toml
 [[entry]]

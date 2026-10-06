@@ -16,6 +16,12 @@ find_package(Fcitx5Core REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
 # Optional at build and runtime; the input-panel fallback needs no extra module.
 find_package(Fcitx5ModuleNotifications QUIET)
+option(VOICETYPE_X11_CAPS_RESTORE "Preserve Ctrl+Caps Lock state on verified native X11" ON)
+find_package(Fcitx5ModuleXCB QUIET)
+find_path(XCB_XKB_INCLUDE_DIR NAMES xcb/xkb.h)
+find_path(XCB_EWMH_INCLUDE_DIR NAMES xcb/xcb_ewmh.h HINTS ${XCB_XKB_INCLUDE_DIR})
+find_path(XCB_PROTOCOL_INCLUDE_DIR NAMES xcb.h PATH_SUFFIXES xcb)
+find_library(XCB_XKB_LIBRARY NAMES xcb-xkb libxcb-xkb.so.1)
 
 # fcitx5 只掃描它自己編譯時決定的 addon 目錄, 不看 CMake 的安裝前綴。
 # CMake 預設的 /usr/local 因此會把 .so 裝到一個永遠不會被載入的位置 ——

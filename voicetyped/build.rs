@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     link_opencc();
+    if std::env::var_os("CARGO_FEATURE_SHERPA_NANO").is_some() {
+        link_nano();
+    }
 
     // 引擎放在 feature 後面: 沒有 third_party 的環境 (CI、只改 IPC 的
     // 開發循環) 仍然要能 `cargo build` 與跑單元測試。
@@ -75,6 +78,38 @@ fn main() {
 
     println!("cargo:rustc-link-lib=stdc++");
     println!("cargo:rustc-link-lib=gomp"); // ggml-cpu 用 OpenMP
+}
+
+fn link_nano() {
+    println!("cargo:rerun-if-env-changed=VOICETYPE_SHERPA_NATIVE_ROOT");
+    println!("cargo:rerun-if-changed=shim/nano_shim.cpp");
+    println!("cargo:rerun-if-changed=shim/nano_shim.h");
+    let root = PathBuf::from(std::env::var_os("VOICETYPE_SHERPA_NATIVE_ROOT")
+        .expect("sherpa-nano requires explicit VOICETYPE_SHERPA_NATIVE_ROOT (pinned 1.13.8 CPU integrity build)"))
+        .canonicalize().expect("native Nano artifact root does not exist");
+    assert!(!root.to_string_lossy().contains([':', ',', '\n']), "native artifact path cannot contain colon/comma/newline");
+    let include = root.join("include");
+    let lib = root.join("lib");
+    for (path, expected) in [
+        (include.join("sherpa-onnx/c-api/c-api.h"), "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"),
+        (lib.join("libsherpa-onnx-c-api.so"), "72408cc5f2407eb0ba46cd381614229107f225b8ccc4149e2f5e4b09957834dd"),
+        (lib.join("libonnxruntime.so"), "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e"),
+    ] {
+        assert!(path.is_file(), "missing native Nano dependency: {}", path.display());
+        let digest = std::process::Command::new("sha256sum").arg("--").arg(&path)
+            .output().expect("native Nano artifact verification requires sha256sum");
+        assert!(digest.status.success() && String::from_utf8_lossy(&digest.stdout).split_whitespace().next() == Some(expected),
+            "native Nano artifact hash differs from pinned 1.13.8 CPU integrity build: {}", path.display());
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    cc::Build::new().cpp(true).std("c++17").file("shim/nano_shim.cpp")
+        .include("shim").include(include).compile("nano_shim");
+    println!("cargo:rustc-link-search=native={}", lib.display());
+    println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
+    println!("cargo:rustc-link-lib=stdc++");
+    // The explicit artifact directory is intentional for an optional, reviewable build.
+    // Packaging must preserve the pinned pair instead of resolving an arbitrary system .so.
+    println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags,-rpath,{}", lib.display());
 }
 
 /// 連結 OpenCC (SDD §4.6 ② 的繁化)。

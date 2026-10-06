@@ -1,8 +1,7 @@
 # 詞彙修正表 (SDD §4.6 ③)
 #
 # 安裝位置: ~/.config/voicetype/vocab.toml
-# 改完不需要重新編譯, 但要重啟 daemon:
-#     systemctl --user restart voicetyped
+# 儲存後下一句自動重載；格式有誤沿用上一份，刪除檔案停用。
 #
 #
 # ## 這張表能修什麼, 不能修什麼
@@ -52,6 +51,9 @@
 #
 # 這幾個是「聽起來像但不是中文詞」, 誤傷風險接近零。
 
+# Optional exact name spellings, before the first [[entry]].
+names = ["GitHub", "VoiceType"]
+
 [[entry]]
 wrong = ["熱力瑞", "热力瑞", "熱力率"]
 right = "learning rate"
@@ -80,3 +82,16 @@ right = "fcitx5"
 [[entry]]
 wrong = ["sense voice", "sensevoice"]
 right = "SenseVoice"
+
+# Explicit aliases only; code, paths and longer identifiers stay unchanged.
+[[entry]]
+wrong = ["gthub", "git hub"]
+right = "GitHub"
+
+[[entry]]
+wrong = ["pull requset", "pull reqeust"]
+right = "pull request"
+
+[[entry]]
+wrong = ["comimt", "commmit"]
+right = "commit"
