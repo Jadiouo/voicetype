@@ -4,6 +4,7 @@ Requires tauri-driver and the platform's native WebDriver. No mock Tauri bridge,
 microphone, user login, GPU inference or dictation/input injection is involved.
 """
 import base64
+import http.client
 import json
 import os
 from pathlib import Path
@@ -44,7 +45,7 @@ def main():
                 value = check()
                 if value:
                     return value
-            except (urllib.error.URLError, RuntimeError, TimeoutError) as error:
+            except (urllib.error.URLError, http.client.RemoteDisconnected, RuntimeError, TimeoutError) as error:
                 last_error = error
             time.sleep(0.2)
         raise AssertionError(f"UI condition timed out: {last_error}")
@@ -62,7 +63,10 @@ def main():
             process = subprocess.Popen([executable], env=env, stdout=log, stderr=log)
             session = None
             try:
-                eventually(lambda: request("GET", "/status"))
+                # tauri-driver can bind before its native driver is listening.
+                # Retry only this read-only readiness probe/condition checks;
+                # session creation and clicks are never automatically replayed.
+                eventually(lambda: request("GET", "/status").get("ready") is True)
 
                 def open_app():
                     result = request("POST", "/session", {"capabilities": {

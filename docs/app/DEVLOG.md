@@ -325,3 +325,13 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   session deadlines, expose recovery text and prepare explicit frontend-owner
   migration. Runtime/model/spelling setup, shared vocabulary/review UI, Google
   and Windows integration remain. The goal is active; daily services are untouched.
+
+- `bb6da91` engine/Fcitx CI passed. The Linux installed-UI job stopped before
+  opening the app: tauri-driver's proxy accepted `/status` while its native driver
+  still refused the TCP connection, causing an uncaught `RemoteDisconnected`.
+  The saved driver log confirms the connection refusal. The existing bounded
+  read-only condition loop now handles that transient disconnect and waits for
+  the WebDriver `ready` flag; session creation/clicks are not replayed. Readiness
+  semantics follow the [WebDriver status contract](https://www.w3.org/TR/webdriver2/#status).
+  The native dispatcher/ownership tests passed in that run; UI checks must be
+  rerun after this harness fix before recording a complete desktop CI pass.
