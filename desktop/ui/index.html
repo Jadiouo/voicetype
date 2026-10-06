@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoiceType</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand"><span class="mark" aria-hidden="true">V</span><span>VoiceType<small>說話，成為文字。</small></span></div>
+      <nav aria-label="設定頁面"><a href="#recognition" aria-current="page">辨識方式</a></nav>
+      <div class="aside-note">本機優先<br>你的詞彙，你來決定。</div>
+      <span class="version" id="version">開發預覽</span>
+    </aside>
+    <main id="recognition">
+      <header><span class="eyebrow">語音輸入</span><h1>選擇適合你的辨識方式</h1><p>離線處理，或使用你的 Google 帳號。</p></header>
+      <div class="notice"><strong>開發預覽</strong><p>目前可保存偏好設定。語音辨識尚未接入這個 App，現有語音輸入可照常使用。</p></div>
+      <div id="error" class="error" role="alert" hidden></div>
+      <fieldset id="providers" disabled>
+        <legend class="sr-only">辨識方式</legend>
+        <label class="provider-card" id="local-card">
+          <input type="radio" name="provider" value="local" id="provider-local">
+          <span class="card-title">本機離線<span class="tag">CPU</span></span>
+          <span class="description">在你的電腦完成辨識，適合日常中英混合輸入。</span>
+          <span class="detail">首次使用需下載模型；之後可離線使用。</span>
+          <span class="availability">準備中 · 尚未連接辨識引擎</span>
+        </label>
+        <label class="provider-card" id="google-card">
+          <input type="radio" name="provider" value="google" id="provider-google">
+          <span class="card-title">Google<span class="tag">需連線</span></span>
+          <span class="description">使用官方 Antigravity 語音辨識與你的登入帳號。</span>
+          <span class="detail">首次使用需安裝官方程式並登入。</span>
+          <span class="availability">準備中 · 尚未連接辨識引擎</span>
+        </label>
+      </fieldset>
+      <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="reload" type="button">重新載入</button></div>
+      <section class="shared"><h2>兩種方式，共用你的習慣</h2><p>詞庫、繁體中文與抽樣校對會放在同一個介面。這些功能正在整合，現階段請繼續使用原有設定視窗。</p></section>
+      <footer id="tray-note">關閉視窗會結束預覽 App。</footer>
+    </main>
+  </div>
+</body>
+</html>

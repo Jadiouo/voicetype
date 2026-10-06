@@ -1,6 +1,6 @@
 # VoiceType Desktop — Test Design and TDD Plan
 
-Status: proposed public test boundaries, awaiting the user's seam agreement.
+Status: user confirmed all four public test boundaries on 2026-10-07.
 Existing Linux behavior was already tested before PR #1 merged. Do not rerun that
 entire suite merely to merge or create this shell.
 

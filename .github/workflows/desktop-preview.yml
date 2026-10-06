@@ -1,0 +1,85 @@
+name: Desktop preview
+
+on:
+  push:
+    branches: [feat/desktop-app]
+    paths: ["desktop/**", ".github/workflows/desktop-preview.yml"]
+  pull_request:
+    paths: ["desktop/**", ".github/workflows/desktop-preview.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundle: deb
+          - os: windows-2022
+            bundle: nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Rust stable
+        run: rustup update stable --no-self-update
+      - name: Linux build and desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: desktop
+      - name: Install locked build tools
+        run: npm ci --ignore-scripts
+      - name: Public application command tests
+        run: cargo +stable test -p voicetype-app-core --locked
+      - name: Build preview installer
+        run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
+      - name: Inspect installer payload (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p target/inspection
+          dpkg-deb --info target/release/bundle/deb/*.deb
+          dpkg-deb --extract target/release/bundle/deb/*.deb target/inspection
+          test -s target/inspection/usr/bin/voicetype-desktop
+          test -s "target/inspection/usr/share/applications/VoiceType Preview.desktop"
+      - name: Inspect and install preview (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Installer missing' }
+          $destination = Join-Path $env:RUNNER_TEMP 'voicetype-preview-install'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          if (-not (Test-Path "$destination/voicetype-desktop.exe")) { throw 'Installed executable missing' }
+          "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
+      - name: Record artifact checksums
+        run: python tests/artifact_manifest.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voicetype-preview-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/target/release/bundle/deb/*.deb
+            desktop/target/release/bundle/nsis/*-setup.exe
+            desktop/target/preview-manifest.json
