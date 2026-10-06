@@ -25,12 +25,12 @@ use tracing::{debug, info, warn};
 
 use crate::asr::Transcriber;
 use crate::assistant::{Assistant, CorrectionAttributionError};
-use crate::audio::capture::{exceeds_max_duration, RecordingMark};
-use crate::audio::{resample, AudioCapture, MAX_RECORDING_SECONDS};
+use crate::audio::capture::{exceeds_max_duration, CaptureSource, RecordingMark};
+use crate::audio::{resample, MAX_RECORDING_SECONDS};
 use crate::ipc::{Handler, Responder};
 use crate::personalization::{ContextSnapshot, LearningOutcome, LearningStatus, RejectionReason};
 use crate::postproc::{Traditional, Vocab};
-use crate::protocol::{ClientMessage, ErrorCode, ServerMessage};
+use crate::protocol::{ClientMessage, ErrorCode, ServerMessage, SessionState};
 use crate::vad::AudioPreparation;
 
 /// 從音訊到可 commit 文字的三個階段 (SDD §4.4 / §4.1 / §4.6)。
@@ -59,6 +59,7 @@ enum Command {
         program: String,
         context: ContextSnapshot,
         responder: Responder,
+        lifecycle: Lifecycle,
     },
     Stop {
         session: u64,
@@ -91,6 +92,31 @@ struct Active {
     desktop: Arc<Mutex<String>>,
     mark: RecordingMark,
     started: Instant,
+    lifecycle: Lifecycle,
+}
+
+/// Follows the actual work into its asynchronous transcription task. All returns
+/// (including cancellation, processing errors and stale results) release only
+/// after that task's synchronous/native work has completed.
+struct Lifecycle {
+    session: u64,
+    responder: Option<Responder>,
+}
+
+impl Lifecycle {
+    fn recording(&self) {
+        if let Some(responder) = &self.responder {
+            responder.send(ServerMessage::State { session: self.session, value: SessionState::Recording });
+        }
+    }
+}
+
+impl Drop for Lifecycle {
+    fn drop(&mut self) {
+        if let Some(responder) = &self.responder {
+            responder.send(ServerMessage::State { session: self.session, value: SessionState::Idle });
+        }
+    }
 }
 
 pub struct SessionManager {
@@ -100,7 +126,7 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    pub fn new(audio: Arc<AudioCapture>, pipeline: Pipeline) -> Self {
+    pub fn new(audio: Arc<dyn CaptureSource>, pipeline: Pipeline) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let latest = Arc::new(AtomicU64::new(0));
         // 迴圈自己也需要 sender: 錄音上限的計時器要把 Timeout 命令送回
@@ -131,7 +157,9 @@ impl Handler for SessionManager {
                 context_id,
                 context_text,
                 selected_text,
+                session_events,
             } => {
+                let lifecycle = Lifecycle { session, responder: session_events.then(|| responder.clone()) };
                 // 縱深防禦 (SDD §7)。addon 已經在密碼欄位拒絕啟動,
                 // 走到這裡代表 addon 版本不符或協定被繞過。
                 if is_password {
@@ -155,6 +183,7 @@ impl Handler for SessionManager {
                     .bounded(),
                     program,
                     responder,
+                    lifecycle,
                 }
             }
             ClientMessage::Stop { session } => Command::Stop { session, responder },
@@ -177,7 +206,7 @@ impl Handler for SessionManager {
 async fn run(
     mut rx: mpsc::UnboundedReceiver<Command>,
     self_tx: mpsc::UnboundedSender<Command>,
-    audio: Arc<AudioCapture>,
+    audio: Arc<dyn CaptureSource>,
     pipeline: Arc<Pipeline>,
     latest: Arc<AtomicU64>,
 ) {
@@ -190,6 +219,7 @@ async fn run(
                 program,
                 context,
                 responder,
+                lifecycle,
             } => {
                 if let Some(prev) = active.take() {
                     // 上一段錄音沒有正常結束 (例如 addon 漏送 stop)。
@@ -230,6 +260,7 @@ async fn run(
                     });
                 }
                 debug!(session, program = %program, "recording");
+                lifecycle.recording();
                 active = Some(Active {
                     session,
                     program,
@@ -237,6 +268,7 @@ async fn run(
                     desktop,
                     mark,
                     started: Instant::now(),
+                    lifecycle,
                 });
 
                 // 上限計時 (SDD §4.4): 超過上限自動停止並回 too_long,
@@ -355,12 +387,13 @@ enum Outcome {
 
 /// 取出錄音, 送去轉錄。轉錄本身不 await (見模組說明)。
 async fn finish(
-    audio: &Arc<AudioCapture>,
+    audio: &Arc<dyn CaptureSource>,
     pipeline: &Arc<Pipeline>,
     latest: &Arc<AtomicU64>,
     current: Active,
     responder: Responder,
 ) {
+    let lifecycle = current.lifecycle;
     let session = current.session;
     let mut context = current.context.clone();
     let desktop = current
@@ -424,6 +457,7 @@ async fn finish(
     let review = pipeline.review.clone();
     let latest = latest.clone();
     tokio::spawn(async move {
+        let _lifecycle = lifecycle;
         let started = Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             let mut samples = resample::to_target_rate(&recording.samples, recording.sample_rate)?;

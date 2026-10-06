@@ -1,0 +1,35 @@
+name: Local engine protocol contract
+on:
+  push:
+    branches: [main, feat/desktop-app]
+    paths: ["voicetyped/**", ".github/workflows/engine-contract.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: engine-contract-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: voicetyped
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: CPU build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libopencc-dev opencc
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          workspaces: voicetyped
+      - name: Public IPC lifecycle and affected transport/capture contracts
+        # OS microphone/native model are fixtures. No microphone, model download,
+        # account login, GPU inference or production data participates.
+        run: |
+          cargo +stable test --locked desktop_ipc_tests
+          cargo +stable test --locked protocol::tests
+          cargo +stable test --locked ipc::tests
+          cargo +stable test --locked audio::capture::tests

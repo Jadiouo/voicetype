@@ -167,3 +167,31 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   ownership contracts and rollback are verified. No daily service was changed.
 - Next: connect the coordinator to actual provider transports and input-context
   delivery, then vocabulary/review and runtime installation. M2–M4 remain open.
+
+## 2026-10-07 — local engine lifecycle IPC
+
+- [CI 37511989320](https://github.com/Jadiouo/voicetype/actions/runs/37511989320)
+  passed both native desktop builds, installed UI and core tests at `88129d4`.
+  The remote source tree matched all 167 local blobs.
+- Local daemon Start now accepts opt-in `session_events: true`. It reports
+  Recording after the capture boundary accepts the session, then Idle after
+  native inference and text processing finish. A lifecycle guard follows the
+  asynchronous work so cancellation or a stale result cannot release early.
+  Legacy Start without the flag retains its previous result stream.
+- Added a real Unix-socket daemon contract test through SessionManager/Server.
+  Only OS capture and the native ASR boundary are substituted; OpenCC and the
+  production text pipeline run normally. The first test failed for the missing
+  capture boundary, then passed with the lifecycle implementation. It verifies
+  complete Traditional Chinese/mixed-English output, event ordering and legacy
+  compatibility. A follow-up regression gates native inference, cancels it, checks
+  no premature Idle/result, then releases it and receives only Idle.
+- All 21 affected Linux protocol, IPC, capture and new desktop-contract tests pass.
+  `cargo check --features sherpa-nano --locked` also passes with the existing
+  pinned CPU native dependencies. Existing unused-code warnings remain; no live
+  recording, inference, service restart or user-data migration was performed.
+- Added isolated Ubuntu CI for these daemon contracts; its first run is pending.
+  This daemon change has not been installed in the daily service.
+- Important remaining contract: Idle ends a session, not the warm microphone's
+  30-second idle stream. Add an explicit suspend/close acknowledgement and versioned
+  capability query before a desktop adapter can hand the microphone to Google.
+  The actual app transport/input integration and M2–M4 acceptance remain open.

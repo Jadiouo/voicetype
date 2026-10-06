@@ -88,6 +88,20 @@ pub struct AudioCapture {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+/// OS microphone boundary used by the session controller. End/cancel finish the
+/// active recording; a warm idle stream may remain open until its normal expiry.
+pub trait CaptureSource: Send + Sync {
+    fn begin(&self) -> Result<RecordingMark>;
+    fn end(&self, mark: RecordingMark) -> Recording;
+    fn cancel(&self);
+}
+
+impl CaptureSource for AudioCapture {
+    fn begin(&self) -> Result<RecordingMark> { AudioCapture::begin(self) }
+    fn end(&self, mark: RecordingMark) -> Recording { AudioCapture::end(self, mark) }
+    fn cancel(&self) { AudioCapture::cancel(self) }
+}
+
 impl AudioCapture {
     pub fn new(mode: StreamMode) -> Self {
         let shared = Arc::new(Shared {

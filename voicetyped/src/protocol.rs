@@ -26,6 +26,11 @@ pub enum ClientMessage {
         context_text: String,
         #[serde(default)]
         selected_text: String,
+        /// Opt-in desktop lifecycle acknowledgements. Legacy clients keep their
+        /// previous response stream. Idle means this session's work has ended,
+        /// not that a warm microphone stream has been physically closed.
+        #[serde(default)]
+        session_events: bool,
     },
     Stop {
         session: u64,
