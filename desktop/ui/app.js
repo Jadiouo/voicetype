@@ -3,6 +3,7 @@ const error = document.querySelector('#error');
 const status = document.querySelector('#status');
 const reload = document.querySelector('#reload');
 const check = document.querySelector('#check-providers');
+const cancel = document.querySelector('#cancel-dictation');
 const choices = [...document.querySelectorAll('input[name="provider"]')];
 let lastView;
 let commandBusy = false;
@@ -32,6 +33,8 @@ async function refreshRecovery() {
 
 function render(view) {
   lastView = view;
+  cancel.hidden = !view.settings.dictation.busy;
+  cancel.disabled = view.settings.dictation.phase === 'releasing';
   for (const choice of choices) {
     choice.checked = choice.value === view.settings.selected_provider;
   }
@@ -67,8 +70,10 @@ async function command(name, args = {}) {
   fieldset.disabled = true;
   reload.disabled = true;
   check.disabled = true;
+  cancel.disabled = true;
   error.hidden = true;
   status.textContent = name === 'select_provider' ? '正在儲存…'
+    : name === 'cancel_dictation' ? '正在取消聽寫…'
     : name === 'refresh_providers' ? '正在檢查服務…' : '正在讀取設定…';
   try {
     if (!window.__TAURI__) throw new Error('請透過已安裝的 VoiceType App 開啟設定。');
@@ -77,6 +82,7 @@ async function command(name, args = {}) {
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
     status.textContent = name === 'select_provider'
       ? '偏好已儲存。現有聽寫方式尚未變更。'
+      : name === 'cancel_dictation' ? '已要求取消，正在等待引擎停止。'
       : name === 'refresh_providers' ? '已檢查服務。此操作不會啟動錄音。'
       : '已讀取你的偏好設定。';
   } catch (reason) {
@@ -124,12 +130,20 @@ setInterval(async () => {
   try {
     const view = await window.__TAURI__.core.invoke('get_settings');
     if (requestedRevision !== revision) return;
+    const wasBusy = lastView.settings.dictation.busy;
     render(view);
     fieldset.disabled = view.settings.dictation.busy;
     reload.disabled = view.settings.dictation.busy;
     check.disabled = view.settings.dictation.busy;
-    if (view.settings.dictation.busy) status.textContent = '正在處理聽寫，完成後可切換辨識方式。';
+    if (view.settings.dictation.busy) {
+      const phaseLabels = {
+        preparing: '正在準備錄音…', recording: '正在錄音…',
+        finalizing: '正在辨識完整錄音…', releasing: '正在等待引擎停止…',
+      };
+      status.textContent = phaseLabels[view.settings.dictation.phase] || '正在處理聽寫…';
+    }
     else if (view.settings.dictation.failure) status.textContent = '這次聽寫未完成，請檢查引擎狀態。';
+    else if (wasBusy) status.textContent = '聽寫已結束。';
     if (view.settings.dictation.has_retained_text || recovery) await refreshRecovery();
   } catch (reason) {
     if (requestedRevision !== revision) return;
@@ -148,4 +162,5 @@ for (const choice of choices) {
 }
 reload.addEventListener('click', () => command('reload_settings'));
 check.addEventListener('click', () => command('refresh_providers'));
+cancel.addEventListener('click', () => command('cancel_dictation'));
 command('get_settings');

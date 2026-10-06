@@ -104,6 +104,7 @@ impl LocalDispatcher {
     }
 
     fn step_inner(&mut self, app: &mut Application, budget: Duration) -> io::Result<()> {
+        self.enforce_deadline(app)?;
         let mut input_budget = budget / 2;
         let mut drained = false;
         for _ in 0..32 {
@@ -216,7 +217,11 @@ impl LocalDispatcher {
         if !drained {
             return Err(invalid("frontend command burst too large"));
         }
-        if let Some((key, event)) = self.engine.poll_event(budget / 2)? {
+        let event = self.engine.poll_event(budget / 2)?;
+        // A complete result can arrive after its deadline while blocked in IO.
+        // Invalidate it before offering it to the original input context.
+        self.enforce_deadline(app)?;
+        if let Some((key, event)) = event {
             if let Some(active) = self.active.as_ref().filter(|a| a.key == key) {
                 let session = active.frontend;
                 let released = matches!(event, ProviderEvent::Released);
@@ -245,6 +250,13 @@ impl LocalDispatcher {
                     self.input.state(session, "idle")?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn enforce_deadline(&mut self, app: &mut Application) -> io::Result<()> {
+        if self.active.is_some() && app.expire_dictation(&mut self.engine) {
+            return Err(io::ErrorKind::TimedOut.into());
         }
         Ok(())
     }

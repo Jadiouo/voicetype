@@ -1,9 +1,27 @@
 //! Provider ownership and exactly-once delivery, independent of OS audio/input.
 use crate::{AppError, Provider};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
+/// The OS monotonic clock boundary, substitutable without changing deadlines.
+pub trait SessionClock: Send + Sync {
+    fn now(&self) -> Instant;
+}
+
+struct SystemClock;
+impl SessionClock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionKey {
@@ -100,6 +118,7 @@ pub struct DictationStatus {
     pub busy: bool,
     pub failure: Option<SessionFailure>,
     pub has_retained_text: bool,
+    pub phase: Option<DictationPhase>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -126,29 +145,67 @@ pub trait DeliveryPort {
     fn commit_if_focused(&mut self, target: &TargetLease, text: &str) -> DeliveryOutcome;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Phase {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DictationPhase {
     Preparing,
     Recording,
     Finalizing,
     Releasing,
 }
 
+use DictationPhase as Phase;
+
 struct Active {
     key: SessionKey,
     target: TargetLease,
     phase: Phase,
     cancel_sent: bool,
+    since: Instant,
 }
 
-#[derive(Default)]
 pub(super) struct Coordinator {
     active: Option<Active>,
     retained: Option<RetainedText>,
     failure: Option<SessionFailure>,
+    clock: Arc<dyn SessionClock>,
+}
+
+impl Default for Coordinator {
+    fn default() -> Self {
+        Self::with_clock(Arc::new(SystemClock))
+    }
 }
 
 impl Coordinator {
+    pub fn with_clock(clock: Arc<dyn SessionClock>) -> Self {
+        Self {
+            active: None,
+            retained: None,
+            failure: None,
+            clock,
+        }
+    }
+
+    /// Timeout invalidates output and requests cancellation. The adapter must
+    /// still prove child/capture cleanup before supplying Released.
+    pub fn expire(&mut self, port: &mut impl ProviderPort) -> bool {
+        let Some(active) = &self.active else {
+            return false;
+        };
+        let limit = match active.phase {
+            Phase::Preparing => Duration::from_secs(6),
+            Phase::Recording => Duration::from_secs(65),
+            Phase::Finalizing => Duration::from_secs(120),
+            Phase::Releasing => Duration::from_secs(3),
+        };
+        if self.clock.now().saturating_duration_since(active.since) < limit {
+            return false;
+        }
+        self.failure.get_or_insert(SessionFailure::TimedOut);
+        let _ = self.cancel(port);
+        true
+    }
     pub fn busy(&self) -> bool {
         self.active.is_some()
     }
@@ -172,6 +229,7 @@ impl Coordinator {
             busy: self.busy(),
             failure: self.failure,
             has_retained_text: self.retained.is_some(),
+            phase: self.active.as_ref().map(|active| active.phase),
         }
     }
 
@@ -200,6 +258,7 @@ impl Coordinator {
             target,
             phase: Phase::Preparing,
             cancel_sent: false,
+            since: self.clock.now(),
         });
         self.failure = None;
         Ok(key)
@@ -216,6 +275,7 @@ impl Coordinator {
             port.send(ProviderCommand::Stop { key: active.key })
                 .map_err(|_| AppError::ProviderUnavailable)?;
             active.phase = Phase::Finalizing;
+            active.since = self.clock.now();
         }
         Ok(())
     }
@@ -225,7 +285,10 @@ impl Coordinator {
             return Ok(());
         };
         // Invalidate results before IO, even if cancellation cannot be sent yet.
-        active.phase = Phase::Releasing;
+        if active.phase != Phase::Releasing {
+            active.phase = Phase::Releasing;
+            active.since = self.clock.now();
+        }
         if !active.cancel_sent {
             port.send(ProviderCommand::Cancel { key: active.key })
                 .map_err(|_| AppError::ProviderUnavailable)?;
@@ -240,10 +303,12 @@ impl Coordinator {
         };
         match event {
             ProviderEvent::Recording if active.phase == Phase::Preparing => {
-                active.phase = Phase::Recording
+                active.phase = Phase::Recording;
+                active.since = self.clock.now();
             }
             ProviderEvent::Final(text) if active.phase == Phase::Finalizing => {
                 active.phase = Phase::Releasing;
+                active.since = self.clock.now();
                 if text.len() > 64 * 1024 || text.trim().is_empty() || text.contains('\0') {
                     self.failure = Some(SessionFailure::InvalidResult);
                     return;
@@ -253,10 +318,18 @@ impl Coordinator {
                     self.retained = Some(RetainedText { key, text, reason });
                 }
             }
-            ProviderEvent::Released => self.active = None,
+            ProviderEvent::Released => {
+                if active.phase != Phase::Releasing {
+                    self.failure.get_or_insert(SessionFailure::ProviderFailed);
+                }
+                self.active = None;
+            }
             ProviderEvent::Failed(reason) => {
-                active.phase = Phase::Releasing;
-                self.failure = Some(reason);
+                if active.phase != Phase::Releasing {
+                    active.phase = Phase::Releasing;
+                    active.since = self.clock.now();
+                }
+                self.failure.get_or_insert(reason);
             }
             _ => {}
         }

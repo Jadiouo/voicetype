@@ -42,6 +42,11 @@ async fn reload_settings(app: tauri::AppHandle) -> Result<View, String> {
 }
 
 #[tauri::command]
+async fn cancel_dictation(app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, DesktopWorker::cancel_dictation).await
+}
+
+#[tauri::command]
 async fn get_recovery(app: tauri::AppHandle) -> Result<Option<RecoveryText>, String> {
     with_worker(app, DesktopWorker::recovery).await
 }
@@ -167,7 +172,8 @@ fn main() {
             reload_settings,
             refresh_providers,
             get_recovery,
-            dismiss_recovery
+            dismiss_recovery,
+            cancel_dictation
         ])
         .build(tauri::generate_context!())
         .expect("VoiceType could not start")

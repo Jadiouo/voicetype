@@ -233,6 +233,10 @@ pub struct OwnedLocalSession {
 }
 
 impl OwnedLocalSession {
+    pub fn cancel(&mut self, app: &mut Application) {
+        self.dispatcher.cancel(app);
+    }
+
     pub fn step(&mut self, app: &mut Application, budget: Duration) -> io::Result<()> {
         let result = match self.runtime.is_running() {
             Ok(true) => self.dispatcher.step(app, budget),

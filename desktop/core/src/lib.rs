@@ -11,9 +11,9 @@ mod providers;
 pub mod runtime;
 pub mod worker;
 pub use dictation::{
-    CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationStatus,
-    ProviderCommand, ProviderEvent, ProviderPort, RetainedText, SessionFailure, SessionKey,
-    TargetLease,
+    CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationPhase,
+    DictationStatus, ProviderCommand, ProviderEvent, ProviderPort, RetainedText, SessionClock,
+    SessionFailure, SessionKey, TargetLease,
 };
 
 use serde::{Deserialize, Serialize};
@@ -106,6 +106,20 @@ pub struct Application {
 impl Application {
     /// Loading settings never launches a provider, opens a microphone or logs in.
     pub fn open(config_dir: &Path) -> Result<Self, AppError> {
+        Self::open_with_coordinator(config_dir, dictation::Coordinator::default())
+    }
+
+    pub fn open_with_clock(
+        config_dir: &Path,
+        clock: std::sync::Arc<dyn SessionClock>,
+    ) -> Result<Self, AppError> {
+        Self::open_with_coordinator(config_dir, dictation::Coordinator::with_clock(clock))
+    }
+
+    fn open_with_coordinator(
+        config_dir: &Path,
+        coordinator: dictation::Coordinator,
+    ) -> Result<Self, AppError> {
         let path = config_dir.join("desktop.json");
         let original = read_optional(&path)?;
         let preferences: Preferences = match &original {
@@ -120,7 +134,7 @@ impl Application {
             preferences,
             original,
             local_status: Availability::NotConnected,
-            dictation: dictation::Coordinator::default(),
+            dictation: coordinator,
         })
     }
 
@@ -237,6 +251,10 @@ impl Application {
 
     pub fn cancel_dictation(&mut self, port: &mut impl ProviderPort) -> Result<(), AppError> {
         self.dictation.cancel(port)
+    }
+
+    pub fn expire_dictation(&mut self, port: &mut impl ProviderPort) -> bool {
+        self.dictation.expire(port)
     }
 
     pub fn provider_event(

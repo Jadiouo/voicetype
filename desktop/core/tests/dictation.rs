@@ -3,6 +3,91 @@ use voicetype_app_core::{
     ProviderPort, SessionKey, TargetLease,
 };
 
+struct Clock(std::sync::Mutex<std::time::Instant>);
+impl voicetype_app_core::SessionClock for Clock {
+    fn now(&self) -> std::time::Instant {
+        *self.0.lock().unwrap()
+    }
+}
+impl Clock {
+    fn advance(&self, elapsed: std::time::Duration) {
+        *self.0.lock().unwrap() += elapsed;
+    }
+}
+
+#[test]
+fn a_stalled_finalization_expires_and_rejects_text_until_actual_release() {
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    use voicetype_app_core::SessionFailure;
+    let profile = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Clock(std::sync::Mutex::new(Instant::now())));
+    let mut app = Application::open_with_clock(profile.path(), clock.clone()).unwrap();
+    let mut engine = EngineProcess::default();
+    let mut input = InputContext::default();
+    let key = app
+        .start_dictation(TargetLease::new("editor", 1), &mut engine)
+        .unwrap();
+    app.provider_event(key, ProviderEvent::Recording, &mut input);
+    app.stop_dictation(&mut engine).unwrap();
+    clock.advance(Duration::from_secs(119));
+    assert!(!app.expire_dictation(&mut engine));
+    // Repeated stop must not keep a stuck session alive indefinitely.
+    app.stop_dictation(&mut engine).unwrap();
+    clock.advance(Duration::from_secs(2));
+    assert!(app.expire_dictation(&mut engine));
+    assert_eq!(
+        app.snapshot().dictation.failure,
+        Some(SessionFailure::TimedOut)
+    );
+    assert!(
+        app.snapshot().dictation.busy,
+        "deadline is not cleanup evidence"
+    );
+    app.provider_event(key, ProviderEvent::Final("late text".into()), &mut input);
+    app.provider_event(
+        key,
+        ProviderEvent::Failed(SessionFailure::ProviderFailed),
+        &mut input,
+    );
+    assert_eq!(
+        app.snapshot().dictation.failure,
+        Some(SessionFailure::TimedOut)
+    );
+    assert!(input.inserted.is_empty());
+    assert_eq!(
+        engine
+            .received
+            .iter()
+            .filter(|c| matches!(c, ProviderCommand::Cancel { .. }))
+            .count(),
+        1
+    );
+    app.provider_event(key, ProviderEvent::Released, &mut input);
+    assert!(!app.snapshot().dictation.busy);
+}
+
+#[test]
+fn an_unexpected_release_while_recording_is_visible_as_a_failure() {
+    let profile = tempfile::tempdir().unwrap();
+    let mut app = Application::open(profile.path()).unwrap();
+    let mut engine = EngineProcess::default();
+    let mut input = InputContext::default();
+    let key = app
+        .start_dictation(TargetLease::new("editor", 1), &mut engine)
+        .unwrap();
+    app.provider_event(key, ProviderEvent::Recording, &mut input);
+    app.provider_event(key, ProviderEvent::Released, &mut input);
+    assert!(!app.snapshot().dictation.busy);
+    assert_eq!(
+        app.snapshot().dictation.failure,
+        Some(voicetype_app_core::SessionFailure::ProviderFailed)
+    );
+    assert!(input.inserted.is_empty());
+}
+
 // Only the external provider and OS delivery boundaries are substituted. The
 // application, settings persistence and session coordinator run unchanged.
 #[derive(Default)]

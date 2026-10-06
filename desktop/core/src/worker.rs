@@ -228,6 +228,18 @@ impl DesktopWorker {
         })
     }
 
+    pub fn cancel_dictation(&self) -> Result<DesktopSnapshot, String> {
+        self.call(|desktop| {
+            #[cfg(target_os = "linux")]
+            if let (Some(local), Ok(app)) = (&mut desktop.local, &mut desktop.app) {
+                if let Some(EngineOwner::Connected(session)) = local.owner.as_mut() {
+                    session.cancel(app);
+                }
+            }
+            desktop.snapshot()
+        })
+    }
+
     /// Success means the worker has reaped its child and exited. Run off the UI
     /// event thread. A failed cleanup leaves the worker available for recovery.
     pub fn shutdown(&self) -> Result<(), String> {

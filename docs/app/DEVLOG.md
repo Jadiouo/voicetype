@@ -376,3 +376,35 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   spelling setup, Google integration and Windows speech still remain. The current
   webview does not expose executable paths or call native activation; these are
   not yet working end-to-end speech installers. The goal stays active.
+
+### Phase deadlines and UI cancellation
+
+- `ad89d2f` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37544476912)
+  and [Linux/Windows installer/UI CI](https://github.com/Jadiouo/voicetype/actions/runs/37544476863).
+  Downloaded artifacts match their source, size and SHA-256: Linux 4,454,074 bytes,
+  `9023efa9c54d1ebefcadc29c36d22a4886eaf95689ecd4c8ccabb54232ab9875`;
+  Windows 2,151,322 bytes,
+  `f642c48f34af40660531167a0234ddfd08d90ef2c64e64ec7a33d8be155fb13c`.
+  Both installed UI reports pass eight checks; actual screenshots show the
+  recovery section on both platforms. Speech adapters remain explicitly untested.
+- TDD/B: added a monotonic OS clock boundary and phase watchdogs: prepare 6 s,
+  record 65 s, finalize 120 s, release/cancel 3 s. A stalled finalization now
+  invalidates late output and keeps ownership until actual cleanup; repeated
+  Stop/Cancel cannot renew its deadline. The first failure remains visible after
+  subsequent transport errors. This adds no wait to successful dictation.
+- TDD/B: the real owned-process test first showed that a child ignoring Cancel
+  stayed busy after the deadline (**RED**). The dispatcher now enforces deadlines
+  before polling and before accepting engine output; actual kill/wait precedes
+  release (**GREEN**). No text is delivered or retained from that cancelled work.
+- TDD/A,B: the UI-facing cancel operation initially did not exist (**RED**). It
+  now invalidates the session through the resident worker (**GREEN**). A real
+  external child that ignores cancellation is automatically reaped after 3 s
+  without more frontend input. Tauri exposes the command and a busy-only cancel
+  button; status distinguishes preparation, recording, finalization and release.
+- TDD/B: an unexpected release while still recording originally showed no
+  failure (**RED**); it now reports ProviderFailed and inserts no text (**GREEN**).
+- Local core suite: **28 passed**, one deliberately ignored subprocess helper;
+  native app/daemon contracts and the new installer/UI build are verified again
+  below when the new source reaches CI. Daily services and private user data
+  remain unchanged. Next concrete work is verified asset setup/activation, then
+  frontend migration and the shared vocabulary/review/provider integrations.

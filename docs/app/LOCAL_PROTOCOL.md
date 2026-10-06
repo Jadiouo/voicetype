@@ -170,8 +170,22 @@ app exit. Session IDs cross the JavaScript boundary as opaque strings. Recovery
 does not inject text or change the clipboard. An uncertain acknowledgement says
 the text may already have been committed; users can select and copy manually.
 
-Remaining supervisor work includes phase deadlines for non-responsive capture
-preparation/finalization/cancellation, installed asset activation and frontend
+Session deadlines use a monotonic clock: capture preparation 6 seconds, recording
+65 seconds (the engine normally enforces its own 60-second limit), finalization
+120 seconds and release/cancellation 3 seconds. These are failure watchdogs,
+not delays before sending valid text or changes to the speed acceptance target.
+Repeated Stop/Cancel and stale state events do not extend a phase. The dispatcher
+checks before polling and before accepting a returned result. Expiration marks
+TimedOut, invalidates text and requests one cancellation; only actual owned-child
+cleanup releases the app. The first failure is preserved when a later transport
+failure occurs. Unexpected release without a result/cancel/error is itself a
+visible provider failure.
+
+The settings UI can cancel through the resident worker and displays preparation,
+recording, finalization and release separately. A non-acknowledging child is reaped
+at the release deadline without another frontend command.
+
+Remaining supervisor work includes installed asset activation and frontend
 owner migration. No webview command currently accepts executable/model paths or
 activates this native runtime API. Opening the preview creates only the worker;
 it does not start a provider or alter the daily input integration.

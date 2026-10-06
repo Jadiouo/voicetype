@@ -361,6 +361,142 @@ fn desktop_worker_retains_focus_rejected_text_for_explicit_recovery_only() {
 }
 
 #[test]
+fn cancelled_engine_that_never_releases_is_reaped_at_the_deadline() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixStream,
+        sync::{Arc, Mutex},
+        thread,
+        time::Instant,
+    };
+    use voicetype_app_core::{Application, DictationPhase, SessionClock, SessionFailure};
+    struct Clock(Mutex<Instant>);
+    impl SessionClock for Clock {
+        fn now(&self) -> Instant {
+            *self.0.lock().unwrap()
+        }
+    }
+    let (root, paths) = fixture();
+    let runtime = OwnedLocal::start(&paths, Duration::from_secs(2)).unwrap();
+    let pid = runtime.process_id().unwrap();
+    let (peer, frontend) = UnixStream::pair().unwrap();
+    let frontend = thread::spawn(move || {
+        frontend
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut input = BufReader::new(frontend);
+        let mut line = String::new();
+        input.read_line(&mut line).unwrap();
+        let hello: Value = serde_json::from_str(&line).unwrap();
+        writeln!(
+            input.get_mut(),
+            "{}",
+            json!({"type":"desktop_hello",
+            "session":hello["session"],"value":"voicetype.fcitx.v1"})
+        )
+        .unwrap();
+        writeln!(
+            input.get_mut(),
+            "{}",
+            json!({"type":"start","session":1,
+            "context_id":"original","is_password":false})
+        )
+        .unwrap();
+        line.clear();
+        input.read_line(&mut line).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap()["value"],
+            "recording"
+        );
+        writeln!(input.get_mut(), "{}", json!({"type":"cancel","session":1})).unwrap();
+        input
+    });
+    let mut session = runtime
+        .attach_frontend(peer, Duration::from_secs(1))
+        .unwrap();
+    let clock = Arc::new(Clock(Mutex::new(Instant::now())));
+    let mut app =
+        Application::open_with_clock(&root.path().join("settings"), clock.clone()).unwrap();
+    let until = Instant::now() + Duration::from_secs(2);
+    while app.snapshot().dictation.phase != Some(DictationPhase::Releasing) {
+        assert!(Instant::now() < until);
+        session.step(&mut app, Duration::from_millis(10)).unwrap();
+    }
+    let _input = frontend.join().unwrap();
+    assert!(app.snapshot().dictation.busy);
+    *clock.0.lock().unwrap() += Duration::from_secs(4);
+    let failed = session.step(&mut app, Duration::from_millis(10)).is_err();
+    let reaped = session.process_id().is_none();
+    let released = !app.snapshot().dictation.busy;
+    let failure = app.snapshot().dictation.failure;
+    session.shutdown(&mut app).unwrap();
+    assert!(
+        failed,
+        "cancel with no acknowledgement stayed busy indefinitely"
+    );
+    assert!(reaped && released);
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    assert_eq!(failure, Some(SessionFailure::TimedOut));
+    assert!(app.retained_text().is_none());
+}
+
+#[test]
+fn the_ui_can_cancel_a_recording_and_a_hung_engine_is_reaped_without_more_input() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixStream,
+        time::Instant,
+    };
+    use voicetype_app_core::{worker::DesktopWorker, SessionFailure};
+    let (root, paths) = fixture();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker.activate_local(paths).unwrap();
+    let peer = UnixStream::connect(worker.local_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut input = BufReader::new(peer);
+    let mut line = String::new();
+    input.read_line(&mut line).unwrap();
+    let hello: Value = serde_json::from_str(&line).unwrap();
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello",
+        "session":hello["session"],"value":"voicetype.fcitx.v1"})
+    )
+    .unwrap();
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"start","session":33,
+        "context_id":"original","is_password":false})
+    )
+    .unwrap();
+    line.clear();
+    input.read_line(&mut line).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["value"],
+        "recording"
+    );
+    let pid = fs::read_to_string(root.path().join("app-data/home/pid")).unwrap();
+    assert!(worker.cancel_dictation().unwrap().settings.dictation.busy);
+    let until = Instant::now() + Duration::from_secs(5);
+    while worker.settings().unwrap().settings.dictation.busy {
+        assert!(Instant::now() < until, "cancel never completed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        worker.settings().unwrap().settings.dictation.failure,
+        Some(SessionFailure::TimedOut)
+    );
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    assert!(worker.recovery().unwrap().is_none());
+    assert!(worker.local_endpoint().unwrap().is_none());
+    worker.shutdown().unwrap();
+}
+
+#[test]
 fn application_exit_without_destructors_terminates_the_owned_engine() {
     let (_root, paths) = fixture();
     // Reap this test's orphan ourselves rather than leaving cleanup to PID 1.
