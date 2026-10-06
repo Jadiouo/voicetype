@@ -491,3 +491,37 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   reqwest/rustls, Tokio and Rust bzip2/tar dependencies were added; the daemon
   lockfile is also updated for its core dev dependency. Native Windows and
   installed UI validation are pending the next CI run.
+
+- `14951a9` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37548257988)
+  and [both desktop jobs](https://github.com/Jadiouo/voicetype/actions/runs/37548258075).
+  All nine asset and three setup cases pass on native Windows and Linux. Each
+  installed UI report passes nine checks; screenshots were inspected. Downloaded
+  artifact source/size/hash match: Linux 6,681,312 bytes,
+  `83cc1df44ff6610a9054d6255566b8f52fbb52e64df72037c5c9785e86539248`;
+  Windows 3,496,910 bytes,
+  `f4aa3576531022ef9a2e0edd2b65d1051b69b44c8ec77c226a20024ee762edda`.
+  All 189 remote source blobs match the reviewed commit. No private artifacts
+  were tracked. Clippy found only the pre-existing large EngineOwner enum warning.
+- The added `all-download` probe completed the real compiled-catalog setup worker
+  end to end: GitHub Nano HTTPS/redirect, all six extracted files, VAD download,
+  installation and reopened matching catalogs. Its stores were disposable and
+  no model was executed. This is stronger than combining independent network
+  and extraction fixtures; it still does not constitute speech acceptance.
+
+### Linux runtime relocation
+
+- TDD/D: an actual prepared ELF layout initially retained an absolute developer
+  native-library RPATH, so the public runtime layout check failed (**RED**).
+  New opt-in `relocatable-runtime` changes it to `$ORIGIN/../lib`; the existing
+  development mode and all native header/library pins stay unchanged (**GREEN**).
+- `build-desktop-runtime.sh` makes a separate release Nano-only build, stages
+  `bin/voicetyped` plus its pinned CPU pair in `lib`, verifies actual loader paths,
+  and publishes only to a new destination. It never installs/restarts a service.
+- Moved the actual candidate to a different directory containing spaces. The
+  ELF check and real OwnedLocal probe verified the running process loaded both
+  libraries from that exact new directory, with no GPU libraries or Start
+  command, then verified child reaping. Existing daily services remain running.
+- This prepared runtime directory is not a distributable installer: clean-build
+  provenance, full notices, OpenCC/system dependency installation, trusted app
+  manifests/resources and activation still need integration. Windows runtime,
+  frontend migration/rollback, shared vocabulary/review/CSC and Google also remain.

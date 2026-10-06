@@ -11,6 +11,8 @@ default = []
 sensevoice = []
 # Optional CPU accuracy profile; native artifacts must be supplied explicitly.
 sherpa-nano = []
+# Linux desktop bundle: find the pinned native pair beside the executable.
+relocatable-runtime = ["sherpa-nano"]
 
 [build-dependencies]
 cc = "1"

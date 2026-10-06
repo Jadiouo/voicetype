@@ -107,9 +107,16 @@ fn link_nano() {
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
     println!("cargo:rustc-link-lib=stdc++");
-    // The explicit artifact directory is intentional for an optional, reviewable build.
-    // Packaging must preserve the pinned pair instead of resolving an arbitrary system .so.
-    println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags,-rpath,{}", lib.display());
+    // The desktop bundle preserves the pinned pair in ../lib. The development
+    // profile keeps its explicit artifact path; neither resolves arbitrary
+    // libraries through LD_LIBRARY_PATH supplied by the application.
+    if std::env::var_os("CARGO_FEATURE_RELOCATABLE_RUNTIME").is_some() {
+        assert_eq!(std::env::var("CARGO_CFG_TARGET_OS").as_deref(), Ok("linux"),
+            "relocatable-runtime currently supports Linux only");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags,-rpath,$ORIGIN/../lib");
+    } else {
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags,-rpath,{}", lib.display());
+    }
 }
 
 /// 連結 OpenCC (SDD §4.6 ② 的繁化)。

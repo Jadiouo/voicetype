@@ -44,3 +44,32 @@ Set a suitable user-service memory limit and measure the loaded process before
 adopting it. Keep a working daemon backup and restore its profile configuration
 together with the binary. Build success or synthetic tests do not establish
 general ASR accuracy or dictation latency improvement.
+
+## Preparing a relocatable desktop runtime (Linux)
+
+The opt-in `relocatable-runtime` Cargo feature enables Nano and changes the
+daemon's ELF RPATH to `$ORIGIN/../lib`. The usual development build keeps its
+explicit native artifact path. Exact header/C-API/ORT pins remain enforced.
+
+```sh
+bash scripts/build-desktop-runtime.sh /absolute/path/to/verified-native-root /absolute/path/to/new-bundle
+python3 desktop/tests/runtime_layout.py /absolute/path/to/new-bundle
+```
+
+The helper builds in a separate ignored Cargo target with two CPU build jobs,
+stages `bin/voicetyped` and the pinned native pair in `lib/`, checks actual ELF
+search paths and loader resolution, and refuses an existing destination. It
+does not install, start a provider or modify the daily service. Nano is the only
+compiled recognizer in this candidate; the owner still selects it explicitly.
+
+This is a runtime preparation step, **not a distributable installer**. Release
+work still needs a clean build/provenance pipeline, complete dependency licenses,
+system dependencies including OpenCC, and Tauri resources/activation. Do not
+publish local build binaries as if those steps were complete.
+
+The actual ownership probe accepts an optional fourth argument naming the
+expected library directory. It verifies the running process maps against that
+exact directory before reaping the child; it sends no Start command. A release
+candidate moved to a different directory containing spaces passed both the ELF
+layout check and this real CPU model-loading check. That is relocation/control
+evidence, not recording or latency acceptance.

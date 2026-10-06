@@ -121,6 +121,16 @@ installation. Both reopened and matched the catalog in disposable stores without
 executing any model. The installed GUI/network combination still needs separate
 acceptance; the CI shell test only verifies explicit-only setup and initial UI.
 
+`probe_model_setup all-download` also completed the entire compiled-catalog
+worker flow: actual GitHub Nano redirect/download plus VAD, installation and
+reopening both bundles. The real network source and installer were used together,
+without model execution. This remains separate from interactive GUI acceptance.
+
 Next connect native runtime activation. CPU libraries and the engine executable
 need their own platform-specific manifests/build provenance and relocatable
 packaging; model-only installation is not a working recognizer.
+The Linux opt-in runtime build now uses bundle-relative library paths and has
+passed actual relocated process-map/cleanup checks; see
+[native runtime preparation](../NANO-PREVIEW.md#preparing-a-relocatable-desktop-runtime-linux).
+Its preparation directory does not yet include complete release notices or a
+Tauri installer resource and must not be treated as a distributable package.
