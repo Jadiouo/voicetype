@@ -440,12 +440,19 @@ impl Personalization {
     /// Exact matching only, with ASCII token boundaries and no cascading. Screen
     /// text never creates rules; it can only corroborate an already learned one.
     pub fn apply(&self, text: &str, scope: &ContextSnapshot) -> String {
+        self.apply_preserving_names(text, scope, &[])
+    }
+
+    /// Explicit canonical names override learned aliases without changing the store.
+    pub fn apply_preserving_names(&self, text: &str, scope: &ContextSnapshot, names: &[String]) -> String {
         // Keep the same conservative literal policy as the model refiner. A
         // backtick can start an incomplete span while somebody is editing code;
         // abstain for the complete input instead of guessing its boundaries.
         if text.contains('`') {
             return text.to_owned();
         }
+        let spans = crate::postproc::vocab::name_spans(text, names);
+        let protected = |start: usize, end: usize| spans.iter().any(|&(s, e)| s < end && e > start);
         let scope = scope.bounded();
         let mut rules: Vec<&LearnedRule> = self
             .rules
@@ -461,6 +468,7 @@ impl Personalization {
                 .copied()
                 .filter(|r| {
                     term_at(text, pos, &r.wrong) && !literal_at(text, pos, pos + r.wrong.len())
+                        && !protected(pos, pos + r.wrong.len())
                 })
                 .collect();
             let hit = matching.first().and_then(|first| {

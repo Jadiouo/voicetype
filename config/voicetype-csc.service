@@ -1,0 +1,26 @@
+[Unit]
+Description=VoiceType CPU spelling correction
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+RuntimeDirectory=voicetype-csc
+RuntimeDirectoryMode=0700
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=HIP_VISIBLE_DEVICES=
+Environment=ROCR_VISIBLE_DEVICES=
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=%h/.local/lib/voicetype/csc-current/venv/bin/python %h/.local/lib/voicetype/csc-current/voicetype_csc.py --model %h/.local/share/voicetype/models/csc-macbert-615e6e/model-int8-fused.onnx --tokenizer %h/.local/share/voicetype/models/csc-macbert-615e6e/tokenizer.json --model-sha256 38a1bcad77a183e3a229c839c192a503f730ac8871f611fd698c6bb22575966d --tokenizer-sha256 7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839 --threads 8 --socket %t/voicetype-csc/worker.sock
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=3
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+CPUQuota=800%
+MemoryHigh=512M
+MemoryMax=768M
+MemorySwapMax=0
+
+[Install]
+WantedBy=default.target

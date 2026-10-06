@@ -40,7 +40,7 @@ use crate::vad::{self, SpeechDetector, VadConfig};
 ///
 /// 兩個 `Option` 的語意不同。`vad` 為 `None` 是建置沒有引擎 (VAD 權重
 /// 在同一個 GGUF 裡); `traditional` 為 `None` 是系統缺 OpenCC 資料檔,
-/// 此時輸出簡體而不是讓整個聽寫不能用 (理由見 `postproc::traditional`)。
+/// 此時拒絕送出文字，避免將缺少繁體轉換當作校字成功。
 pub struct Pipeline {
     pub asr: Arc<dyn Transcriber>,
     pub vad: Option<Arc<dyn SpeechDetector>>,
@@ -489,26 +489,33 @@ async fn finish(
                     ));
                     return;
                 }
-                // §4.6 ②: 引擎輸出簡體, §1.1 要繁體台灣用語。
-                // 幾十微秒的字串操作, 不值得再繞一次 spawn_blocking。
-                let text = match traditional.as_deref() {
-                    Some(t) => t.convert(&stripped.text),
-                    None => stripped.text,
-                };
-                // §4.6 ③ 在 ② 之後: 修正表寫的是繁體 (「熱力瑞」),
-                // 在繁化之前比對就得為簡繁各寫一份。
-                let text = vocab.apply(&text);
+                let text = stripped.text;
                 let assistant_task = assistant.clone();
                 let context_task = context.clone();
-                let original = text.clone();
-                let text = tokio::task::spawn_blocking(move || {
-                    assistant_task.process(&text, &context_task, None)
-                })
-                .await
-                .unwrap_or(original);
+                let processed = tokio::task::spawn_blocking(move || {
+                    crate::output::process(
+                        traditional.as_deref(), &vocab, &assistant_task,
+                        &text, &context_task, None,
+                    )
+                }).await;
                 if latest.load(Ordering::SeqCst) != session {
                     return;
                 }
+                let text = match processed {
+                    Ok(Ok(text)) => text,
+                    Ok(Err(error)) => {
+                        responder.send(ServerMessage::error(
+                            Some(session), ErrorCode::Internal, error.to_string(),
+                        ));
+                        return;
+                    }
+                    Err(_) => {
+                        responder.send(ServerMessage::error(
+                            Some(session), ErrorCode::Internal, "text processing failed",
+                        ));
+                        return;
+                    }
+                };
                 assistant.remember(session, context, text.clone());
                 info!(
                     session,
@@ -647,27 +654,18 @@ fn control(pipeline: &Pipeline, message: ClientMessage, responder: Responder) {
             selected_text,
             mode,
         } => {
-            if text.chars().count() > 4096
-                || mode
-                    .as_deref()
-                    .is_some_and(|m| !["off", "faithful", "clean"].contains(&m))
-            {
-                Err(anyhow::anyhow!("text too long or invalid mode"))
-            } else {
-                let scope = ContextSnapshot {
-                    program,
-                    context_id,
-                    text: context_text,
-                    selected_text,
-                }
-                .bounded();
-                let text = pipeline
-                    .traditional
-                    .as_ref()
-                    .map_or(text.clone(), |t| t.convert(&text));
-                let text = pipeline.vocab.apply(&text);
-                Ok(json!({"text":pipeline.assistant.process(&text,&scope,mode.as_deref())}))
+            let scope = ContextSnapshot {
+                program,
+                context_id,
+                text: context_text,
+                selected_text,
             }
+            .bounded();
+            crate::output::process(
+                pipeline.traditional.as_deref(), &pipeline.vocab, &pipeline.assistant,
+                &text, &scope, mode.as_deref(),
+            )
+            .map(|text| json!({"text":text}))
         }
         _ => Err(anyhow::anyhow!("not a control message")),
     };

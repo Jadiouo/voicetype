@@ -579,7 +579,7 @@ fn word_boundary(text: &str, start: usize, end: usize, matched: &str) -> bool {
             || !text[end..].chars().next().is_some_and(word))
 }
 
-fn code_at(text: &str, start: usize, end: usize) -> bool {
+pub(crate) fn code_at(text: &str, start: usize, end: usize) -> bool {
     let left = text[..start].chars().next_back();
     let right = text[end..].chars().next();
     [left, right]

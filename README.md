@@ -133,7 +133,7 @@ systemctl --user restart voicetyped    # 換了新版本或改了詞彙表之後
 
 ## 詞彙修正表
 
-`~/.config/voicetype/vocab.toml`。改完 `systemctl --user restart voicetyped`。
+`~/.config/voicetype/vocab.toml` 儲存後下一句自動重載，無效更新沿用上一份。支援明確名字字形與選配 CPU 單字校正；設定及限制見 [快速詞庫與 CPU 校字](docs/CPU-SPELLING.md)。
 
 ```toml
 [[entry]]

@@ -6,7 +6,9 @@
 mod asr;
 mod assistant;
 mod audio;
+mod csc;
 mod ipc;
+mod output;
 mod personalization;
 mod postproc;
 mod protocol;

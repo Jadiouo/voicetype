@@ -1,0 +1,6 @@
+# CPU runtime only. No torch, CUDA, ROCm, or generative model server.
+onnxruntime==1.24.4
+tokenizers==0.22.2
+opencc-python-reimplemented==0.1.7
+pypinyin==0.55.0
+numpy==2.5.3

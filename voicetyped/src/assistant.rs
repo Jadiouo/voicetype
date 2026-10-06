@@ -27,6 +27,7 @@ pub struct Assistant {
     recent: Mutex<VecDeque<Delivered>>,
     manual_context: Mutex<(String, String, Instant)>,
     refiner: Option<Refiner>,
+    spelling: Option<crate::csc::CscClient>,
 }
 
 impl Assistant {
@@ -41,19 +42,29 @@ impl Assistant {
             );
             Personalization::memory()
         });
-        Ok(Self::new(learned, Refiner::from_env()))
+        let mut assistant = Self::new(learned, Refiner::from_env());
+        assistant.spelling = crate::csc::CscClient::from_env();
+        Ok(assistant)
     }
 
-    fn new(learned: Personalization, refiner: Option<Refiner>) -> Self {
+    pub(crate) fn new(learned: Personalization, refiner: Option<Refiner>) -> Self {
         Self {
             learned: Mutex::new(learned),
             recent: Mutex::new(VecDeque::new()),
             manual_context: Mutex::new((String::new(), String::new(), Instant::now())),
             refiner,
+            spelling: None,
         }
     }
 
     pub fn process(&self, text: &str, scope: &ContextSnapshot, mode: Option<&str>) -> String {
+        self.process_with_terms(text, scope, mode, &[], &[])
+    }
+
+    pub fn process_with_terms(
+        &self, text: &str, scope: &ContextSnapshot, mode: Option<&str>,
+        dictionary_terms: &[String], canonical_names: &[String],
+    ) -> String {
         let mut scope = scope.bounded();
         {
             let manual = self
@@ -71,14 +82,18 @@ impl Assistant {
             }
         }
         let scope = scope.bounded();
-        let (text, terms) = {
+        let (text, mut terms) = {
             let learned = self.learned.lock().unwrap_or_else(|e| e.into_inner());
-            (learned.apply(text, &scope), learned.candidates(&scope))
+            (learned.apply_preserving_names(text, &scope, canonical_names), learned.candidates(&scope))
         };
-        let terms = prioritized_terms(terms);
+        terms.extend_from_slice(dictionary_terms);
         if mode == Some("off") {
             return text;
         }
+        if let Some(spelling) = &self.spelling {
+            return spelling.correct(&text, &terms);
+        }
+        let terms = prioritized_terms(terms);
         let Some(refiner) = &self.refiner else {
             return text;
         };
