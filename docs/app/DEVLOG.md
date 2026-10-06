@@ -136,3 +136,34 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   provider and an OS-socket pong fixture; their CI result is still pending.
 - Next: session ownership, busy-switch rejection and cancellation/result delivery
   through the agreed session/provider boundary. Full-app goal remains active.
+
+## 2026-10-07 — M2 provider status verified; session coordinator added
+
+- [CI run 37510781789](https://github.com/Jadiouo/voicetype/actions/runs/37510781789)
+  passed on Linux and Windows for source `f229d5b`. Both installed packages ran
+  their native WebDriver checks. The new Linux check distinguishes missing service
+  and pong over a disposable OS socket; it asserts the only request was ping.
+  Windows and Google remain visibly unconnected. Downloaded UI screenshots were
+  inspected; both display Traditional Chinese and the preview limitation.
+- Added a shared application/session boundary. Starting fixes both provider and
+  editable-context generation. Busy switching/reloading is rejected; repeated
+  stop does not send another command. Stop before capture-ready cancels preparation.
+  Cancellation invalidates results before IO and reserves the provider until an
+  explicit quiescent release event. Old sessions and duplicate results are ignored.
+- Delivery checks the original input-context lease at the OS boundary. Focus
+  rejection or partial insertion keeps the last undelivered text for recovery and
+  never automatically retries. Settings reload preserves this in-memory text.
+  Status snapshots contain failure codes, never transcripts. Empty, oversized or
+  NUL-containing final text is rejected before input delivery.
+- Eight public session scenarios were developed sequentially red → green. Two
+  runtime failures specifically exposed dropped early-stop and lost retained text
+  on reload; both were corrected. All 17 Linux core tests pass, and Clippy with
+  warnings denied passes. These session cases substitute external provider/OS
+  boundaries; they are not evidence of a real recording or focus-safe Windows input.
+- Native adapters still need explicit recording/release acknowledgements. Legacy
+  local IPC does not emit its reserved state events and Google v1 has no health
+  command. Do not infer cleanup merely from a final result, a write succeeding or
+  a socket closing. Do not connect this coordinator to daily hotkeys until those
+  ownership contracts and rollback are verified. No daily service was changed.
+- Next: connect the coordinator to actual provider transports and input-context
+  delivery, then vocabulary/review and runtime installation. M2–M4 remain open.

@@ -8,6 +8,12 @@ the existing dictation services or bundle speech models.** Keep using the existi
 Linux installation for dictation, vocabulary and review until the adapters pass
 the staged acceptance gates.
 
+"Check services" sends a read-only ping to an existing Linux local engine and
+distinguishes response, missing service, timeout and incompatible reply. It does
+not start audio or establish Google login readiness. The shared core now also
+tests provider/target ownership, cancel, late/duplicate results and failed input
+delivery; native recording/input adapters are still being connected.
+
 The preview has its own application ID and settings directory:
 `io.github.jadiouo.voicetype.preview`. It never imports or changes the existing
 `voicetype` settings. Closing its window exits the preview; a desktop tray entry

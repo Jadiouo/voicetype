@@ -1,7 +1,12 @@
 //! UI-facing commands, independent of the webview and platform audio libraries.
 
+mod dictation;
 #[cfg(unix)]
 mod providers;
+pub use dictation::{
+    CommandRejected, DeliveryOutcome, DeliveryPort, DictationStatus, ProviderCommand,
+    ProviderEvent, ProviderPort, RetainedText, SessionFailure, SessionKey, TargetLease,
+};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,6 +41,7 @@ pub struct ProviderStatus {
 
 #[derive(Debug, Serialize)]
 pub struct Snapshot {
+    pub dictation: DictationStatus,
     pub selected_provider: Provider,
     pub providers: Vec<ProviderStatus>,
     pub compute_device: &'static str,
@@ -55,6 +61,12 @@ pub enum AppError {
     ConfigConflict,
     #[error("另一個程式正在儲存設定，請稍後再試")]
     SettingsBusy,
+    #[error("錄音或辨識尚未結束，請先完成或取消目前工作")]
+    DictationBusy,
+    #[error("辨識引擎尚未就緒或未接受指令；未切換到其他引擎")]
+    ProviderUnavailable,
+    #[error("工作階段編號已用盡，請重新開啟 App")]
+    SessionIdsExhausted,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -80,6 +92,7 @@ pub struct Application {
     preferences: Preferences,
     original: Option<Vec<u8>>,
     local_status: Availability,
+    dictation: dictation::Coordinator,
 }
 
 impl Application {
@@ -99,11 +112,13 @@ impl Application {
             preferences,
             original,
             local_status: Availability::NotConnected,
+            dictation: dictation::Coordinator::default(),
         })
     }
 
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
+            dictation: self.dictation.status(),
             selected_provider: self.preferences.selected_provider,
             providers: [Provider::Local, Provider::Google]
                 .into_iter()
@@ -123,7 +138,12 @@ impl Application {
     }
 
     pub fn reload(&mut self) -> Result<Snapshot, AppError> {
-        *self = Self::open(self.path.parent().expect("config file has a parent"))?;
+        if self.dictation.busy() {
+            return Err(AppError::DictationBusy);
+        }
+        let loaded = Self::open(self.path.parent().expect("config file has a parent"))?;
+        self.preferences = loaded.preferences;
+        self.original = loaded.original;
         Ok(self.snapshot())
     }
 
@@ -152,6 +172,9 @@ impl Application {
 
     /// Select the next provider. This is a preference, not runtime activation.
     pub fn select_provider(&mut self, provider: Provider) -> Result<Snapshot, AppError> {
+        if self.dictation.busy() {
+            return Err(AppError::DictationBusy);
+        }
         let mut next = self.preferences.clone();
         next.selected_provider = provider;
         let data = serde_json::to_vec_pretty(&next)?;
@@ -178,6 +201,38 @@ impl Application {
         self.preferences = next;
         self.original = Some(data);
         Ok(self.snapshot())
+    }
+
+    /// Native input integration supplies the target lease; the settings webview
+    /// cannot invent a target or begin recording by selecting a preference.
+    pub fn start_dictation(
+        &mut self,
+        target: TargetLease,
+        port: &mut impl ProviderPort,
+    ) -> Result<SessionKey, AppError> {
+        self.dictation
+            .start(self.preferences.selected_provider, target, port)
+    }
+
+    pub fn stop_dictation(&mut self, port: &mut impl ProviderPort) -> Result<(), AppError> {
+        self.dictation.stop(port)
+    }
+
+    pub fn cancel_dictation(&mut self, port: &mut impl ProviderPort) -> Result<(), AppError> {
+        self.dictation.cancel(port)
+    }
+
+    pub fn provider_event(
+        &mut self,
+        key: SessionKey,
+        event: ProviderEvent,
+        output: &mut impl DeliveryPort,
+    ) {
+        self.dictation.event(key, event, output);
+    }
+
+    pub fn retained_text(&self) -> Option<&RetainedText> {
+        self.dictation.retained_text()
     }
 }
 

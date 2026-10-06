@@ -54,6 +54,9 @@ async fn select_provider(provider: Provider, app: tauri::AppHandle) -> Result<Vi
 #[tauri::command]
 async fn reload_settings(app: tauri::AppHandle) -> Result<View, String> {
     with_desktop(app, |desktop| {
+        if let Ok(app) = desktop.app.as_mut() {
+            return app.reload().map_err(|e| e.to_string());
+        }
         desktop.app = Application::open(&desktop.config_dir);
         Ok(desktop
             .app
