@@ -4022,6 +4022,7 @@ version = "0.2.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
+ "socket2",
  "tempfile",
  "thiserror 2.0.21",
 ]

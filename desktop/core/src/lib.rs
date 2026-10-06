@@ -1,5 +1,8 @@
 //! UI-facing commands, independent of the webview and platform audio libraries.
 
+#[cfg(unix)]
+mod providers;
+
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -19,9 +22,13 @@ pub enum Provider {
 #[serde(rename_all = "snake_case")]
 pub enum Availability {
     NotConnected,
+    ServiceAvailable,
+    Offline,
+    TimedOut,
+    Incompatible,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ProviderStatus {
     pub provider: Provider,
     pub availability: Availability,
@@ -72,6 +79,7 @@ pub struct Application {
     path: PathBuf,
     preferences: Preferences,
     original: Option<Vec<u8>>,
+    local_status: Availability,
 }
 
 impl Application {
@@ -90,6 +98,7 @@ impl Application {
             path,
             preferences,
             original,
+            local_status: Availability::NotConnected,
         })
     }
 
@@ -100,7 +109,11 @@ impl Application {
                 .into_iter()
                 .map(|provider| ProviderStatus {
                     provider,
-                    availability: Availability::NotConnected,
+                    availability: if provider == Provider::Local {
+                        self.local_status
+                    } else {
+                        Availability::NotConnected
+                    },
                 })
                 .collect(),
             compute_device: "cpu",
@@ -112,6 +125,29 @@ impl Application {
     pub fn reload(&mut self) -> Result<Snapshot, AppError> {
         *self = Self::open(self.path.parent().expect("config file has a parent"))?;
         Ok(self.snapshot())
+    }
+
+    /// Read-only probe of a loaded local engine. Call off the UI/event thread.
+    #[cfg(unix)]
+    pub fn refresh_local_provider(
+        &mut self,
+        socket: &Path,
+        budget: std::time::Duration,
+    ) -> Snapshot {
+        self.local_status = match providers::ping(socket, budget) {
+            Ok(()) => Availability::ServiceAvailable,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                Availability::TimedOut
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Availability::Incompatible,
+            Err(_) => Availability::Offline,
+        };
+        self.snapshot()
     }
 
     /// Select the next provider. This is a preference, not runtime activation.

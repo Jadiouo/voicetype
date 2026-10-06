@@ -26,17 +26,17 @@
           <span class="card-title">本機離線<span class="tag">CPU</span></span>
           <span class="description">在你的電腦完成辨識，適合日常中英混合輸入。</span>
           <span class="detail">首次使用需下載模型；之後可離線使用。</span>
-          <span class="availability">準備中 · 尚未連接辨識引擎</span>
+          <span class="availability" id="local-availability">尚未檢查本機服務</span>
         </label>
         <label class="provider-card" id="google-card">
           <input type="radio" name="provider" value="google" id="provider-google">
           <span class="card-title">Google<span class="tag">需連線</span></span>
           <span class="description">使用官方 Antigravity 語音辨識與你的登入帳號。</span>
           <span class="detail">首次使用需安裝官方程式並登入。</span>
-          <span class="availability">準備中 · 尚未連接辨識引擎</span>
+          <span class="availability" id="google-availability">準備中 · 尚未連接辨識引擎</span>
         </label>
       </fieldset>
-      <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="reload" type="button">重新載入</button></div>
+      <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="check-providers" type="button" disabled>檢查服務</button><button id="reload" type="button">重新載入</button></div>
       <section class="shared"><h2>兩種方式，共用你的習慣</h2><p>詞庫、繁體中文與抽樣校對會放在同一個介面。這些功能正在整合，現階段請繼續使用原有設定視窗。</p></section>
       <footer id="tray-note">關閉視窗會結束預覽 App。</footer>
     </main>

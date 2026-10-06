@@ -102,3 +102,37 @@ the working daily installation until migration has an actual rollback path.
 Windows requires the Nano native CPU build plus platform capture, focus/delivery
 and Google ConPTY work. A Windows Server CI settings pass is not Windows 11 real
 microphone/login/target-app acceptance. M2–M4 remain open in SDD.
+
+## 2026-10-07 — full-app goal activated; M2 in progress
+
+- User explicitly requested continued work to the full application, then asked to
+  create a goal. The active goal is recorded in [GOAL.md](GOAL.md); no token budget
+  was requested. Continue until the full acceptance criteria are satisfied.
+- Inspected existing Linux services read-only. Local IPC has a `ping`/`pong`
+  readiness request; the Google v1 bridge only accepts start/stop/cancel. Socket
+  reachability alone must not become an authenticated/ready Google status.
+- Started a public application-command readiness slice: a real temporary Unix
+  socket answers the actual local engine ping. Test first failed because the
+  command/status did not exist, then passed after implementation. Probe has a
+  bounded connect/read deadline and bounded reply. It does not request recording.
+- This first M2 slice is still in progress: negative cases, actual installed
+  read-only probe, UI wiring and a proper Google status/control adapter remain.
+  No new runtime has been deployed and no microphone has been opened.
+
+## 2026-10-07 — M2 read-only engine status
+
+- Added the settings "check services" command. Linux sends the existing bounded
+  `ping` request; all settings IO/probes run off the webview event thread. A pong
+  is labelled "service responded", not proof that capture, delivery or Google
+  login works. Windows and Google remain explicitly unconnected.
+- Public command tests: live pong, deadline, incompatible response, missing socket
+  and oversized response. The deadline and incompatible-status cases failed for
+  missing behavior first, then passed. Missing/oversized checks additionally
+  verified guards already introduced with the bounded probe.
+- The diagnostic example queried the installed local engine and received
+  `service_available`. It used a disposable application profile and sent only
+  ping; no production data, service configuration or microphone was changed.
+- Core tests: 9 passed on Linux. Added native installed-UI checks for a missing
+  provider and an OS-socket pong fixture; their CI result is still pending.
+- Next: session ownership, busy-switch rejection and cancellation/result delivery
+  through the agreed session/provider boundary. Full-app goal remains active.

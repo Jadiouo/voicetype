@@ -8,9 +8,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -50,6 +52,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="voicetype-shell-") as profile:
         env = os.environ.copy()
         env["VOICETYPE_PREVIEW_CONFIG_DIR"] = profile
+        # Probe a disposable endpoint, never a developer's running engine.
+        engine_socket = Path(profile) / "engine.sock"
+        env["VOICETYPE_SOCKET"] = str(engine_socket)
         # Rendering under CI/Xvfb uses software; this is not an ASR benchmark.
         env["LIBGL_ALWAYS_SOFTWARE"] = "1"
         env["WEBKIT_DISABLE_DMABUF_RENDERER"] = "1"
@@ -80,6 +85,35 @@ def main():
                 eventually(ready)
                 assert js("return document.querySelector('#provider-local').checked")
                 assert js("return document.querySelectorAll('.availability').length") == 2
+                click("#check-providers")
+                eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
+                if sys.platform == "linux":
+                    assert js("return document.querySelector('#local-availability').textContent.includes('找不到本機服務')")
+                    # Only substitute the external provider IPC. The installed
+                    # Tauri command and UI run normally through the OS WebDriver.
+                    commands = []
+                    with socket.socket(socket.AF_UNIX) as listener:
+                        listener.bind(str(engine_socket))
+                        listener.listen(1)
+                        listener.settimeout(15)
+
+                        def reply_to_probe():
+                            with listener.accept()[0] as peer:
+                                peer.settimeout(5)
+                                with peer.makefile("rb") as stream:
+                                    commands.append(json.loads(stream.readline(4096)))
+                                peer.sendall(b'{"type":"pong"}\n')
+
+                        server = threading.Thread(target=reply_to_probe, daemon=True)
+                        server.start()
+                        click("#check-providers")
+                        eventually(lambda: js("return document.querySelector('#local-availability').textContent.includes('本機服務有回應')"))
+                        server.join(timeout=5)
+                        assert commands == [{"type": "ping"}]
+                    engine_socket.unlink()
+                else:
+                    assert js("return document.querySelector('#local-availability').textContent.includes('尚未連接')")
+                assert js("return document.querySelector('#google-availability').textContent.includes('尚未連接')")
                 click("#provider-google")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('偏好已儲存')"))
                 assert js("return document.querySelector('#provider-google').checked")
@@ -106,7 +140,8 @@ def main():
                 assert js("return document.querySelector('#provider-google').checked")
                 (output / "result.json").write_text(json.dumps({
                     "passed": ["installed-window", "default-local", "choose-google",
-                               "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload"],
+                               "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
+                               "provider-status-without-recording"],
                     "speech_adapters_tested": False,
                 }, indent=2) + "\n", encoding="utf-8")
                 print("PASS: real UI selection, restart, corruption and reload")

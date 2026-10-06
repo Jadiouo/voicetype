@@ -10,7 +10,7 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, State,
+    Manager,
 };
 use voicetype_app_core::{AppError, Application, Provider, Snapshot};
 
@@ -31,46 +31,88 @@ struct View {
 }
 
 #[tauri::command]
-fn get_settings(state: State<'_, DesktopState>) -> Result<View, String> {
-    let desktop = state
-        .desktop
-        .lock()
-        .map_err(|_| "設定暫時無法讀取，請重新開啟 App")?;
-    let settings = desktop
-        .app
-        .as_ref()
-        .map_err(ToString::to_string)?
-        .snapshot();
-    Ok(View {
-        settings,
-        tray_available: state.tray_available.load(Ordering::Relaxed),
+async fn get_settings(app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, |desktop| {
+        Ok(desktop.app.as_ref().map_err(|e| e.to_string())?.snapshot())
     })
+    .await
 }
 
 #[tauri::command]
-fn select_provider(provider: Provider, state: State<'_, DesktopState>) -> Result<View, String> {
-    let mut desktop = state
-        .desktop
-        .lock()
-        .map_err(|_| "設定暫時無法讀取，請重新開啟 App")?;
-    let app = desktop.app.as_mut().map_err(|e| e.to_string())?;
-    let settings = app.select_provider(provider).map_err(|e| e.to_string())?;
-    Ok(View {
-        settings,
-        tray_available: state.tray_available.load(Ordering::Relaxed),
+async fn select_provider(provider: Provider, app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, move |desktop| {
+        desktop
+            .app
+            .as_mut()
+            .map_err(|e| e.to_string())?
+            .select_provider(provider)
+            .map_err(|e| e.to_string())
     })
+    .await
 }
 
 #[tauri::command]
-fn reload_settings(state: State<'_, DesktopState>) -> Result<View, String> {
-    {
+async fn reload_settings(app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, |desktop| {
+        desktop.app = Application::open(&desktop.config_dir);
+        Ok(desktop
+            .app
+            .as_ref()
+            .map_err(ToString::to_string)?
+            .snapshot())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, |desktop| {
+        let app = desktop.app.as_mut().map_err(|e| e.to_string())?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let socket = match std::env::var_os("VOICETYPE_SOCKET") {
+                Some(path) => PathBuf::from(path),
+                None => match std::env::var_os("XDG_RUNTIME_DIR") {
+                    Some(path) => PathBuf::from(path).join("voicetype/ipc.sock"),
+                    None => {
+                        let uid = std::fs::metadata("/proc/self")
+                            .map_err(|e| e.to_string())?
+                            .uid();
+                        PathBuf::from(format!("/tmp/voicetype-{uid}/ipc.sock"))
+                    }
+                },
+            };
+            if !socket.is_absolute() {
+                return Err("本機服務位置必須是完整路徑".into());
+            }
+            Ok(app.refresh_local_provider(&socket, std::time::Duration::from_millis(300)))
+        }
+        #[cfg(not(target_os = "linux"))]
+        Ok(app.snapshot())
+    })
+    .await
+}
+
+// Settings IO and the bounded status probe never run on the webview event thread.
+async fn with_desktop(
+    app: tauri::AppHandle,
+    operation: impl FnOnce(&mut Desktop) -> Result<Snapshot, String> + Send + 'static,
+) -> Result<View, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<DesktopState>();
         let mut desktop = state
             .desktop
             .lock()
             .map_err(|_| "設定暫時無法讀取，請重新開啟 App")?;
-        desktop.app = Application::open(&desktop.config_dir);
-    }
-    get_settings(state)
+        let settings = operation(&mut desktop)?;
+        Ok(View {
+            settings,
+            tray_available: state.tray_available.load(Ordering::Relaxed),
+        })
+    })
+    .await
+    .map_err(|_| "設定工作中斷，請重新開啟 App".to_string())?
 }
 
 fn show_settings(app: &tauri::AppHandle) {
@@ -131,7 +173,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_settings,
             select_provider,
-            reload_settings
+            reload_settings,
+            refresh_providers
         ])
         .run(tauri::generate_context!())
         .expect("VoiceType could not start");
