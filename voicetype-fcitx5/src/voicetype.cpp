@@ -385,6 +385,32 @@ void VoiceType::clearDelivery() {
 }
 
 void VoiceType::onDaemonMessage(const IpcMessage &msg) {
+    if (msg.type == "desktop_hello" && msg.hasSession) {
+        IpcMessage reply;
+        reply.type = "desktop_hello";
+        reply.setSession(msg.session);
+        reply.value = "voicetype.fcitx.v1";
+        ipc_->send(reply);
+        return;
+    }
+    if (msg.type == "deliver" && msg.hasSession) {
+        IpcMessage reply;
+        reply.type = "delivered";
+        reply.setSession(msg.session);
+        reply.contextId = msg.contextId;
+        if (!deliveryPending_ || msg.session != sessionId_) {
+            reply.code = "stale";
+        } else if (msg.contextId.empty() || msg.contextId != sessionContextId_) {
+            clearDelivery();
+            reply.code = "focus_changed";
+        } else {
+            reply.code = deliver(msg.text, false);
+        }
+        // The acknowledgement describes the original request even when a
+        // synchronous frontend callback starts another session during commit.
+        ipc_->send(reply);
+        return;
+    }
     if (msg.type == "result") {
         // 丟棄過期結果: 使用者已經開始下一次錄音, 舊結果不該蓋掉新的。
         if (!deliveryPending_ || !msg.hasSession || msg.session != sessionId_) {
@@ -417,27 +443,32 @@ void VoiceType::onDaemonDisconnected() {
     clearCorrection();
 }
 
-void VoiceType::deliver(const std::string &text) {
+const char *VoiceType::deliver(const std::string &text, bool allowLegacyFallback) {
     const auto expectedContext = sessionContextId_;
     const auto expectedSession = sessionId_;
     auto target = targetIc_;
     auto *ic = target.get();
     // Consume before commit/IPC callbacks: one result has at most one effect.
     clearDelivery();
-    if (text.empty()) { return; }
+    if (text.empty() || (!allowLegacyFallback &&
+        (text.size() > 64 * 1024 || text.find('\0') != std::string::npos || !fcitx::utf8::validate(text)))) {
+        return "invalid_text";
+    }
     if (!ic) {
         // 目標視窗已消失 → 降級鏈② (SDD §4.8): 交給 daemon 放進剪貼簿並通知。
-        IpcMessage msg;
-        msg.type = "fallback_clipboard";
-        msg.text = text;
-        ipc_->send(msg);
-        return;
+        if (allowLegacyFallback) {
+            IpcMessage msg;
+            msg.type = "fallback_clipboard";
+            msg.text = text;
+            ipc_->send(msg);
+        }
+        return "focus_changed";
     }
 
     // The field may have become sensitive while CPU decoding was in progress.
     if (!ic->hasFocus() || contextId(ic) != expectedContext || isSensitive(ic)) {
         clearCorrection();
-        return;
+        return "focus_changed";
     }
 
     // commitString 是唯一的正規路徑 (SDD §2/C1, §4.8)。
@@ -454,7 +485,7 @@ void VoiceType::deliver(const std::string &text) {
     ic = target.get();
     if (!ic || !ic->hasFocus() || contextId(ic) != expectedContext ||
         isSensitive(ic) || sessionId_ != expectedSession) {
-        return;
+        return "focus_changed";
     }
     clearCorrection();
     if (fcitx::utf8::validate(text) && fcitx::utf8::length(text) <= 512) {
@@ -467,6 +498,7 @@ void VoiceType::deliver(const std::string &text) {
         }
     }
     ic->commitString(text);
+    return "committed";
 }
 
 std::string VoiceType::contextId(fcitx::InputContext *ic) const {

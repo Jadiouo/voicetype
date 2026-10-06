@@ -20,7 +20,7 @@ if(TARGET Fcitx5::Module::Notifications)
     target_link_libraries(test_delivery PRIVATE Fcitx5::Module::Notifications)
     target_compile_definitions(test_delivery PRIVATE VOICETYPE_HAVE_NOTIFICATIONS=1)
 endif()
-foreach(scenario same_context duplicate old_session unfocused_start focus_out focus_return focus_recording
+foreach(scenario app_ack app_preedit_focus_return app_wrong_context app_focus_return app_groupless_destroy_result same_context duplicate old_session unfocused_start focus_out focus_return focus_recording
                  reset reset_recording sensitive_return sensitive_recording password_return
                  cancel_processing cancel_recording cancel_destroy disconnect_processing
                  disconnect_recording disconnect_destroy error_result error_destroy_result

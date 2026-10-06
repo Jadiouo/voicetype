@@ -227,3 +227,42 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   and [both desktop jobs 37514581670](https://github.com/Jadiouo/voicetype/actions/runs/37514581670)
   passed. The remote tree matched all 171 local source blobs. Desktop speech
   adapters are still unconnected; these green checks do not complete M2 or M3.
+
+
+## 2026-10-07 — App/local transport and Fcitx delivery acknowledgement
+
+- Added an app-side Linux local-engine connection. It authenticates the actual
+  Unix peer UID/PID before sending commands, negotiates protocol capabilities,
+  preserves partial frames across polling timeouts and retains ownership after
+  uncertain writes/disconnects. Engine errors become non-transcript app failures;
+  only an explicit idle event releases the session. Suspend still requires an
+  exact correlated microphone-close acknowledgement.
+- TDD: the actual app → Unix IPC → local daemon → OpenCC → delivery scenario
+  failed first because the transport module was absent, then passed with complete
+  `請檢查 GitHub。` delivered once. A capture-failure scenario next failed on an
+  unhandled engine error, then passed with failure reported, no insertion and
+  release only after idle. Only OS capture/native ASR/delivery are fixtures.
+- Fcitx now negotiates `voicetype.fcitx.v1` and replies to app delivery requests
+  after validating the original input context. The first real Fcitx harness test
+  timed out waiting for negotiation (red), then passed with exactly one commit
+  and `committed`, `stale` replies to duplicate requests (green). This confirms
+  Fcitx called its validated-context commit operation, not that an external app
+  visibly accepted text. Negative cases and transport hardening are underway.
+- No candidate was installed and no live microphone/input was used. The isolated
+  test build lacks optional XCB development headers; its delivery tests do not
+  establish Caps Lock restoration. Daily services and hotkeys remain untouched.
+- Still outstanding: native dispatcher/runtime ownership, app wiring, shared data
+  UI, Google and Windows adapters, runtime installation and platform acceptance.
+
+- Hardening found a fragmented oversized-frame bypass. A real Unix-peer regression
+  failed on acceptance of that frame, then passed after enforcing the byte bound
+  before parsing the terminating newline. The connection faults without releasing
+  app ownership. Core tests: 18 passed; real daemon/app contracts: 5 passed.
+- All 32 existing delivery cases plus 5 new app acknowledgement/focus/context/lost
+  target cases pass. A lost app target never invokes legacy clipboard fallback.
+  CI now also builds/runs this isolated Fcitx harness; native contract CI watches
+  `desktop/core/**` because the daemon tests exercise that actual app dependency.
+- This checkpoint supplies real transport and input-context acknowledgement, not
+  an operational desktop dictation route. Next connect the native dispatcher,
+  original frontend/provider session mapping, complete correction context and
+  owned child cleanup. Do not point it at an independently controlled daily daemon.

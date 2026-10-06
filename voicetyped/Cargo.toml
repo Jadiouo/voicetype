@@ -36,3 +36,4 @@ codegen-units = 1
 
 [dev-dependencies]
 tempfile = "3"
+voicetype-app-core = { path = "../desktop/core" }

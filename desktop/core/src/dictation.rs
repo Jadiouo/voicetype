@@ -76,6 +76,7 @@ pub enum ProviderEvent {
 pub enum SessionFailure {
     TimedOut,
     InvalidResult,
+    ProviderFailed,
 }
 
 #[derive(Debug, Serialize)]

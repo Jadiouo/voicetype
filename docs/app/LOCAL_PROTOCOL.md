@@ -66,6 +66,52 @@ the real Nano CPU runtime with disposable settings and send only status, suspend
 and ping. It verifies native libraries, CPU startup and clean exit without Start.
 These tests do not establish real microphone or target-application acceptance.
 
-Next wire this contract into the application provider adapter, explicit runtime
-ownership and the Fcitx delivery acknowledgement. Google and Windows adapters
-still require their own equivalent contracts and platform evidence.
+`desktop/core/src/local.rs` implements the app-side connection on Linux. It
+requires the caller's owned child PID, authenticates UID/PID with `SO_PEERCRED`
+before transmitting, and negotiates capabilities. It is blocking native-worker
+code with bounded reads/writes, not webview-thread code. Partial frames survive a
+poll timeout; malformed/oversized frames or disconnection fault the connection.
+An uncertain write is not reported as a rejected command: the app retains the
+session and its owner must stop/reap that child before reporting release. No
+transport error synthesizes idle or authorizes another provider's microphone.
+
+The application/native dispatcher and owned runtime supervisor are still to be
+connected. Start currently forwards only the session/target; program and bounded
+surrounding/selected text must be carried through the dispatcher before adopting
+it for daily correction/learning. Google and Windows adapters require their own
+equivalent contracts and platform evidence.
+
+## Fcitx app delivery (v1)
+
+The app owns a private frontend endpoint after an explicit migration. Before
+accepting shortcuts, send `{"type":"desktop_hello","session":NONCE}` and require
+`{"type":"desktop_hello","session":NONCE,"value":"voicetype.fcitx.v1"}`. This
+handshake neither records nor changes shortcuts; old addons do not acknowledge.
+A connection/reconnection has its own session identity; never reuse a target
+lease after reconnecting.
+
+The frontend's Start contains its session ID and `context_id`. Keep those original
+values separate from the provider session ID. To deliver, send:
+
+```json
+{"type":"deliver","session":1,"context_id":"original-context","text":"final text"}
+```
+
+Fcitx replies with type `delivered`, the same session and context, and a `code`:
+
+- `committed`: validated the original weak input context, focus generation and
+  sensitivity, rechecked after preedit callbacks, then called `commitString`.
+- `stale`: that frontend session is no longer pending, including duplicate requests.
+- `focus_changed`: context mismatch, target loss or reentrant focus/session change.
+- `invalid_text`: empty, oversized, NUL-containing or invalid UTF-8 text.
+
+Pending delivery is consumed before callbacks. These app requests never invoke
+legacy clipboard fallback; the app retains undelivered/uncertain text for recovery.
+An acknowledgement only establishes the Fcitx operation, not visible acceptance
+by an external application. A lost acknowledgement is uncertain; never retry the
+complete text automatically. The old daemon `result` path remains compatible.
+
+The isolated Fcitx harness covers one commit, duplicate acknowledgement, wrong
+context, focus-out/return, preedit focus changes and weak-target destruction. It
+runs without a live display, bus, microphone or user config. Actual app routing,
+recovery UI and target-application acceptance remain outstanding.

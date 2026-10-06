@@ -1,6 +1,8 @@
 //! UI-facing commands, independent of the webview and platform audio libraries.
 
 mod dictation;
+#[cfg(target_os = "linux")]
+pub mod local;
 #[cfg(unix)]
 mod providers;
 pub use dictation::{

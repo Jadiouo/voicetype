@@ -54,7 +54,7 @@ private:
     void startRecording(fcitx::InputContext *ic);
     void stopRecording(bool cancelled);
     void clearDelivery();
-    void deliver(const std::string &text);
+    const char *deliver(const std::string &text, bool allowLegacyFallback = true);
     std::string contextId(fcitx::InputContext *ic) const;
     void clearCorrection();
     void maybeLearnCorrection(fcitx::InputContext *ic, bool explicitSelection,

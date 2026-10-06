@@ -69,7 +69,10 @@ static void key(fcitx::Instance &instance, TextClient &client,
 }
 
 int main(int argc, char **argv) {
-    const std::string scenario = argc > 1 ? argv[1] : "focus_return";
+    const std::string requested = argc > 1 ? argv[1] : "focus_return";
+    const bool appDelivery = requested.rfind("app_", 0) == 0;
+    const std::string scenario = requested == "app_ack" ? "same_context" :
+        (appDelivery ? requested.substr(4) : requested);
     char temporary[] = "/tmp/voicetype-delivery-XXXXXX";
     const char *dir = mkdtemp(temporary);
     if (!dir) { return EXIT_FAILURE; }
@@ -115,10 +118,10 @@ int main(int argc, char **argv) {
         const bool disconnectCase = scenario.rfind("disconnect_", 0) == 0;
         const bool recordingCase = scenario.find("_recording") != std::string::npos;
         const bool destroyCase = scenario.find("destroy") != std::string::npos;
-        const bool shouldFallback = scenario == "groupless_destroy_result";
+        const bool shouldFallback = scenario == "groupless_destroy_result" && !appDelivery;
         const bool expectsCancel = !shouldDeliver && !preeditCase && !disconnectCase &&
             scenario != "error_result" && scenario != "error_destroy_result" && scenario != "empty_result" &&
-            scenario != "unfocused_start" &&
+            scenario != "unfocused_start" && scenario != "wrong_context" &&
             (!groupless || scenario == "groupless_cancel_destroy");
         std::vector<std::string> boundaries;
         const auto *originalClient = client.get();
@@ -145,6 +148,15 @@ int main(int argc, char **argv) {
             message.type = type;
             message.setSession(session);
             message.text = text;
+            if (type == "deliver") {
+                const auto start = std::find_if(received.begin(), received.end(), [&](const IpcMessage &m) {
+                    return m.type == "start" && m.session == session;
+                });
+                CHECK(start != received.end());
+                if (start != received.end()) {
+                    message.contextId = scenario == "wrong_context" ? "other-field" : start->contextId;
+                }
+            }
             const auto wire = serialize(message) + "\n";
             CHECK(send(peer, wire.data(), wire.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(wire.size()));
         };
@@ -163,6 +175,10 @@ int main(int argc, char **argv) {
                 return now >= until;
             });
         };
+        if (appDelivery) {
+            action([&]() { reply("desktop_hello", 991, ""); });
+            steps.push_back([&]() { return count("desktop_hello", 991) == 1; });
+        }
         action([&]() {
             if (scenario == "unfocused_start") {
                 client->focusOut();
@@ -225,7 +241,7 @@ int main(int argc, char **argv) {
                 client->focusOut();
                 if (scenario != "focus_out") { client->focusIn(); }
             } else {
-                CHECK(scenario == "same_context" || scenario == "duplicate" || scenario == "unfocused_start");
+                CHECK(appDelivery || scenario == "same_context" || scenario == "duplicate" || scenario == "unfocused_start");
             }
         });
         if (disconnectCase) {
@@ -241,6 +257,9 @@ int main(int argc, char **argv) {
                 reply("error", 1, "stale error");
                 reply("result", 1, "stale result");
                 reply("result", 2, transcript);
+            } else if (appDelivery) {
+                reply("deliver", 1, transcript);
+                reply("deliver", 1, transcript);
             } else {
                 reply("result", 1, transcript);
                 if (scenario == "duplicate" || shouldFallback) { reply("result", 1, transcript); }
@@ -252,6 +271,17 @@ int main(int argc, char **argv) {
             CHECK(state.content == (shouldDeliver ? "existing " + transcript : "existing "));
             CHECK(count("fallback_clipboard") == (shouldFallback ? 1 : 0));
             CHECK(otherState.commits == 0);
+            if (appDelivery) {
+                std::vector<std::string> outcomes;
+                for (const auto &message : received) {
+                    if (message.type == "delivered" && message.session == 1) { outcomes.push_back(message.code); }
+                    if (message.type == "desktop_hello") { CHECK(message.value == "voicetype.fcitx.v1"); }
+                }
+                const std::string first = shouldDeliver ? "committed" :
+                    ((preeditCase || scenario == "wrong_context" || scenario == "groupless_destroy_result") ?
+                        "focus_changed" : "stale");
+                CHECK((outcomes == std::vector<std::string>{first, "stale"}));
+            }
             if (preeditCase) { CHECK(preeditCallbacks == 1); }
             CHECK(count("cancel", 1) == (expectsCancel ? 1 : 0));
             if (destroyCase) {

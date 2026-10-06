@@ -57,6 +57,142 @@ async fn read_event(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn application_records_through_the_real_local_transport_and_delivers_the_complete_result() {
+    use voicetype_app_core::{
+        Application, DeliveryOutcome, DeliveryPort, ProviderEvent, TargetLease,
+    };
+    struct FocusedInput(Vec<String>);
+    impl DeliveryPort for FocusedInput {
+        fn commit_if_focused(&mut self, target: &TargetLease, text: &str) -> DeliveryOutcome {
+            assert_eq!(target, &TargetLease::new("editor", 1));
+            self.0.push(text.into());
+            DeliveryOutcome::Delivered
+        }
+    }
+    let profile = tempfile::tempdir().unwrap();
+    let socket = profile.path().join("ipc.sock");
+    let server = Server::bind(&socket).unwrap();
+    let manager = Arc::new(SessionManager::new(
+        Arc::new(Microphone),
+        Pipeline {
+            asr: Arc::new(NativeModel),
+            vad: None,
+            traditional: Some(Arc::new(Traditional::load().unwrap())),
+            vocab: Arc::new(Vocab::load_or_empty(&profile.path().join("vocab.toml"))),
+            assistant: Arc::new(Assistant::new(Personalization::memory(), None)),
+            review: None,
+        },
+    ));
+    let server_task = tokio::spawn(server.run(manager));
+    let config = profile.path().join("app");
+    tokio::task::spawn_blocking(move || {
+        let mut connection = voicetype_app_core::local::LocalConnection::connect_to_process(
+            &socket,
+            std::process::id(),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let mut app = Application::open(&config).unwrap();
+        let mut output = FocusedInput(vec![]);
+        let key = app
+            .start_dictation(TargetLease::new("editor", 1), &mut connection)
+            .unwrap();
+        let (received_key, event) = connection
+            .poll_event(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(received_key, key);
+        assert!(matches!(event, ProviderEvent::Recording));
+        app.provider_event(received_key, event, &mut output);
+        app.stop_dictation(&mut connection).unwrap();
+        while app.snapshot().dictation.busy {
+            let (received_key, event) = connection
+                .poll_event(Duration::from_secs(1))
+                .unwrap()
+                .unwrap();
+            app.provider_event(received_key, event, &mut output);
+        }
+        assert_eq!(output.0, vec!["請檢查 GitHub。"]);
+        assert!(app.snapshot().dictation.failure.is_none());
+        connection.suspend(Duration::from_secs(1)).unwrap();
+    })
+    .await
+    .unwrap();
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn application_receives_capture_failure_and_can_release_without_inserting_text() {
+    use voicetype_app_core::{
+        Application, DeliveryOutcome, DeliveryPort, ProviderEvent, TargetLease,
+    };
+    struct MissingMicrophone;
+    impl CaptureSource for MissingMicrophone {
+        fn begin(&self) -> anyhow::Result<RecordingMark> {
+            anyhow::bail!("no fixture microphone")
+        }
+        fn end(&self, _: RecordingMark) -> Recording {
+            panic!("failed capture cannot end")
+        }
+        fn cancel(&self) {}
+        fn suspend(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+    struct NoInput;
+    impl DeliveryPort for NoInput {
+        fn commit_if_focused(&mut self, _: &TargetLease, _: &str) -> DeliveryOutcome {
+            panic!("failed capture must not insert text")
+        }
+    }
+    let profile = tempfile::tempdir().unwrap();
+    let socket = profile.path().join("ipc.sock");
+    let server = Server::bind(&socket).unwrap();
+    let manager = Arc::new(SessionManager::new(
+        Arc::new(MissingMicrophone),
+        Pipeline {
+            asr: Arc::new(NativeModel),
+            vad: None,
+            traditional: Some(Arc::new(Traditional::load().unwrap())),
+            vocab: Arc::new(Vocab::load_or_empty(&profile.path().join("vocab.toml"))),
+            assistant: Arc::new(Assistant::new(Personalization::memory(), None)),
+            review: None,
+        },
+    ));
+    let server_task = tokio::spawn(server.run(manager));
+    let config = profile.path().join("app");
+    tokio::task::spawn_blocking(move || {
+        let mut connection = voicetype_app_core::local::LocalConnection::connect_to_process(
+            &socket,
+            std::process::id(),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let mut app = Application::open(&config).unwrap();
+        app.start_dictation(TargetLease::new("editor", 1), &mut connection)
+            .unwrap();
+        let (key, event) = connection
+            .poll_event(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(event, ProviderEvent::Failed(_)));
+        app.provider_event(key, event, &mut NoInput);
+        assert!(app.snapshot().dictation.busy);
+        let (key, event) = connection
+            .poll_event(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        app.provider_event(key, event, &mut NoInput);
+        assert!(!app.snapshot().dictation.busy);
+        assert!(app.snapshot().dictation.failure.is_some());
+        connection.suspend(Duration::from_secs(1)).unwrap();
+    })
+    .await
+    .unwrap();
+    server_task.abort();
+}
+
+#[tokio::test]
 async fn local_provider_acknowledges_capture_and_release_after_the_complete_result() {
     for events in [true, false] {
         let profile = tempfile::tempdir().unwrap();
