@@ -75,10 +75,16 @@ An uncertain write is not reported as a rejected command: the app retains the
 session and its owner must stop/reap that child before reporting release. No
 transport error synthesizes idle or authorizes another provider's microphone.
 
-The application/native dispatcher and owned runtime supervisor are still to be
-connected. Start currently forwards only the session/target; program and bounded
-surrounding/selected text must be carried through the dispatcher before adopting
-it for daily correction/learning. Google and Windows adapters require their own
+`LocalDispatcher` now routes the real frontend/app/engine stream. Start carries
+program, original input context, surrounding text and selection. Frontend and
+engine session IDs are mapped explicitly, including confirmed learning from the
+last acknowledged delivery. Queued Stop/Cancel commands are drained before a
+fast final result. A changed correction replies `correction_saved`; a scalar
+false engine response is only `correction_unchanged`, not a claim of persistence.
+Unknown attribution or a control error is `correction_rejected`.
+
+The Tauri worker, frontend endpoint/migration, recovery UI and verified asset
+setup remain to be connected. Google and Windows adapters require their own
 equivalent contracts and platform evidence.
 
 ## Fcitx app delivery (v1)
@@ -113,5 +119,42 @@ complete text automatically. The old daemon `result` path remains compatible.
 
 The isolated Fcitx harness covers one commit, duplicate acknowledgement, wrong
 context, focus-out/return, preedit focus changes and weak-target destruction. It
-runs without a live display, bus, microphone or user config. Actual app routing,
-recovery UI and target-application acceptance remain outstanding.
+runs without a live display, bus, microphone or user config. Separate actual
+app/daemon tests exercise the native dispatcher and input acknowledgement with
+an OS frontend fixture. Tauri wiring, recovery UI and target-application
+acceptance remain outstanding.
+
+## Owned Linux runtime
+
+`OwnedLocal` starts a reviewed native executable with explicit Nano/CPU model
+paths, private engine endpoint and separate data profile. A stable profile lock
+prevents two app owners from launching into the same profile. Preparation only
+negotiates status; it does not attach a frontend or send Start. Environment
+inheritance is limited to OS audio/notification access. Arbitrary provider,
+screen-helper, library-path and model flags are not inherited. Shared spelling
+worker setup and data migration must be explicitly configured before adoption;
+preparation alone does not enable the existing daily spelling service.
+
+`OwnedLocalSession` joins this process handle to the dispatcher. On IPC failure,
+results are invalidated, the actual child is stopped and reaped, then the app
+session is released. A failed cleanup never authorizes another recording.
+Explicit shutdown also reaps the process and releases its profile lock.
+
+The child requests a Linux parent-death signal before exec. The owner is `!Send`
+and stays on the long-lived native worker that spawned it, because this signal
+tracks the creating thread, not just the process as a whole. A process-exit
+regression deliberately skips Rust destructors and verifies the child terminates;
+its test subreaper also reaps the orphan. See the Linux
+[PR_SET_PDEATHSIG contract](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)
+and Rust's [pre_exec safety requirements](https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.pre_exec).
+The installer must provide a normal, reviewed, non-privileged executable.
+
+`probe_owned_local` (a Rust example in `desktop/core/examples/`) prepares the
+actual Nano runtime with disposable data, checks loaded native libraries and
+absence of GPU libraries, sends no Start, then verifies the owned child was
+reaped. This is process/control evidence, not microphone or latency acceptance.
+
+Remaining supervisor work includes idle-crash reporting and deadlines for a
+non-responsive preparation/finalization/cancellation, then the long-lived Tauri
+worker and frontend owner migration. None of these library additions starts a
+provider merely by opening the current settings preview.

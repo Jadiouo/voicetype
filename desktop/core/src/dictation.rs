@@ -37,11 +37,27 @@ impl TargetLease {
     }
 }
 
+/// Bounded, transient text from the original input context, never diagnostics.
+#[derive(Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct DictationContext {
+    pub program: String,
+    pub context_text: String,
+    pub selected_text: String,
+}
+
+impl std::fmt::Debug for DictationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DictationContext").finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderCommand {
     Start {
         key: SessionKey,
         target: TargetLease,
+        context: DictationContext,
     },
     Stop {
         key: SessionKey,
@@ -90,6 +106,7 @@ pub enum DeliveryOutcome {
     Delivered,
     FocusChanged,
     Partial,
+    Unconfirmed,
 }
 
 /// Last undelivered result for the recovery UI. Deliberately not Debug or part of
@@ -147,6 +164,7 @@ impl Coordinator {
         &mut self,
         provider: Provider,
         target: TargetLease,
+        context: DictationContext,
         port: &mut impl ProviderPort,
     ) -> Result<SessionKey, AppError> {
         if self.busy() {
@@ -159,6 +177,7 @@ impl Coordinator {
         port.send(ProviderCommand::Start {
             key,
             target: target.clone(),
+            context,
         })
         .map_err(|_| AppError::ProviderUnavailable)?;
         self.active = Some(Active {

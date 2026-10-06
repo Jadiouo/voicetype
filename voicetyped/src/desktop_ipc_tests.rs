@@ -445,3 +445,283 @@ async fn microphone_handoff_refuses_a_busy_session_and_acknowledges_actual_close
     assert!(!open.load(Ordering::SeqCst));
     task.abort();
 }
+
+async fn frontend_round_trip(
+    asr: Arc<dyn Transcriber>,
+    assistant: Arc<Assistant>,
+    correction: Option<&str>,
+    ack: Option<&'static str>,
+    cancel_after_stop: bool,
+) -> (Vec<serde_json::Value>, voicetype_app_core::Application) {
+    use serde_json::json;
+    use voicetype_app_core::{dispatch::LocalDispatcher, local::LocalConnection, Application};
+    let profile = tempfile::tempdir().unwrap();
+    let engine_socket = profile.path().join("engine.sock");
+    let frontend_socket = profile.path().join("frontend.sock");
+    let server = Server::bind(&engine_socket).unwrap();
+    let manager = Arc::new(SessionManager::new(
+        Arc::new(Microphone),
+        Pipeline {
+            asr,
+            vad: None,
+            traditional: Some(Arc::new(Traditional::load().unwrap())),
+            vocab: Arc::new(Vocab::load_or_empty(&profile.path().join("vocab.toml"))),
+            assistant,
+            review: None,
+        },
+    ));
+    let server_task = tokio::spawn(server.run(manager));
+    let listener = std::os::unix::net::UnixListener::bind(&frontend_socket).unwrap();
+    let config = profile.path().join("app");
+    let (finish, finish_rx) = std::sync::mpsc::channel();
+    let worker = tokio::task::spawn_blocking(move || {
+        let engine = LocalConnection::connect_to_process(
+            &engine_socket,
+            std::process::id(),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        let mut route = LocalDispatcher::accept(peer, engine, Duration::from_secs(1)).unwrap();
+        let mut app = Application::open(&config).unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < until {
+            if let Err(error) = route.step(&mut app, Duration::from_millis(10)) {
+                assert!(ack.is_none(), "unexpected dispatcher failure: {error}");
+                return app;
+            }
+            if finish_rx.try_recv().is_ok() {
+                assert!(!app.snapshot().dictation.busy);
+                if ack == Some("committed") {
+                    assert!(app.retained_text().is_none());
+                }
+                assert!(app.snapshot().dictation.failure.is_none());
+                route.suspend(Duration::from_secs(1)).unwrap();
+                return app;
+            }
+        }
+        panic!("frontend session did not complete");
+    });
+    // Only the OS input frontend is substituted. Actual dispatcher, application,
+    // both transports, daemon, session and complete text pipeline run unchanged.
+    let mut input = BufReader::new(UnixStream::connect(&frontend_socket).await.unwrap());
+    let hello = read_event(&mut input).await;
+    assert_eq!(hello["type"], "desktop_hello");
+    input
+        .get_mut()
+        .write_all(
+            format!(
+                "{}\n",
+                json!({"type":"desktop_hello",
+        "session":hello["session"],"value":"voicetype.fcitx.v1"})
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut delivered = Vec::new();
+    for session in 41..=if correction.is_some() { 42 } else { 41 } {
+        let start = json!({"type":"start","session":session,"context_id":"editor-77",
+            "program":"editor","is_password":false,"context_text":"GitHub","selected_text":"commit"});
+        input
+            .get_mut()
+            .write_all(format!("{start}\n").as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(
+            read_event(&mut input).await,
+            json!({"type":"state","session":session,"value":"recording"})
+        );
+        input
+            .get_mut()
+            .write_all(format!("{}\n", json!({"type":"stop","session":session})).as_bytes())
+            .await
+            .unwrap();
+        if cancel_after_stop {
+            input
+                .get_mut()
+                .write_all(format!("{}\n", json!({"type":"cancel","session":session})).as_bytes())
+                .await
+                .unwrap();
+        }
+        let result = read_event(&mut input).await;
+        if cancel_after_stop && result == json!({"type":"state","session":session,"value":"idle"}) {
+            break;
+        }
+        assert_eq!(result["type"], "deliver");
+        let Some(code) = ack else {
+            delivered.push(result);
+            input.get_mut().shutdown().await.unwrap();
+            let app = worker.await.unwrap();
+            server_task.abort();
+            return (delivered, app);
+        };
+        input
+            .get_mut()
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"type":"delivered","session":session,
+            "context_id":"editor-77","code":code})
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            read_event(&mut input).await,
+            json!({"type":"state","session":session,"value":"idle"})
+        );
+        if session == 41 {
+            if let Some(after) = correction {
+                input
+                    .get_mut()
+                    .write_all(
+                        format!(
+                            "{}\n",
+                            json!({"type":"correction","session":session,
+                    "context_id":"editor-77","program":"editor","before":result["text"],
+                    "after":after,"confirmed":true})
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    read_event(&mut input).await,
+                    json!({"type":"state","session":session,"value":"correction_saved"})
+                );
+            }
+        }
+        delivered.push(result);
+    }
+    finish.send(()).unwrap();
+    let app = worker.await.unwrap();
+    server_task.abort();
+    (delivered, app)
+}
+
+#[tokio::test]
+async fn frontend_shortcut_routes_through_the_app_to_local_engine_and_acknowledged_delivery() {
+    let (delivered, _) = frontend_round_trip(
+        Arc::new(NativeModel),
+        Arc::new(Assistant::new(Personalization::memory(), None)),
+        None,
+        Some("committed"),
+        false,
+    )
+    .await;
+    assert_eq!(
+        delivered[0],
+        serde_json::json!({"type":"deliver","session":41,
+        "context_id":"editor-77","text":"請檢查 GitHub。"})
+    );
+}
+
+#[tokio::test]
+async fn frontend_context_preserves_application_surrounding_selection_and_field_scoped_corrections()
+{
+    use crate::personalization::ContextSnapshot;
+    struct Typos;
+    impl Transcriber for Typos {
+        fn transcribe(&self, _: Utterance<'_>) -> anyhow::Result<String> {
+            Ok("请检查 gthub、cmmit 与 psh。".into())
+        }
+        fn name(&self) -> &str {
+            "native-typo-fixture"
+        }
+    }
+    let mut learned = Personalization::memory();
+    for (wrong, right, context_id) in [
+        ("gthub", "GitHub", "earlier-field"),
+        ("cmmit", "commit", "earlier-field"),
+        ("psh", "push", "editor-77"),
+    ] {
+        learned
+            .learn(
+                wrong,
+                right,
+                &ContextSnapshot {
+                    program: "editor".into(),
+                    context_id: context_id.into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let (delivered, _) = frontend_round_trip(
+        Arc::new(Typos),
+        Arc::new(Assistant::new(learned, None)),
+        None,
+        Some("committed"),
+        false,
+    )
+    .await;
+    assert_eq!(delivered[0]["text"], "請檢查 GitHub、commit 與 push。");
+}
+
+#[tokio::test]
+async fn confirmed_frontend_correction_learns_from_the_mapped_engine_session() {
+    struct Typo;
+    impl Transcriber for Typo {
+        fn transcribe(&self, _: Utterance<'_>) -> anyhow::Result<String> {
+            Ok("请检查 gthub。".into())
+        }
+        fn name(&self) -> &str {
+            "native-typo-fixture"
+        }
+    }
+    let (delivered, _) = frontend_round_trip(
+        Arc::new(Typo),
+        Arc::new(Assistant::new(Personalization::memory(), None)),
+        Some("請檢查 GitHub。"),
+        Some("committed"),
+        false,
+    )
+    .await;
+    assert_eq!(delivered[0]["text"], "請檢查 gthub。");
+    assert_eq!(delivered[1]["text"], "請檢查 GitHub。");
+    assert_eq!(delivered[1]["session"], 42);
+}
+
+#[tokio::test]
+async fn lost_frontend_ack_retains_uncertain_text_without_releasing_or_retrying_the_session() {
+    use voicetype_app_core::DeliveryOutcome;
+    let (delivered, app) = frontend_round_trip(
+        Arc::new(NativeModel),
+        Arc::new(Assistant::new(Personalization::memory(), None)),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(delivered.len(), 1);
+    let retained = app
+        .retained_text()
+        .expect("uncertain text must be recoverable");
+    assert_eq!(retained.text, "請檢查 GitHub。");
+    assert_eq!(retained.reason, DeliveryOutcome::Unconfirmed);
+    assert!(
+        app.snapshot().dictation.busy,
+        "only owned-child cleanup can authorize release"
+    );
+    assert!(app.snapshot().dictation.failure.is_some());
+}
+
+#[tokio::test]
+async fn frontend_stop_followed_immediately_by_cancel_never_attempts_delivery() {
+    let (delivered, app) = frontend_round_trip(
+        Arc::new(NativeModel),
+        Arc::new(Assistant::new(Personalization::memory(), None)),
+        None,
+        Some("committed"),
+        true,
+    )
+    .await;
+    assert!(
+        delivered.is_empty(),
+        "cancelled dictation must not be offered for delivery"
+    );
+    assert!(app.retained_text().is_none());
+    assert!(!app.snapshot().dictation.busy);
+}

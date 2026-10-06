@@ -26,6 +26,9 @@ jobs:
         with:
           workspaces: voicetyped
       - name: Public IPC lifecycle and affected transport/capture contracts
+        env:
+          # Learning may request an OS notice; never reach a real desktop bus.
+          DBUS_SESSION_BUS_ADDRESS: unix:path=/nonexistent-voicetype-test-bus
         # OS microphone/native model are fixtures. No microphone, model download,
         # account login, GPU inference or production data participates.
         run: |

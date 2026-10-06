@@ -14,6 +14,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) enum CorrectionResult {
+    Changed,
+    Unchanged,
+    Rejected,
+}
+
 pub struct LocalConnection {
     wire: Wire,
     active: Option<SessionKey>,
@@ -29,42 +35,7 @@ impl LocalConnection {
         let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
         socket.connect_timeout(&SockAddr::unix(path)?, remaining(deadline)?)?;
         let stream: UnixStream = socket.into();
-        let mut credentials = libc::ucred {
-            pid: 0,
-            uid: 0,
-            gid: 0,
-        };
-        let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // SAFETY: credentials and size are correctly sized writable values. The
-        // connected fd is live for the entire kernel credential query.
-        let status = unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut credentials as *mut libc::ucred).cast(),
-                &mut size,
-            )
-        };
-        if status != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: geteuid has no preconditions and does not mutate process state.
-        let uid = unsafe { libc::geteuid() };
-        if size as usize != std::mem::size_of::<libc::ucred>()
-            || credentials.uid != uid
-            || credentials.pid <= 0
-            || credentials.pid as u32 != pid
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "unexpected engine process",
-            ));
-        }
-        let mut wire = Wire {
-            stream,
-            buffer: Vec::new(),
-        };
+        let mut wire = Wire::authenticated(stream, Some(pid))?;
         wire.send(&json!({"type":"desktop_status","request":1}), deadline)?;
         let reply = wire.read(deadline)?;
         let value = &reply["value"];
@@ -179,6 +150,46 @@ impl LocalConnection {
         result
     }
 
+    /// Correct only an idle, previously acknowledged engine session. The daemon
+    /// performs its existing attribution/expiry/terminology checks unchanged.
+    pub(crate) fn correct(
+        &mut self,
+        key: SessionKey,
+        message: &Value,
+        budget: Duration,
+    ) -> io::Result<CorrectionResult> {
+        self.usable()?;
+        if self.active.is_some() || key.provider() != Provider::Local {
+            return Err(io::Error::other("local session is still busy"));
+        }
+        let until = deadline(budget);
+        let result = (|| {
+            let mut message = message.clone();
+            message["session"] = json!(key.id());
+            self.wire.send(&message, until)?;
+            let reply = self.wire.read(until)?;
+            if reply["type"] == "info" && reply["value"].is_boolean() {
+                Ok(if reply["value"] == true {
+                    CorrectionResult::Changed
+                } else {
+                    CorrectionResult::Unchanged
+                })
+            } else if reply["type"] == "error"
+                && reply.get("session").is_none()
+                && reply["code"].is_string()
+                && reply["text"].is_string()
+            {
+                Ok(CorrectionResult::Rejected)
+            } else {
+                Err(invalid("unexpected correction response"))
+            }
+        })();
+        if result.is_err() {
+            self.faulted = true;
+        }
+        result
+    }
+
     fn usable(&self) -> io::Result<()> {
         if self.faulted {
             Err(io::Error::new(
@@ -197,11 +208,15 @@ impl ProviderPort for LocalConnection {
             return Err(CommandRejected);
         }
         let message = match command {
-            ProviderCommand::Start { key, target }
-                if key.provider() == Provider::Local && self.active.is_none() =>
-            {
+            ProviderCommand::Start {
+                key,
+                target,
+                context,
+            } if key.provider() == Provider::Local && self.active.is_none() => {
                 self.active = Some(key);
-                json!({"type":"start","session":key.id(),"context_id":target.context_id,"session_events":true})
+                json!({"type":"start","session":key.id(),"context_id":target.context_id,
+                    "program":context.program,"context_text":context.context_text,
+                    "selected_text":context.selected_text,"session_events":true})
             }
             ProviderCommand::Stop { key } if self.active == Some(key) => {
                 json!({"type":"stop","session":key.id()})
@@ -225,12 +240,52 @@ impl ProviderPort for LocalConnection {
     }
 }
 
-struct Wire {
+pub(crate) struct Wire {
     stream: UnixStream,
     buffer: Vec<u8>,
 }
 impl Wire {
-    fn send(&mut self, value: &Value, until: Instant) -> io::Result<()> {
+    pub(crate) fn authenticated(stream: UnixStream, pid: Option<u32>) -> io::Result<Self> {
+        let mut credentials = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: credentials and size are correctly sized writable values. The
+        // connected fd is live for the entire kernel credential query.
+        let status = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut size,
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: geteuid has no preconditions and does not mutate process state.
+        let uid = unsafe { libc::geteuid() };
+        if size as usize != std::mem::size_of::<libc::ucred>()
+            || credentials.uid != uid
+            || credentials.pid <= 0
+            || pid.is_some_and(|pid| credentials.pid as u32 != pid)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "unexpected engine process",
+            ));
+        }
+        stream.set_nonblocking(false)?;
+        Ok(Self {
+            stream,
+            buffer: Vec::new(),
+        })
+    }
+
+    pub(crate) fn send(&mut self, value: &Value, until: Instant) -> io::Result<()> {
         let mut bytes = serde_json::to_vec(value)?;
         bytes.push(b'\n');
         let mut remaining_bytes = &bytes[..];
@@ -244,7 +299,7 @@ impl Wire {
         }
         Ok(())
     }
-    fn read(&mut self, until: Instant) -> io::Result<Value> {
+    pub(crate) fn read(&mut self, until: Instant) -> io::Result<Value> {
         loop {
             let budget = remaining(until)?;
             if let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
@@ -270,15 +325,15 @@ impl Wire {
     }
 }
 
-fn deadline(budget: Duration) -> Instant {
+pub(crate) fn deadline(budget: Duration) -> Instant {
     Instant::now() + budget.min(Duration::from_secs(2))
 }
-fn remaining(until: Instant) -> io::Result<Duration> {
+pub(crate) fn remaining(until: Instant) -> io::Result<Duration> {
     until
         .checked_duration_since(Instant::now())
         .filter(|value| !value.is_zero())
         .ok_or_else(|| io::ErrorKind::TimedOut.into())
 }
-fn invalid(reason: &'static str) -> io::Error {
+pub(crate) fn invalid(reason: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, reason)
 }

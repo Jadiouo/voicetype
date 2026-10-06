@@ -60,7 +60,11 @@ fn recording_keeps_its_provider_and_target_until_one_final_result_and_cleanup() 
     assert_eq!(
         engine.received,
         vec![
-            ProviderCommand::Start { key, target },
+            ProviderCommand::Start {
+                key,
+                target,
+                context: Default::default()
+            },
             ProviderCommand::Stop { key },
         ]
     );

@@ -272,3 +272,56 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   both passed. Downloaded Linux/Windows installers match their SHA-256 manifests
   and source commit; both installed UI reports passed seven checks and explicitly
   did not test speech adapters. All 173 remote source blobs match the local tree.
+
+
+## 2026-10-07 — Native Linux dispatcher and owned CPU process
+
+- `LocalDispatcher` now negotiates a same-user Fcitx connection, maps frontend
+  sessions to engine sessions, routes Start/Stop/Cancel and acknowledges real
+  local-engine lifecycle events. Final delivery waits for the original session
+  and context's Fcitx reply; an uncertain acknowledgement retains text and is
+  never retried. Transport failure invalidates results but does not invent release.
+- TDD: the frontend → actual dispatcher/app → actual daemon/OpenCC → acknowledged
+  frontend round trip first failed for the absent dispatcher, then passed. Only
+  OS capture/native ASR/input frontend are fixtures; both Unix transports and
+  the coordinator/text pipeline are real.
+- The next case exposed dropped correction context: `gthub`, `cmmit`, `psh`
+  remained incorrect. After forwarding program, original field, surrounding
+  text and selection, the actual scoped terminology pipeline returns complete
+  `請檢查 GitHub、commit 與 push。`. Context is redacted from Debug output.
+- Confirmed learning through the routed frontend initially failed as an unknown
+  command. Session mapping and idle control handling have now been implemented;
+  the regression checks the next actual dictation, not private stored state.
+  Contract commands use an unreachable notification bus, so OS learning notices
+  cannot appear on the user's desktop.
+- This code remains unadopted by the desktop UI. Daily services/hotkeys are
+  untouched; no live audio/input or GPU operation has been used. The remaining
+  cancellation and process-owner work is recorded below.
+
+- The confirmed-learning case passes: correcting `gthub` to `GitHub` in one
+  acknowledged frontend session affects the next actual daemon dictation.
+  Engine session IDs are translated for attribution; unacknowledged delivery
+  cannot become learning evidence. Scalar no-change replies are not called saved.
+- The rapid Stop/Cancel case failed because a final result beat a buffered cancel.
+  Draining the bounded frontend command burst before engine events fixed it;
+  the actual daemon test now attempts no delivery and retains no cancelled text.
+  Lost delivery acknowledgement retains `Unconfirmed` text and ownership.
+- Added the actual child owner: private profile/endpoint, explicit Nano CPU
+  environment, profile lock and stop/wait cleanup. An attached dispatcher losing
+  its frontend reaps even a provider that refuses to acknowledge cancellation,
+  then releases the app so another provider may be selected. Setup sends no Start.
+  Restart initially failed on a retained profile lock; shutdown now releases it.
+- App exit without destructors initially left its engine running. A Linux
+  parent-death signal and same-worker ownership fixed the real subprocess test.
+  The fixture adopts/reaps its orphan and cleans its private socket directory.
+  Three ownership tests and all 21 core cases pass (one subprocess helper is
+  intentionally ignored except when invoked by the owner-exit case).
+- All 10 actual app/daemon contracts pass with the OS notification bus isolated.
+  Rebuilt the actual Nano feature, then ran the new Rust `probe_owned_local`
+  against existing read-only assets in disposable data. Native sherpa/ONNX
+  libraries loaded, GPU libraries were absent, no Start was sent and the child
+  was reaped. No live speech/inference/latency acceptance is claimed.
+- Next: connect the long-lived Tauri worker, report idle process death, enforce
+  session deadlines, expose recovery text and prepare explicit frontend-owner
+  migration. Runtime/model/spelling setup, shared vocabulary/review UI, Google
+  and Windows integration remain. The goal is active; daily services are untouched.

@@ -2,12 +2,17 @@
 
 mod dictation;
 #[cfg(target_os = "linux")]
+pub mod dispatch;
+#[cfg(target_os = "linux")]
 pub mod local;
 #[cfg(unix)]
 mod providers;
+#[cfg(target_os = "linux")]
+pub mod runtime;
 pub use dictation::{
-    CommandRejected, DeliveryOutcome, DeliveryPort, DictationStatus, ProviderCommand,
-    ProviderEvent, ProviderPort, RetainedText, SessionFailure, SessionKey, TargetLease,
+    CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationStatus,
+    ProviderCommand, ProviderEvent, ProviderPort, RetainedText, SessionFailure, SessionKey,
+    TargetLease,
 };
 
 use serde::{Deserialize, Serialize};
@@ -212,8 +217,17 @@ impl Application {
         target: TargetLease,
         port: &mut impl ProviderPort,
     ) -> Result<SessionKey, AppError> {
+        self.start_dictation_with_context(target, DictationContext::default(), port)
+    }
+
+    pub fn start_dictation_with_context(
+        &mut self,
+        target: TargetLease,
+        context: DictationContext,
+        port: &mut impl ProviderPort,
+    ) -> Result<SessionKey, AppError> {
         self.dictation
-            .start(self.preferences.selected_provider, target, port)
+            .start(self.preferences.selected_provider, target, context, port)
     }
 
     pub fn stop_dictation(&mut self, port: &mut impl ProviderPort) -> Result<(), AppError> {
