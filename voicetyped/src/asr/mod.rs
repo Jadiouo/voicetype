@@ -11,6 +11,10 @@
 use anyhow::Result;
 
 pub mod null;
+pub mod policy;
+pub mod profile;
+#[cfg(feature = "sherpa-nano")]
+pub mod nano;
 #[cfg(feature = "sensevoice")]
 pub mod sensevoice;
 
@@ -41,4 +45,14 @@ pub trait Transcriber: Send + Sync {
 
     /// 用於 log 與評測報告。
     fn name(&self) -> &str;
+
+    /// Whether this backend can actually honor a per-utterance language hint.
+    fn supports_language_hint(&self) -> bool {
+        true
+    }
+
+    /// Some backends short-circuit silence; such a call is not a real warmup.
+    fn warmup_with_silence(&self) -> bool {
+        true
+    }
 }

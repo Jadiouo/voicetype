@@ -17,6 +17,51 @@
 //! 2. 修剪首尾靜音, 句中一律保留。
 
 use anyhow::Result;
+use std::sync::Arc;
+
+/// A segment-level speech decision is not a vector of calibrated probabilities.
+pub trait SpeechGate: Send + Sync {
+    fn has_speech(&self, samples: &[f32]) -> Result<bool>;
+}
+
+/// Preserve each backend's validated waveform contract.
+pub enum AudioPreparation {
+    Trim(Arc<dyn SpeechDetector>),
+    FullWaveformGate(Arc<dyn SpeechGate>),
+}
+
+impl AudioPreparation {
+    pub fn prepare(&self, samples: &[f32]) -> Result<Option<Speech>> {
+        if samples.is_empty() {
+            return Ok(None);
+        }
+        match self {
+            Self::Trim(detector) => trim(detector.as_ref(), samples, &VadConfig::default()),
+            Self::FullWaveformGate(gate) => Ok(gate.has_speech(samples)?.then_some(Speech {
+                start: 0,
+                end: samples.len(),
+            })),
+        }
+    }
+
+    /// Existing SV behavior is preserved. The optional Nano gate fails closed.
+    pub fn prepare_live(&self, samples: &[f32]) -> Result<Option<Speech>> {
+        match self.prepare(samples) {
+            Err(error) if matches!(self, Self::Trim(_)) => {
+                tracing::warn!("VAD failed, transcribing untrimmed: {error}");
+                Ok(Some(Speech { start: 0, end: samples.len() }))
+            }
+            result => result,
+        }
+    }
+
+    pub fn probability_detector(&self) -> Option<&dyn SpeechDetector> {
+        match self {
+            Self::Trim(detector) => Some(detector.as_ref()),
+            Self::FullWaveformGate(_) => None,
+        }
+    }
+}
 
 /// 每個機率窗前進的樣本數, 必須與 shim 的 `VT_SV_VAD_HOP` 一致。
 /// 16kHz 下是 32ms。
@@ -145,6 +190,38 @@ fn ms_to_windows(ms: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Gate(Result<bool>);
+    impl SpeechGate for Gate {
+        fn has_speech(&self, _: &[f32]) -> Result<bool> {
+            self.0.as_ref().copied().map_err(|e| anyhow::anyhow!("{e}"))
+        }
+    }
+    #[test]
+    fn gate_keeps_all_audio_including_leading_trailing_and_middle_pauses() {
+        let audio = [0.0, 0.0, 0.3, 0.0, 0.0, -0.2, 0.0];
+        let gate = AudioPreparation::FullWaveformGate(Arc::new(Gate(Ok(true))));
+        assert_eq!(gate.prepare_live(&audio).unwrap(), Some(Speech { start: 0, end: audio.len() }));
+        assert!(gate.probability_detector().is_none());
+        assert_eq!(gate.prepare_live(&[]).unwrap(), None);
+    }
+    #[test]
+    fn no_speech_and_failed_gate_never_return_audio_for_decode() {
+        let quiet = AudioPreparation::FullWaveformGate(Arc::new(Gate(Ok(false))));
+        let failed = AudioPreparation::FullWaveformGate(Arc::new(Gate(Err(anyhow::anyhow!("broken VAD")))));
+        assert_eq!(quiet.prepare_live(&[0.0; 32]).unwrap(), None);
+        assert!(failed.prepare_live(&[0.3; 32]).is_err());
+    }
+    #[test]
+    fn existing_trim_failure_keeps_legacy_live_fallback_but_cli_is_strict() {
+        struct Broken;
+        impl SpeechDetector for Broken {
+            fn speech_probs(&self, _: &[f32]) -> Result<Vec<f32>> { anyhow::bail!("broken") }
+        }
+        let trim = AudioPreparation::Trim(Arc::new(Broken));
+        assert!(trim.prepare(&[0.3]).is_err());
+        assert_eq!(trim.prepare_live(&[0.3]).unwrap(), Some(Speech { start: 0, end: 1 }));
+    }
 
     fn cfg() -> VadConfig {
         VadConfig::default()

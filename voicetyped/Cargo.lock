@@ -1081,6 +1081,7 @@ dependencies = [
  "anyhow",
  "cc",
  "cpal",
+ "libc",
  "rubato",
  "serde",
  "serde_json",

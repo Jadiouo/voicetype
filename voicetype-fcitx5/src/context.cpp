@@ -178,41 +178,97 @@ bool CorrectionTracker::begin(const TextSnapshot &before,
 }
 
 void CorrectionTracker::observe(const TextSnapshot &snapshot, uint64_t nowUsec) {
-    if (!active_ || !offsets(snapshot)) {
-        return;
-    }
+    if (!active_) { return; }
+    if (!offsets(snapshot)) { clear(); return; }
     if (!acknowledged_) {
         if (snapshot.text == expected_) {
             acknowledged_ = true;
             observed_ = snapshot.text;
+            observedCursor_ = snapshot.cursor;
+            observedAnchor_ = snapshot.anchor;
             changedAt_ = nowUsec;
         }
         return;
     }
-    if (snapshot.text != observed_) {
+    const auto matches = [&snapshot](const TextSnapshot &expected) {
+        return snapshot.text == expected.text && snapshot.cursor == expected.cursor &&
+               snapshot.anchor == expected.anchor;
+    };
+    if (snapshot.text != observed_ || (expectedEdit_ && matches(*expectedEdit_))) {
+        const bool recentKey = expectedEdit_ && userKeyAt_ && nowUsec >= userKeyAt_ &&
+                               nowUsec - userKeyAt_ <= 2000000;
+        if (recentKey && matches(*expectedEdit_)) {
+            userEdited_ = true;
+            expectedEdit_.reset(); splitDeletion_.reset(); userKeyAt_ = 0;
+        } else if (recentKey && splitDeletion_ && matches(*splitDeletion_)) {
+            // One selected literal may arrive as exact deletion then exact
+            // insertion. The second update may contain only that one literal.
+            splitDeletion_.reset();
+        } else {
+            clear();
+            return;
+        }
         observed_ = snapshot.text;
         changedAt_ = nowUsec;
-        // A surrounding-text update alone is not evidence of user editing.
-        if (userKeyAt_ && nowUsec >= userKeyAt_ && nowUsec - userKeyAt_ <= 2000000) {
-            userEdited_ = true;
-        } else {
-            // External/programmatic edits invalidate the whole observation.
-            active_ = false;
-        }
+        submitKeyAt_ = 0;
+    } else if (expectedEdit_ &&
+               (snapshot.cursor != observedCursor_ || snapshot.anchor != observedAnchor_)) {
+        // A caret move before the expected edit prevents attributing it later.
+        clear();
+        return;
     }
+    observedCursor_ = snapshot.cursor;
+    observedAnchor_ = snapshot.anchor;
 }
 
-void CorrectionTracker::noteUserEditKey(uint64_t nowUsec) {
-    if (active_ && acknowledged_) {
-        userKeyAt_ = nowUsec;
+void CorrectionTracker::noteUserEditKey(EditIntent intent, const TextSnapshot &before,
+                                        uint64_t nowUsec) {
+    if (!active_ || !acknowledged_) { return; }
+    const auto off = offsets(before);
+    // Do not infer a batch from several keys when the first has no matching ack.
+    if (expectedEdit_ || !off || before.text != observed_) { clear(); return; }
+    size_t start = std::min(before.cursor, before.anchor);
+    size_t end = std::max(before.cursor, before.anchor);
+    const bool selected = start != end;
+    const bool insertion = intent.kind == EditIntent::Kind::Insert;
+    if (insertion && (intent.ascii < 0x20 || intent.ascii > 0x7e)) { clear(); return; }
+    if (!insertion && !selected) {
+        if (intent.kind == EditIntent::Kind::Backspace && start > 0) { --start; }
+        else if (intent.kind == EditIntent::Kind::Delete && end + 1 < off->size()) { ++end; }
+        else { clear(); return; }
+    }
+    const auto removed = slice(before.text, *off, start, end);
+    if (!std::all_of(removed.begin(), removed.end(), [](unsigned char c) {
+            return c >= 0x20 && c <= 0x7e;
+        })) { clear(); return; }
+    const auto prefix = before.text.substr(0, (*off)[start]);
+    const auto suffix = before.text.substr((*off)[end]);
+    const std::string inserted = insertion ? std::string(1, intent.ascii) : std::string();
+    const auto caret = start + inserted.size();
+    expectedEdit_ = TextSnapshot{prefix + inserted + suffix, caret, caret};
+    if (selected && insertion) { splitDeletion_ = TextSnapshot{prefix + suffix, start, start}; }
+    else { splitDeletion_.reset(); }
+    observedCursor_ = before.cursor; observedAnchor_ = before.anchor;
+    userKeyAt_ = nowUsec;
+    submitKeyAt_ = 0;
+}
+
+void CorrectionTracker::noteSubmitKey(uint64_t nowUsec) {
+    if (active_ && acknowledged_ && !userKeyAt_) {
+        submitKeyAt_ = nowUsec;
     }
 }
 
 std::optional<Correction> CorrectionTracker::correction(
     const TextSnapshot &current, uint64_t nowUsec) const {
-    if (!active_ || !acknowledged_ || !userEdited_ || !offsets(current) ||
+    return correctionImpl(current, nowUsec, true);
+}
+
+std::optional<Correction> CorrectionTracker::correctionImpl(
+    const TextSnapshot &current, uint64_t nowUsec, bool requireStable) const {
+    if (!active_ || !acknowledged_ || !userEdited_ || userKeyAt_ || !offsets(current) ||
         current.cursor != current.anchor || current.text != observed_ ||
-        nowUsec < changedAt_ || nowUsec - changedAt_ < kStableUsec ||
+        nowUsec < changedAt_ || (requireStable && nowUsec - changedAt_ < kStableUsec) ||
         nowUsec < startedAt_ || nowUsec - startedAt_ > kExpiryUsec ||
         current.text.size() < prefix_.size() + suffix_.size() ||
         current.text.compare(0, prefix_.size(), prefix_) != 0 ||
@@ -226,6 +282,25 @@ std::optional<Correction> CorrectionTracker::correction(
         return std::nullopt;
     }
     return Correction{inserted_, after};
+}
+
+std::optional<Correction> CorrectionTracker::correctionBeforeClear(
+    const TextSnapshot &current, uint64_t nowUsec) const {
+    if (userKeyAt_ || !offsets(current) || current.cursor != current.anchor ||
+        current.text != prefix_ + suffix_ || current.text == observed_) {
+        return std::nullopt;
+    }
+    // Preserve the exact insertion's surrounding anchors, including cursor
+    // position; another field value or an unrelated deletion is not a send.
+    const auto prefixOffsets = offsets(prefix_);
+    if (!prefixOffsets || current.cursor != prefixOffsets->size() - 1) {
+        return std::nullopt;
+    }
+    // Return alone is not confirmation: a newline never reaches this branch.
+    // Return AND an exact clear can finish a quick edit without the idle delay.
+    const bool submitted = submitKeyAt_ && submitKeyAt_ >= changedAt_ &&
+        nowUsec >= submitKeyAt_ && nowUsec - submitKeyAt_ <= 1000000;
+    return correctionImpl({observed_, observedCursor_, observedAnchor_}, nowUsec, !submitted);
 }
 
 void CorrectionTracker::clear() { *this = CorrectionTracker{}; }

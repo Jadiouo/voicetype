@@ -53,6 +53,12 @@ pub struct Responder {
 }
 
 impl Responder {
+    /// Report whether a result entered the bounded outbound queue. This is not
+    /// confirmation that the focused application actually inserted the text.
+    pub fn try_send(&self, msg: ServerMessage) -> bool {
+        self.tx.try_send(msg).is_ok()
+    }
+
     /// 送出一則訊息。連線已斷時靜默丟棄 —— 對端會重連, 此時的訊息
     /// 本來就沒有意義 (session 已經過期)。
     pub fn send(&self, msg: ServerMessage) {

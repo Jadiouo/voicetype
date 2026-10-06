@@ -443,8 +443,15 @@ impl Personalization {
         self.apply_preserving_names(text, scope, &[])
     }
 
-    /// Explicit canonical names override learned aliases without changing the store.
-    pub fn apply_preserving_names(&self, text: &str, scope: &ContextSnapshot, names: &[String]) -> String {
+    /// Explicit canonical spellings override older learned aliases, without
+    /// deleting or modifying the user's saved rules. Other occurrences still
+    /// receive normal corrections (for example Mabe versus lowercase mabe).
+    pub fn apply_preserving_names(
+        &self,
+        text: &str,
+        scope: &ContextSnapshot,
+        names: &[String],
+    ) -> String {
         // Keep the same conservative literal policy as the model refiner. A
         // backtick can start an incomplete span while somebody is editing code;
         // abstain for the complete input instead of guessing its boundaries.
@@ -458,6 +465,24 @@ impl Personalization {
             .rules
             .iter()
             .filter(|r| r.active() && applicable(r, &scope))
+            // One spelling can refer to different entities in this utterance.
+            // Without per-occurrence evidence, replacing every occurrence can
+            // destroy a correct name. Abstain even for confirmed rules; a
+            // capitalization-only preference does not merge distinct spellings.
+            .filter(|r| {
+                r.wrong.eq_ignore_ascii_case(&r.right)
+                    || (!contains_term(text, &r.right)
+                        && text
+                            .char_indices()
+                            .filter(|(pos, _)| {
+                                term_at(text, *pos, &r.wrong)
+                                    && !literal_at(text, *pos, *pos + r.wrong.len())
+                                    && !protected(*pos, *pos + r.wrong.len())
+                            })
+                            .take(2)
+                            .count()
+                            < 2)
+            })
             .collect();
         rules.sort_by_key(|r| std::cmp::Reverse(r.wrong.len()));
         let mut out = String::with_capacity(text.len());
@@ -467,7 +492,8 @@ impl Personalization {
                 .iter()
                 .copied()
                 .filter(|r| {
-                    term_at(text, pos, &r.wrong) && !literal_at(text, pos, pos + r.wrong.len())
+                    term_at(text, pos, &r.wrong)
+                        && !literal_at(text, pos, pos + r.wrong.len())
                         && !protected(pos, pos + r.wrong.len())
                 })
                 .collect();
@@ -607,16 +633,18 @@ fn applicable(rule: &LearnedRule, scope: &ContextSnapshot) -> bool {
     if !rule.program.is_empty() && rule.program != scope.program {
         return false;
     }
-    if rule.confirmed && rule.context_id.is_empty() {
-        return true;
-    }
     let has_right =
         contains_term(&scope.text, &rule.right) || contains_term(&scope.selected_text, &rule.right);
     let has_wrong =
         contains_term(&scope.text, &rule.wrong) || contains_term(&scope.selected_text, &rule.wrong);
-    // Capitalization-only mappings cannot be disambiguated this way.
+    // Independent context using the source spelling is contradictory evidence,
+    // including when both spellings coexist. Even confirmed application/global
+    // rules abstain; capitalization-only preferences are not ambiguous here.
     if has_wrong && !rule.wrong.eq_ignore_ascii_case(&rule.right) {
         return false;
+    }
+    if rule.confirmed && rule.context_id.is_empty() {
+        return true;
     }
     let known = !scope.context_id.is_empty()
         && (scope.context_id == rule.context_id
@@ -820,15 +848,97 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 fn correction_pair(before: &str, after: &str, selected: &str) -> Option<(String, String)> {
-    compact_honorific_name(before, after).or_else(|| {
-        compact_edit(before, after, selected).filter(|(wrong, right)| {
-            // A span crossing an honorific can accidentally merge edits to two
-            // different people. A real name correction is extracted above.
-            !["教授", "老師", "博士", "先生", "小姐", "女士"]
-                .iter()
-                .any(|title| wrong.contains(title) || right.contains(title))
+    compact_honorific_name(before, after)
+        .or_else(|| {
+            compact_edit(before, after, selected).filter(|(wrong, right)| {
+                // A span crossing an honorific can accidentally merge edits to two
+                // different people. A real name correction is extracted above.
+                !["教授", "老師", "博士", "先生", "小姐", "女士"]
+                    .iter()
+                    .any(|title| wrong.contains(title) || right.contains(title))
+            })
         })
-    })
+        .or_else(|| {
+            // Ignore only CJK/ASCII boundary spacing in a comparison copy, never
+            // English word boundaries, punctuation, casing or the delivered text.
+            // The fallback can recover one ASCII spelling pair, not phrase edits.
+            if before.contains('`') || after.contains('`') {
+                return None;
+            }
+            let a = diff_boundary_spacing(before);
+            let b = diff_boundary_spacing(after);
+            if a == before && b == after {
+                return None;
+            }
+            compact_edit(&a, &b, "").filter(|(wrong, right)| {
+                wrong.bytes().all(|c| c.is_ascii_alphabetic())
+                    && right.bytes().all(|c| c.is_ascii_alphabetic())
+            })
+        })
+        .filter(|(wrong, right)| {
+            // Apply attribution to strict and spacing-recovery paths alike. Do not
+            // borrow an unchanged occurrence elsewhere to justify an edit in code.
+            if !unique_plain_term(before, wrong) || !unique_plain_term(after, right) {
+                return false;
+            }
+            // Rearranging the same Han characters can be a wording edit, not an
+            // acoustic spelling substitution. This deliberately also abstains on
+            // transposed name characters; explicit learn() remains available.
+            let mut a: Vec<_> = wrong.chars().collect();
+            let mut b: Vec<_> = right.chars().collect();
+            if a.iter()
+                .chain(&b)
+                .all(|c| ('\u{3400}'..='\u{9fff}').contains(c))
+            {
+                a.sort_unstable();
+                b.sort_unstable();
+                a != b
+            } else {
+                true
+            }
+        })
+}
+
+fn unique_plain_term(text: &str, term: &str) -> bool {
+    if text.contains('`') || term.chars().any(|c| "_/@\\=<>+*()[]{}-$\"'".contains(c)) {
+        return false;
+    }
+    let mut occurrences = text
+        .char_indices()
+        .filter(|(pos, _)| term_at(text, *pos, term));
+    let Some((pos, _)) = occurrences.next() else {
+        return false;
+    };
+    occurrences.next().is_none() && !literal_at(text, pos, pos + term.len())
+}
+
+fn diff_boundary_spacing(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    while pos < chars.len() {
+        if chars[pos] != ' ' {
+            out.push(chars[pos]);
+            pos += 1;
+            continue;
+        }
+        let start = pos;
+        while pos < chars.len() && chars[pos] == ' ' {
+            pos += 1;
+        }
+        let han = |c: char| ('\u{3400}'..='\u{9fff}').contains(&c);
+        let boundary = start
+            .checked_sub(1)
+            .and_then(|i| chars.get(i))
+            .zip(chars.get(pos))
+            .is_some_and(|(&left, &right)| {
+                (han(left) && ascii_word(right)) || (ascii_word(left) && han(right))
+            });
+        if !boundary {
+            out.extend(chars[start..pos].iter());
+        }
+    }
+    out
 }
 
 /// A finalized corrected sentence may contain a one-character name edit.
@@ -1150,7 +1260,7 @@ mod tests {
         let s = ContextSnapshot::default();
         m.learn("mabe", "maybe", &s).unwrap();
         m.learn("maybe", "possibly", &s).unwrap();
-        assert_eq!(m.apply("mabe maybe", &s), "maybe possibly");
+        assert_eq!(m.apply("mabe", &s), "maybe");
     }
 
     #[test]
@@ -1194,7 +1304,9 @@ mod tests {
         );
         assert_eq!(
             m.apply("mabe. gthub, mabe: 對的", &s),
-            "maybe. GitHub, maybe: 對的"
+            // Repeated source spellings now abstain without occurrence-level
+            // evidence, while the single unrelated term can still be corrected.
+            "mabe. GitHub, mabe: 對的"
         );
         assert_eq!(
             m.apply("路徑/srv/gthub，但gthub是平台", &s),

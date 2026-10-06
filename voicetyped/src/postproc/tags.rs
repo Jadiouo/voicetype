@@ -35,9 +35,9 @@ impl StrippedOutput {
 
     /// 語言標籤 (`zh` / `en` / …), 若有。
     pub fn language_tag(&self) -> Option<&str> {
-        // 語言標籤是第一個, 且是純字母的短標籤。情緒標籤是全大寫的
-        // 情緒詞, 音訊事件是首字大寫 —— 用位置判斷比列舉所有可能值穩健。
-        self.tags.first().map(|s| s.as_str())
+        // 不把缺少語言標籤時的 NEUTRAL/Speech/withitn 當成語言。
+        self.tags.iter().find(|s| (2..=3).contains(&s.len())
+            && s.bytes().all(|b| b.is_ascii_lowercase())).map(String::as_str)
     }
 }
 
@@ -145,6 +145,8 @@ mod tests {
         assert_eq!(strip_tags("<|zh|><|NEUTRAL|>你好").language_tag(), Some("zh"));
         assert_eq!(strip_tags("<|en|>hi").language_tag(), Some("en"));
         assert_eq!(strip_tags("no tags").language_tag(), None);
+        assert_eq!(strip_tags("<|NEUTRAL|><|Speech|><|withitn|>hi").language_tag(), None);
+        assert_eq!(strip_tags("<|NEUTRAL|><|yue|>文字").language_tag(), Some("yue"));
     }
 
     #[test]

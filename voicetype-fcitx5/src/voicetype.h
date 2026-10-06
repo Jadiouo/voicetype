@@ -3,6 +3,7 @@
 
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/trackableobject.h>
+#include <fcitx-config/configuration.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
@@ -14,22 +15,34 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "ipc.h"
 #include "context.h"
+#include "selection.h"
+#include "capslock.h"
 
 namespace voicetype {
+
+FCITX_CONFIGURATION_CLASS(VoiceTypeConfig,
+    fcitx::Option<fcitx::Key, fcitx::KeyConstrain> learnKey{
+        this, "LearnKey", "Shortcut for learning a confirmed correction",
+        fcitx::Key("Control+Caps_Lock"), fcitx::KeyConstrain{fcitx::KeyConstrainFlags{}}};
+);
 
 class VoiceType : public fcitx::AddonInstance {
 public:
     using NotificationSink = std::function<void(const std::string &, const std::string &)>;
     using Clock = std::function<uint64_t()>;
     explicit VoiceType(fcitx::Instance *instance, NotificationSink notification = {},
-                       Clock clock = {});
+                       Clock clock = {},
+                       std::optional<VoiceTypeConfig> configuration = std::nullopt);
     ~VoiceType() override;
 
     void reloadConfig() override;
+    const fcitx::Configuration *getConfig() const override { return &config_; }
+    void setConfig(const fcitx::RawConfig &raw) override;
 
 private:
     // --- 事件處理 ---
@@ -40,20 +53,28 @@ private:
     // --- 動作 ---
     void startRecording(fcitx::InputContext *ic);
     void stopRecording(bool cancelled);
+    void clearDelivery();
     void deliver(const std::string &text);
     std::string contextId(fcitx::InputContext *ic) const;
     void clearCorrection();
-    void maybeLearnCorrection(fcitx::InputContext *ic, bool explicitSelection);
+    void maybeLearnCorrection(fcitx::InputContext *ic, bool explicitSelection,
+                              std::optional<Correction> beforeClear = std::nullopt);
+    void readExplicitSelection(fcitx::InputContext *ic);
+    void sendCorrection(fcitx::InputContext *ic, const Correction &correction, bool confirmed);
     void notify(fcitx::InputContext *ic, const std::string &summary,
                 const std::string &body);
     void clearFeedback();
     uint64_t nowUsec() const;
+    std::string learnKeyLabel() const;
 
     // --- 狀態 ---
     fcitx::Instance *instance_;
     std::unique_ptr<IpcClient> ipc_;
+    std::unique_ptr<SelectionReader> selectionReader_;
+    std::unique_ptr<CapsLockGuard> capsLockGuard_;
     NotificationSink notification_;
     Clock clock_;
+    VoiceTypeConfig config_;
     uint32_t notificationId_ = 0;
     fcitx::TrackableObjectReference<fcitx::InputContext> feedbackIc_;
     fcitx::Text feedbackPrevious_;
@@ -71,11 +92,13 @@ private:
     // 換來的是好按。誤觸的代價由 daemon 端的 VAD 吸收: 沒有語音就
     // 不會有東西被 commit。
     //
-    // 硬編碼 (SDD §9)。設定檔化屬於 M1。
     fcitx::Key cancelKey_{"Escape"};
-    fcitx::Key learnKey_{"Control+Caps_Lock"};
+    fcitx::Key learnKey_;
 
     bool recording_ = false;
+    // A null weak target alone cannot distinguish destruction from cancellation
+    // or an already consumed result. Only a pending session may deliver/fallback.
+    bool deliveryPending_ = false;
     uint64_t sessionId_ = 0;
 
     // 錄音期間必須「鎖住」目標 InputContext。使用者放開熱鍵後到文字送達
@@ -88,6 +111,9 @@ private:
     uint64_t lastCommitSession_ = 0;
     uint64_t lastCommitAt_ = 0;
     std::string contextNonce_;
+    // The generation belongs to this field, including synchronous frontend
+    // callbacks after a result is consumed. Other ICs cannot invalidate it.
+    fcitx::TrackableObjectReference<fcitx::InputContext> contextIc_;
     uint64_t contextGeneration_ = 0;
     std::string sessionContextId_;
 

@@ -30,9 +30,10 @@ public:
     }
     ~TextClient() override { destroy(); }
     const char *frontend() const override { return "voicetype-test"; }
-    void setText(const std::string &text, size_t anchor = std::string::npos) {
+    void setText(const std::string &text, size_t anchor = std::string::npos,
+                 size_t cursor = std::string::npos) {
         content = text;
-        const auto cursor = fcitx::utf8::length(text);
+        if (cursor == std::string::npos) { cursor = fcitx::utf8::length(text); }
         surroundingText().setText(text, cursor,
                                   anchor == std::string::npos ? cursor : anchor);
         updateSurroundingText();
@@ -61,6 +62,7 @@ int main() {
     if (!dir) { return EXIT_FAILURE; }
     const std::string path = std::string(dir) + "/ipc.sock";
     setenv("VOICETYPE_SOCKET", path.c_str(), 1);
+    setenv("VOICETYPE_SELECTION_HELPER", "/nonexistent/voicetype-selection-fixture", 1);
     setenv("FCITX_CONFIG_HOME", dir, 1);
     setenv("FCITX_DATA_HOME", dir, 1);
     const int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -80,7 +82,8 @@ int main() {
         VoiceType addon(&instance,
             [&notices](const std::string &summary, const std::string &) {
                 notices.push_back(summary);
-            }, [&clockOffset]() { return fcitx::now(CLOCK_MONOTONIC) + clockOffset; });
+            }, [&clockOffset]() { return fcitx::now(CLOCK_MONOTONIC) + clockOffset; },
+            VoiceTypeConfig{});
         TextClient client(instance);
         client.focusIn();
         client.setText("");
@@ -89,8 +92,8 @@ int main() {
         auto &loop = instance.eventLoop();
         std::vector<IpcMessage> received;
         std::string incoming;
-        const std::string before = "今天我要討論陳博宇教授的研究方向。";
-        const std::string after = "今天我要討論陳柏宇教授的研究方向。";
+        const std::string before = "我要把這個東西 push 到 gthub 上面。";
+        const std::string after = "我要把這個東西 push 到 GitHub 上面。";
         auto io = loop.addIOEvent(peer, fcitx::IOEventFlag::In,
             [&](fcitx::EventSourceIO *, int, fcitx::IOEventFlags) {
                 char buffer[4096];
@@ -130,8 +133,18 @@ int main() {
                     key(instance, client, fcitx::Key(FcitxKey_Alt_L), true);
                     stage = 1;
                 } else if (stage == 1 && client.commits == 1) {
-                    key(instance, client, fcitx::Key(FcitxKey_BackSpace));
-                    client.setText(after);
+                    auto text = before;
+                    const auto pos = text.find("gthub");
+                    const auto cursor = fcitx::utf8::length(text.substr(0, pos));
+                    client.setText(text, cursor + 5, cursor);
+                    key(instance, client, fcitx::Key(FcitxKey_G));
+                    text.replace(pos, 5, "G"); client.setText(text, cursor + 1, cursor + 1);
+                    const std::string rest = "itHub";
+                    for (size_t i=0;i<rest.size();++i) {
+                        key(instance, client, fcitx::Key(static_cast<fcitx::KeySym>(rest[i])));
+                        text.insert(pos + i + 1, 1, rest[i]);
+                        client.setText(text, cursor + i + 2, cursor + i + 2);
+                    }
                     editedAt = now;
                     stage = 2;
                 } else if (stage == 2 && now - editedAt > 400000) {
@@ -165,7 +178,7 @@ int main() {
                     client.inputPanel().setPreedit(fcitx::Text{});
                     client.setCapabilityFlags(fcitx::CapabilityFlags{});
                     key(instance, client, fcitx::Key("Control+Caps_Lock"));
-                    CHECK(notices.back() == "這個程式未提供選取文字");
+                    CHECK(notices.back() == "選取工具尚未安裝");
                     client.setCapabilityFlags(fcitx::CapabilityFlag::SurroundingText);
                     client.setText(after + std::string(513, 'x'), fcitx::utf8::length(after));
                     key(instance, client, fcitx::Key("Control+Caps_Lock"));

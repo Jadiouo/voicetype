@@ -9,7 +9,7 @@
 //! 才出現一次的讀取端。用 lock-free ring 換來的複雜度不划算。
 
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -144,9 +144,7 @@ impl AudioCapture {
                 None => Vec::new(),
             }
         };
-        if self.mode == StreamMode::Strict {
-            let _ = self.tx.send(Command::Release);
-        }
+        let _ = self.tx.send(Command::Release);
         Recording {
             samples,
             sample_rate: mark.format.sample_rate,
@@ -155,9 +153,7 @@ impl AudioCapture {
 
     /// 放棄一段錄音, 不取出資料。
     pub fn cancel(&self) {
-        if self.mode == StreamMode::Strict {
-            let _ = self.tx.send(Command::Release);
-        }
+        let _ = self.tx.send(Command::Release);
     }
 }
 
@@ -172,13 +168,12 @@ impl Drop for AudioCapture {
 
 fn audio_thread(rx: mpsc::Receiver<Command>, shared: Arc<Shared>, mode: StreamMode) {
     // Stream 必須活在這條執行緒上。
-    let mut stream: Option<cpal::Stream> = None;
-    let mut idle_since: Option<std::time::Instant> = None;
+    let mut state = CaptureState::default();
 
     loop {
         // warm 模式下用逾時喚醒來執行閒置關閉; strict 模式沒有閒置概念,
         // 直接阻塞等命令。
-        let cmd = if stream.is_some() && mode == StreamMode::Warm {
+        let cmd = if state.stream.is_some() && mode == StreamMode::Warm {
             match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(c) => Some(c),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -191,59 +186,109 @@ fn audio_thread(rx: mpsc::Receiver<Command>, shared: Arc<Shared>, mode: StreamMo
             }
         };
 
+        if !state.handle(cmd, &shared, mode, Instant::now(), open_stream) {
+            break;
+        }
+    }
+}
+
+/// The same command handling drives the native thread and no-device tests.
+/// Only stream creation and the monotonic clock are supplied at the boundary.
+struct CaptureState<S> {
+    stream: Option<S>,
+    // With an open stream, None means actively recording, not an idle timer
+    // waiting to start. Only end/cancel (Release) can arm the warm deadline.
+    idle_since: Option<Instant>,
+}
+
+impl<S> Default for CaptureState<S> {
+    fn default() -> Self {
+        Self {
+            stream: None,
+            idle_since: None,
+        }
+    }
+}
+
+impl<S> CaptureState<S> {
+    fn handle(
+        &mut self,
+        cmd: Option<Command>,
+        shared: &Arc<Shared>,
+        mode: StreamMode,
+        now: Instant,
+        open: impl FnOnce(&Arc<Shared>) -> Result<(S, StreamFormat)>,
+    ) -> bool {
         match cmd {
             Some(Command::Ensure(reply)) => {
-                idle_since = None;
-                if let Some(active) = shared.ring.lock().unwrap().as_ref() {
-                    if stream.is_some() {
-                        let _ = reply.send(Ok(active.format));
-                        continue;
+                self.idle_since = None;
+                let existing_format = shared.ring.lock().unwrap().as_ref().map(|a| a.format);
+                if let Some(format) = existing_format.filter(|_| self.stream.is_some()) {
+                    if reply.send(Ok(format)).is_err() {
+                        self.release(shared, mode, now);
                     }
+                    return true;
                 }
-                match open_stream(&shared) {
+                // Also discard any ring left by a partially failed open.
+                close_stream(&mut self.stream, shared);
+                match open(shared) {
                     Ok((s, format)) => {
-                        stream = Some(s);
-                        let _ = reply.send(Ok(format));
+                        self.stream = Some(s);
+                        if reply.send(Ok(format)).is_err() {
+                            // begin() may have timed out while the device was
+                            // opening. No live caller owns this recording.
+                            self.release(shared, mode, now);
+                        }
                     }
                     Err(e) => {
+                        close_stream(&mut self.stream, shared);
                         warn!("failed to open input stream: {e}");
                         let _ = reply.send(Err(e.to_string()));
                     }
                 }
             }
             Some(Command::Release) => {
-                close_stream(&mut stream, &shared);
-                idle_since = None;
+                self.release(shared, mode, now);
             }
             Some(Command::Shutdown) => {
-                close_stream(&mut stream, &shared);
-                break;
+                close_stream(&mut self.stream, shared);
+                return false;
             }
             None => {
                 // 逾時喚醒: 檢查 warm 模式的閒置關閉。
-                match idle_since {
-                    None => idle_since = Some(std::time::Instant::now()),
-                    Some(t) if t.elapsed() >= WARM_IDLE_TIMEOUT => {
+                match self.idle_since {
+                    Some(t)
+                        if mode == StreamMode::Warm
+                            && now.duration_since(t) >= WARM_IDLE_TIMEOUT =>
+                    {
                         debug!("closing input stream after idle timeout");
-                        close_stream(&mut stream, &shared);
-                        idle_since = None;
+                        close_stream(&mut self.stream, shared);
+                        self.idle_since = None;
                     }
-                    Some(_) => {}
+                    _ => {}
                 }
             }
         }
+        true
+    }
 
-        // 有命令進來就重置閒置計時。
-        if stream.is_some() && idle_since.is_none() {
-            idle_since = Some(std::time::Instant::now());
+    fn release(&mut self, shared: &Arc<Shared>, mode: StreamMode, now: Instant) {
+        if mode == StreamMode::Warm && self.stream.is_some() {
+            // SessionManager serializes begin/end/cancel and checks session
+            // identity before release, so old sessions cannot release a new
+            // recording. Repeated Release does not extend an existing grace.
+            self.idle_since.get_or_insert(now);
+        } else {
+            close_stream(&mut self.stream, shared);
+            self.idle_since = None;
         }
     }
 }
 
-fn close_stream(stream: &mut Option<cpal::Stream>, shared: &Arc<Shared>) {
-    if stream.take().is_some() {
-        *shared.ring.lock().unwrap() = None;
-    }
+fn close_stream<S>(stream: &mut Option<S>, shared: &Arc<Shared>) {
+    // Drop the backend before removing the ring, including failed-open cleanup.
+    drop(stream.take());
+    *shared.ring.lock().unwrap() = None;
 }
 
 fn open_stream(shared: &Arc<Shared>) -> Result<(cpal::Stream, StreamFormat)> {
@@ -270,7 +315,7 @@ fn open_stream(shared: &Arc<Shared>) -> Result<(cpal::Stream, StreamFormat)> {
         "opening input stream"
     );
 
-    // 緩衝區必須容納 pre-roll 與整段錄音的重疊需求; 取 SDD 指定的 30 秒。
+    // 容納 60 秒錄音上限加 pre-roll；RING_SECONDS 為 61 秒。
     {
         let mut guard = shared.ring.lock().unwrap();
         *guard = Some(ActiveRing {
@@ -365,4 +410,243 @@ where
 /// 錄音長度上限檢查 (SDD §4.4)。
 pub fn exceeds_max_duration(recording: &Recording) -> bool {
     recording.duration_secs() > MAX_RECORDING_SECONDS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // No CPAL/device calls. Tests drive the real command handler and ring with
+    // a supplied monotonic clock; public begin/end/cancel use their real channel.
+    struct Harness {
+        state: CaptureState<()>,
+        capture: AudioCapture,
+        rx: mpsc::Receiver<Command>,
+        origin: Instant,
+        now: Instant,
+    }
+    fn fake_open(shared: &Arc<Shared>) -> Result<((), StreamFormat)> {
+        let format = StreamFormat {
+            sample_rate: 10,
+            channels: 1,
+        };
+        *shared.ring.lock().unwrap() = Some(ActiveRing {
+            buffer: RingBuffer::with_duration(format.sample_rate, RING_SECONDS),
+            format,
+        });
+        Ok(((), format))
+    }
+    impl Harness {
+        fn new(mode: StreamMode) -> Self {
+            let (tx, rx) = mpsc::channel();
+            let now = Instant::now();
+            Self {
+                state: CaptureState::default(),
+                rx,
+                origin: now,
+                now,
+                capture: AudioCapture {
+                    tx,
+                    shared: Arc::new(Shared {
+                        ring: Mutex::new(None),
+                    }),
+                    mode,
+                    thread: None,
+                },
+            }
+        }
+        fn handle(&mut self, cmd: Option<Command>) {
+            assert!(self.state.handle(
+                cmd,
+                &self.capture.shared,
+                self.capture.mode,
+                self.now,
+                fake_open
+            ));
+        }
+        fn begin(&mut self) -> RecordingMark {
+            let capture = &self.capture;
+            let state = &mut self.state;
+            let rx = &self.rx;
+            let now = self.now;
+            std::thread::scope(|scope| {
+                let task = scope.spawn(|| capture.begin());
+                let cmd = rx.recv().unwrap();
+                assert!(state.handle(Some(cmd), &capture.shared, capture.mode, now, fake_open));
+                task.join().unwrap().unwrap()
+            })
+        }
+        fn tick(&mut self, seconds: u64) {
+            self.now = self.origin + Duration::from_secs(seconds);
+            self.handle(None);
+        }
+        fn release_pending(&mut self) {
+            let command = self
+                .rx
+                .try_recv()
+                .expect("end/cancel must notify audio thread");
+            self.handle(Some(command));
+        }
+        fn is_open(&self) -> bool {
+            self.state.stream.is_some() && self.capture.shared.ring.lock().unwrap().is_some()
+        }
+    }
+
+    #[test]
+    fn active_warm_recording_keeps_stream_and_all_samples_after_35_seconds() {
+        let mut h = Harness::new(StreamMode::Warm);
+        let mark = h.begin();
+        let samples: Vec<_> = (0..350).map(|i| i as f32).collect();
+        h.capture
+            .shared
+            .ring
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .buffer
+            .push(&samples);
+        h.tick(35);
+        assert!(
+            h.is_open(),
+            "active recording must not be closed by the warm idle timer"
+        );
+        h.tick(65); // The session layer owns the recording length limit.
+        assert!(h.is_open());
+        let recording = h.capture.end(mark);
+        assert_eq!(recording.samples, samples);
+    }
+
+    #[test]
+    fn warm_end_starts_the_30_second_grace_at_end_not_begin() {
+        let mut h = Harness::new(StreamMode::Warm);
+        let mark = h.begin();
+        h.tick(20);
+        h.capture.end(mark);
+        h.release_pending();
+        h.tick(49);
+        assert!(h.is_open());
+        h.tick(50);
+        assert!(!h.is_open());
+    }
+
+    #[test]
+    fn warm_begin_reuses_stream_and_cancels_the_previous_idle_deadline() {
+        let mut h = Harness::new(StreamMode::Warm);
+        let first = h.begin();
+        h.tick(10);
+        h.capture.end(first);
+        h.release_pending();
+        h.tick(39);
+        let next = h.begin();
+        h.tick(75);
+        assert!(
+            h.is_open(),
+            "old idle deadline must not close a new recording"
+        );
+        h.capture.end(next);
+        h.release_pending();
+        h.tick(104);
+        assert!(h.is_open());
+        h.tick(105);
+        assert!(!h.is_open());
+    }
+
+    #[test]
+    fn warm_cancel_starts_grace_and_duplicate_release_does_not_extend_it() {
+        let mut h = Harness::new(StreamMode::Warm);
+        h.begin();
+        h.tick(20);
+        h.capture.cancel();
+        h.release_pending();
+        h.tick(40);
+        h.capture.cancel();
+        h.release_pending();
+        h.tick(49);
+        assert!(h.is_open());
+        h.tick(50);
+        assert!(!h.is_open());
+    }
+
+    #[test]
+    fn strict_end_and_cancel_close_immediately_without_idle_grace() {
+        for cancel in [false, true] {
+            let mut h = Harness::new(StreamMode::Strict);
+            let mark = h.begin();
+            h.tick(35);
+            assert!(h.is_open());
+            if cancel {
+                h.capture.cancel();
+            } else {
+                h.capture.end(mark);
+            }
+            h.release_pending();
+            assert!(!h.is_open());
+            assert!(h.state.idle_since.is_none());
+        }
+    }
+
+    #[test]
+    fn abandoned_ensure_reply_releases_new_and_reused_streams() {
+        for mode in [StreamMode::Warm, StreamMode::Strict] {
+            for reuse in [false, true] {
+                let mut h = Harness::new(mode);
+                if reuse {
+                    h.begin();
+                }
+                let (tx, rx) = mpsc::channel();
+                drop(rx); // begin() timed out, so nobody owns the new recording.
+                h.handle(Some(Command::Ensure(tx)));
+                if mode == StreamMode::Warm {
+                    h.tick(29);
+                    assert!(h.is_open());
+                    h.tick(30);
+                }
+                assert!(!h.is_open());
+            }
+        }
+    }
+
+    #[test]
+    fn failed_open_cleans_partial_ring_and_next_begin_can_recover() {
+        let mut h = Harness::new(StreamMode::Warm);
+        let (tx, rx) = mpsc::channel();
+        assert!(h.state.handle(
+            Some(Command::Ensure(tx)),
+            &h.capture.shared,
+            StreamMode::Warm,
+            h.now,
+            |shared| {
+                fake_open(shared)?;
+                anyhow::bail!("controlled device open failure")
+            }
+        ));
+        assert!(rx.recv().unwrap().is_err());
+        assert!(!h.is_open());
+        assert!(h.capture.shared.ring.lock().unwrap().is_none());
+        assert!(h.state.idle_since.is_none());
+        h.begin();
+        h.tick(35);
+        assert!(h.is_open());
+    }
+
+    #[test]
+    fn shutdown_closes_active_or_idle_stream() {
+        for release in [false, true] {
+            let mut h = Harness::new(StreamMode::Warm);
+            h.begin();
+            if release {
+                h.capture.cancel();
+                h.release_pending();
+            }
+            assert!(!h.state.handle(
+                Some(Command::Shutdown),
+                &h.capture.shared,
+                StreamMode::Warm,
+                h.now,
+                fake_open
+            ));
+            assert!(!h.is_open());
+        }
+    }
 }

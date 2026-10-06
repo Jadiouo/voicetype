@@ -1,0 +1,347 @@
+--- a/sherpa-onnx/csrc/offline-recognizer-funasr-nano-impl.cc
++++ b/sherpa-onnx/csrc/offline-recognizer-funasr-nano-impl.cc
+@@ -218,7 +218,10 @@
+ 
+ std::unique_ptr<OfflineStream> OfflineRecognizerFunASRNanoImpl::CreateStream()
+     const {
+-  return std::make_unique<OfflineStream>(config_.feat_config);
++  auto stream = std::make_unique<OfflineStream>(config_.feat_config);
++  stream->SetOption("voicetype.nano.integrity_version", "1");
++  stream->SetOption("voicetype.nano.stop_reason", "unknown");
++  return stream;
+ }
+ 
+ // Initialize feature extraction configuration for FunASR-nano.
+@@ -239,6 +242,9 @@
+   int32_t lfr_window_shift = model_->LfrWindowShift();
+   int32_t in_feat_dim = config_.feat_config.feature_dim;
+   int32_t in_num_frames = static_cast<int32_t>(in.size() / in_feat_dim);
++  // C++ negative division truncates toward zero; 2..6 frames cannot fill
++  // the seven-frame window and must not reach the copy below.
++  if (in_num_frames < lfr_window_size) return {};
+   int32_t out_num_frames =
+       (in_num_frames - lfr_window_size) / lfr_window_shift + 1;
+   if (out_num_frames <= 0) return {};
+@@ -447,12 +453,22 @@
+ 
+ OfflineRecognitionResult OfflineRecognizerFunASRNanoImpl::GenerateText(
+     Ort::Value encoder_out, const std::string &system_prompt,
+-    const std::string &user_prompt) const {
++    const std::string &user_prompt, std::string *stop_reason) const {
++  *stop_reason = "unknown";
+   OfflineRecognitionResult result;
+   auto memory_info =
+       Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
+   const auto &funasr_config = config_.model_config.funasr_nano;
+-  auto enc_shape = encoder_out.GetTensorTypeAndShapeInfo().GetShape();
++  auto enc_info = encoder_out.GetTensorTypeAndShapeInfo();
++  auto enc_shape = enc_info.GetShape();
++  if (enc_shape.size() != 3 || enc_shape[0] != 1 || enc_shape[1] <= 0 ||
++      enc_shape[2] <= 0 || enc_shape[1] > std::numeric_limits<int32_t>::max() ||
++      enc_shape[2] > std::numeric_limits<int32_t>::max() ||
++      (enc_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
++       enc_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)) {
++    *stop_reason = "invalid_model_output";
++    return result;
++  }
+   int32_t audio_token_len = static_cast<int32_t>(enc_shape[1]);
+   int32_t hidden_size = static_cast<int32_t>(enc_shape[2]);
+   int32_t fbank_beg_idx = 0;
+@@ -460,6 +476,10 @@
+   std::vector<int64_t> source_ids =
+       BuildSourceIds(system_prompt, user_prompt, audio_token_len, fbank_beg_idx,
+                      fake_token_len);
++  if (source_ids.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++    *stop_reason = "invalid_model_output";
++    return result;
++  }
+   int32_t context_len = static_cast<int32_t>(source_ids.size());
+ 
+   // Create KV cache buffer [B, max_total_len, kv_h, hd].
+@@ -470,92 +490,18 @@
+   int32_t max_seq_len = model_->GetMaxTotalLen();
+   if (max_seq_len <= 0) {
+     SHERPA_ONNX_LOGE("Invalid max_seq_len=%d", max_seq_len);
++    *stop_reason = "invalid_model_output";
+     result.text = "";
+     return result;
+   }
+ 
+-  // If context exceeds KV capacity: prioritize truncating audio placeholders
+-  // (keep prompt scaffold intact).
+-  if (context_len > max_seq_len) {
+-    int32_t before_len = fbank_beg_idx;
+-    int32_t after_len = context_len - before_len - fake_token_len;
+-    if (after_len < 0) after_len = 0;
+-
+-    int32_t keep_audio = max_seq_len - before_len - after_len;
+-    if (keep_audio < 0) {
+-      SHERPA_ONNX_LOGE(
+-          "Context_len (%d) too large for KV capacity (%d) and prompts already "
+-          "exceed capacity. "
+-          "Falling back to keep last %d tokens.",
+-          context_len, max_seq_len, max_seq_len);
+-      SHERPA_ONNX_LOGE(
+-          "The model max_total_len (%d) limits total context (prompt + audio "
+-          "tokens). Suggestions:",
+-          max_seq_len);
+-      SHERPA_ONNX_LOGE(
+-          "  1) Reduce hotwords: fewer or shorter hotwords shorten the "
+-          "prompt.");
+-      SHERPA_ONNX_LOGE(
+-          "  2) Shorten audio: use shorter clips so audio_token_len "
+-          "decreases.");
+-      SHERPA_ONNX_LOGE(
+-          "  3) Use a model with larger max_total_len: export with "
+-          "max_total_len>%d via scripts in "
+-          "https://github.com/Wasser1462/FunASR-nano-onnx , or download "
+-          "from https://modelscope.cn/models/zengshuishui/FunASR-nano-onnx/",
+-          max_seq_len);
+-      // Fallback: keep the suffix.
+-      source_ids.erase(source_ids.begin(), source_ids.end() - max_seq_len);
+-      // Audio alignment is no longer controllable, skip injecting audio
+-      // embeddings.
+-      fbank_beg_idx = -1;
+-      fake_token_len = 0;
+-      context_len = static_cast<int32_t>(source_ids.size());
+-    } else {
+-      if (keep_audio > audio_token_len) keep_audio = audio_token_len;
+-
+-      SHERPA_ONNX_LOGE(
+-          "Context_len (%d) exceeds KV capacity (%d). Truncating audio "
+-          "placeholders: "
+-          "audio_token_len=%d -> keep_audio=%d (before=%d after=%d).",
+-          context_len, max_seq_len, audio_token_len, keep_audio, before_len,
+-          after_len);
+-      SHERPA_ONNX_LOGE(
+-          "The model max_total_len (%d) limits total context (prompt + audio "
+-          "tokens). Suggestions:",
+-          max_seq_len);
+-      SHERPA_ONNX_LOGE(
+-          "  1) Reduce hotwords: fewer or shorter hotwords shorten the "
+-          "prompt.");
+-      SHERPA_ONNX_LOGE(
+-          "  2) Shorten audio: use shorter clips so audio_token_len "
+-          "decreases.");
+-      SHERPA_ONNX_LOGE(
+-          "  3) Use a model with larger max_total_len: export with "
+-          "max_total_len>%d via scripts in "
+-          "https://github.com/Wasser1462/FunASR-nano-onnx , or download "
+-          "from https://modelscope.cn/models/zengshuishui/FunASR-nano-onnx/",
+-          max_seq_len);
+-
+-      // Rebuild ids_before/ids_after using slices.
+-      std::vector<int64_t> ids_before(source_ids.begin(),
+-                                      source_ids.begin() + before_len);
+-      std::vector<int64_t> ids_after(source_ids.end() - after_len,
+-                                     source_ids.end());
+-
+-      int64_t pad_id = tokenizer_->GetPadTokenId();
+-      if (pad_id < 0) pad_id = tokenizer_->GetEosTokenId();
+-
+-      source_ids.clear();
+-      source_ids.reserve(before_len + keep_audio + after_len);
+-      source_ids.insert(source_ids.end(), ids_before.begin(), ids_before.end());
+-      source_ids.insert(source_ids.end(), keep_audio, pad_id);
+-      source_ids.insert(source_ids.end(), ids_after.begin(), ids_after.end());
+-
+-      fake_token_len = keep_audio;
+-      fbank_beg_idx = before_len;
+-      context_len = static_cast<int32_t>(source_ids.size());
+-    }
++  // Never silently discard encoder frames or rebuild a shortened audio prompt.
++  // A complete result requires every audio embedding and a generated terminator.
++  if (context_len > max_seq_len || fbank_beg_idx < 0 ||
++      fake_token_len != audio_token_len || fbank_beg_idx > context_len ||
++      audio_token_len > context_len - fbank_beg_idx) {
++    *stop_reason = "audio_truncated";
++    return result;
+   }
+ 
+   // Get text embeddings for the prompt tokens
+@@ -570,6 +516,12 @@
+ 
+   auto te_info = text_embeds.GetTensorTypeAndShapeInfo();
+   const auto te_type = te_info.GetElementType();
++  if (te_info.GetShape() != std::vector<int64_t>{1, context_len, hidden_size} ||
++      (te_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
++       te_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)) {
++    *stop_reason = "invalid_model_output";
++    return result;
++  }
+   const bool te_fp16 = (te_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16);
+ 
+   // Allocate inputs_embeds only for prefill (context_len * hidden_size).
+@@ -620,6 +572,7 @@
+       }
+     } else {
+       SHERPA_ONNX_LOGE("encoder_out elem_type=%d not supported", (int)enc_et);
++      *stop_reason = "invalid_model_output";
+       result.text = "";
+       return result;
+     }
+@@ -644,11 +597,15 @@
+   const int32_t max_new_tokens = funasr_config.max_new_tokens;
+ 
+   bool is_first_step = true;
++  std::string completion_reason = "max_new_tokens";
+ 
+   for (int32_t step = 0; step < max_new_tokens; ++step) {
+     // valid_len represents the mask_len for the next decode step (= past +
+     // current).
+-    if (valid_len >= max_seq_len) break;
++    if (valid_len >= max_seq_len) {
++      completion_reason = "context_limit";
++      break;
++    }
+ 
+     Ort::Value logits{nullptr};
+ 
+@@ -697,6 +654,12 @@
+ 
+       Ort::Value next_embed = model_->ForwardEmbedding(std::move(one_tensor));
+       auto ne_info = next_embed.GetTensorTypeAndShapeInfo();
++      if (ne_info.GetShape() != std::vector<int64_t>{1, 1, hidden_size} ||
++          (ne_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
++           ne_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)) {
++        *stop_reason = "invalid_model_output";
++        return result;
++      }
+       bool ne_fp16 =
+           (ne_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16);
+ 
+@@ -740,12 +703,20 @@
+     auto log_shape = log_info.GetShape();
+ 
+     // logits are [B, S, V]. Always pick the last available step.
+-    if (log_shape.size() < 3) {
++    if (log_shape.size() != 3 || log_shape[0] != 1) {
+       SHERPA_ONNX_LOGE("Unexpected logits rank=%zu", log_shape.size());
++      *stop_reason = "invalid_model_output";
+       result.text = "";
+       return result;
+     }
+ 
++    if (log_shape[1] > std::numeric_limits<int32_t>::max() ||
++        log_shape[2] > std::numeric_limits<int32_t>::max() ||
++        (log_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
++         log_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)) {
++      *stop_reason = "invalid_model_output";
++      return result;
++    }
+     int32_t time_dim = static_cast<int32_t>(log_shape[1]);
+     int32_t vocab_size = static_cast<int32_t>(log_shape[2]);
+     if (time_dim <= 0 || vocab_size <= 0) {
+@@ -753,6 +724,7 @@
+                        static_cast<int32_t>(log_shape[0]),
+                        static_cast<int32_t>(log_shape[1]),
+                        static_cast<int32_t>(log_shape[2]));
++      *stop_reason = "invalid_model_output";
+       result.text = "";
+       return result;
+     }
+@@ -779,7 +751,10 @@
+         last_logits, log_fp16, vocab_size, funasr_config.temperature,
+         funasr_config.top_p);
+ 
+-    if (next_id == eos_id || next_id == im_end_id) break;
++    if (next_id == eos_id || next_id == im_end_id) {
++      completion_reason = "eos";
++      break;
++    }
+ 
+     generated_ids.push_back(next_id);
+ 
+@@ -789,6 +764,11 @@
+     valid_len += 1;
+   }
+ 
++  // Incomplete hypotheses must not escape as apparently valid result text.
++  if (completion_reason != "eos") {
++    *stop_reason = completion_reason;
++    return result;
++  }
+   result.text = tokenizer_->Decode(generated_ids);
+ 
+   if (funasr_config.itn) {
+@@ -861,6 +841,7 @@
+     }
+   }
+ 
++  *stop_reason = completion_reason;
+   return result;
+ }
+ 
+@@ -868,11 +849,29 @@
+ // Applies LFR processing, runs encoder, and generates text for each stream.
+ void OfflineRecognizerFunASRNanoImpl::DecodeStreams(OfflineStream **ss,
+                                                     int32_t n) const {
++  // Reset the whole batch before any feature/model operation can throw. A later
++  // stream must not retain an earlier successful status when an earlier one fails.
++  for (int32_t i = 0; i != n; ++i) {
++    ss[i]->SetOption("voicetype.nano.stop_reason", "unknown");
++    ss[i]->SetResult(OfflineRecognitionResult{});
++  }
+   auto memory_info =
+       Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
+   const auto &funasr_config = config_.model_config.funasr_nano;
+   for (int32_t i = 0; i != n; ++i) {
+     std::vector<float> f = ss[i]->GetFrames();
++    const int32_t feature_dim = config_.feat_config.feature_dim;
++    const int32_t lfr_window_size = model_->LfrWindowSize();
++    if (feature_dim <= 0 || lfr_window_size <= 0 || model_->LfrWindowShift() <= 0) {
++      ss[i]->SetOption("voicetype.nano.stop_reason", "invalid_model_output");
++      continue;
++    }
++    if (!f.empty() && f.size() / feature_dim < static_cast<size_t>(lfr_window_size)) {
++      // Insufficient features do not prove silence; do not learn/commit an
++      // empty success for positive input that could not be encoded.
++      ss[i]->SetOption("voicetype.nano.stop_reason", "input_too_short");
++      continue;
++    }
+     f = ApplyLFR(f);
+     int32_t num_frames = static_cast<int32_t>(
+         f.size() / (config_.feat_config.feature_dim * model_->LfrWindowSize()));
+@@ -880,6 +879,7 @@
+       OfflineRecognitionResult r;
+       r.text = "";
+       ss[i]->SetResult(r);
++      ss[i]->SetOption("voicetype.nano.stop_reason", "no_speech");
+       continue;
+     }
+ 
+@@ -889,6 +889,7 @@
+       // LLM decoder into hallucinating text for silent audio.
+       OfflineRecognitionResult r;
+       ss[i]->SetResult(r);
++      ss[i]->SetOption("voicetype.nano.stop_reason", "no_speech");
+       continue;
+     }
+ 
+@@ -924,10 +925,13 @@
+                        user_prompt_dyn.c_str());
+     }
+ 
++    std::string stop_reason = "unknown";
+     OfflineRecognitionResult r = GenerateText(
+-        std::move(encoder_out), funasr_config.system_prompt, user_prompt_dyn);
++        std::move(encoder_out), funasr_config.system_prompt, user_prompt_dyn,
++        &stop_reason);
+ 
+     ss[i]->SetResult(r);
++    ss[i]->SetOption("voicetype.nano.stop_reason", stop_reason);
+   }
+ }
+ 
+--- a/sherpa-onnx/csrc/offline-recognizer-funasr-nano-impl.h
++++ b/sherpa-onnx/csrc/offline-recognizer-funasr-nano-impl.h
+@@ -67,7 +67,8 @@
+ 
+   OfflineRecognitionResult GenerateText(Ort::Value encoder_out,
+                                        const std::string &system_prompt,
+-                                       const std::string &user_prompt) const;
++                                       const std::string &user_prompt,
++                                       std::string *stop_reason) const;
+ 
+   OfflineRecognizerConfig config_;
+   std::unique_ptr<OfflineFunASRNanoModel> model_;

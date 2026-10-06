@@ -4,6 +4,7 @@ private/
 
 # 建置產出
 build/
+/build-public-addon/
 target/
 
 # 模型檔 (數百 MB, 從 HuggingFace 取得 —— 見 README)

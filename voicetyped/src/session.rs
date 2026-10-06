@@ -23,15 +23,15 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::asr::{Transcriber, Utterance};
+use crate::asr::Transcriber;
 use crate::assistant::{Assistant, CorrectionAttributionError};
 use crate::audio::capture::{exceeds_max_duration, RecordingMark};
 use crate::audio::{resample, AudioCapture, MAX_RECORDING_SECONDS};
 use crate::ipc::{Handler, Responder};
 use crate::personalization::{ContextSnapshot, LearningOutcome, LearningStatus, RejectionReason};
-use crate::postproc::{strip_tags, Traditional, Vocab};
+use crate::postproc::{Traditional, Vocab};
 use crate::protocol::{ClientMessage, ErrorCode, ServerMessage};
-use crate::vad::{self, SpeechDetector, VadConfig};
+use crate::vad::AudioPreparation;
 
 /// 從音訊到可 commit 文字的三個階段 (SDD §4.4 / §4.1 / §4.6)。
 ///
@@ -40,14 +40,15 @@ use crate::vad::{self, SpeechDetector, VadConfig};
 ///
 /// 兩個 `Option` 的語意不同。`vad` 為 `None` 是建置沒有引擎 (VAD 權重
 /// 在同一個 GGUF 裡); `traditional` 為 `None` 是系統缺 OpenCC 資料檔,
-/// 此時拒絕送出文字，避免將缺少繁體轉換當作校字成功。
+/// 此時正式輸出會回傳可見錯誤，不得默默交付簡體字。
 pub struct Pipeline {
     pub asr: Arc<dyn Transcriber>,
-    pub vad: Option<Arc<dyn SpeechDetector>>,
+    pub vad: Option<Arc<AudioPreparation>>,
     pub traditional: Option<Arc<Traditional>>,
     /// §4.6 ③。空表等於這一階不做事, 不需要 Option。
     pub vocab: Arc<Vocab>,
     pub assistant: Arc<Assistant>,
+    pub review: Option<Arc<crate::review::Collector>>,
 }
 
 /// 內部命令。比 `ClientMessage` 多一個逾時, 少一個 ping (ping 不需要
@@ -157,7 +158,11 @@ impl Handler for SessionManager {
                 }
             }
             ClientMessage::Stop { session } => Command::Stop { session, responder },
-            ClientMessage::Cancel { session } => Command::Cancel { session },
+            ClientMessage::Cancel { session } => {
+                // Also invalidate a released recording whose ASR is still running.
+                let _ = self.latest.compare_exchange(session, 0, Ordering::SeqCst, Ordering::SeqCst);
+                Command::Cancel { session }
+            }
             ClientMessage::FallbackClipboard { text } => Command::Fallback { text, responder },
             message => Command::Control { message, responder },
         };
@@ -217,11 +222,13 @@ async fn run(
                 };
 
                 let desktop = Arc::new(Mutex::new(String::new()));
-                let desktop_out = desktop.clone();
-                tokio::task::spawn_blocking(move || {
-                    *desktop_out.lock().unwrap_or_else(|e| e.into_inner()) =
-                        crate::assistant::desktop_context();
-                });
+                if crate::assistant::desktop_context_enabled() {
+                    let desktop_out = desktop.clone();
+                    tokio::task::spawn_blocking(move || {
+                        *desktop_out.lock().unwrap_or_else(|e| e.into_inner()) =
+                            crate::assistant::desktop_context();
+                    });
+                }
                 debug!(session, program = %program, "recording");
                 active = Some(Active {
                     session,
@@ -342,7 +349,7 @@ fn release_free_pages() {}
 /// 推論管線的結果。`NoSpeech` 與「引擎回空字串」是不同的事:
 /// 前者代表音訊裡根本沒有語音, 引擎連跑都不該跑。
 enum Outcome {
-    Text(String),
+    Text { text: String, review_audio: Option<Vec<f32>> },
     NoSpeech,
 }
 
@@ -414,22 +421,28 @@ async fn finish(
     let traditional = pipeline.traditional.clone();
     let vocab = pipeline.vocab.clone();
     let assistant = pipeline.assistant.clone();
+    let review = pipeline.review.clone();
     let latest = latest.clone();
     tokio::spawn(async move {
         let started = Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             let mut samples = resample::to_target_rate(&recording.samples, recording.sample_rate)?;
+            // Only selected clips retain a copy, before VAD trims the input.
+            // No filesystem work or blocking queue operation on this path.
+            let review_audio = pipeline.review.as_ref()
+                .filter(|collector| collector.wants(samples.len() as f32 / 16_000.0))
+                .map(|_| samples.clone());
 
             if let Some(detector) = pipeline.vad.as_deref() {
                 let t = Instant::now();
-                match vad::trim(detector, &samples, &VadConfig::default()) {
+                match detector.prepare_live(&samples) {
                     Ok(Some(speech)) => {
                         debug!(
                             session,
                             vad_ms = t.elapsed().as_millis() as u64,
                             before = samples.len(),
                             after = speech.len(),
-                            "trimmed silence"
+                            "audio preparation accepted speech"
                         );
                         // truncate + drain 而不是 to_vec: 少一次 3.8MB
                         // (60 秒上限) 的配置。
@@ -444,19 +457,15 @@ async fn finish(
                         );
                         return Ok(Outcome::NoSpeech);
                     }
-                    // VAD 掛掉不該讓聽寫整個失敗 —— 未修剪的音訊仍然
-                    // 是可辨識的, 只是失去空錄音防護。
-                    Err(e) => warn!(session, "VAD failed, transcribing untrimmed: {e}"),
+                    // Nano requires a working speech gate; never decode unprotected audio.
+                    // Legacy SV fallback is handled inside AudioPreparation::prepare_live.
+                    Err(e) => return Err(anyhow::anyhow!("語音偵測失敗，未送出文字：{e}")),
                 }
             }
 
-            pipeline
-                .asr
-                .transcribe(Utterance {
-                    samples: &samples,
-                    language: None,
-                })
-                .map(Outcome::Text)
+            crate::asr::policy::transcribe(pipeline.asr.as_ref(), &samples)
+                .map(|text| text.map_or(Outcome::NoSpeech,
+                    |text| Outcome::Text { text, review_audio }))
         })
         .await;
 
@@ -479,17 +488,8 @@ async fn finish(
                     "no speech detected",
                 ));
             }
-            Ok(Ok(Outcome::Text(raw))) => {
-                let stripped = strip_tags(&raw);
-                if stripped.is_no_speech() {
-                    responder.send(ServerMessage::error(
-                        Some(session),
-                        ErrorCode::EmptyResult,
-                        "no speech detected",
-                    ));
-                    return;
-                }
-                let text = stripped.text;
+            Ok(Ok(Outcome::Text { text, review_audio })) => {
+                let asr_text = review_audio.as_ref().map(|_| text.clone());
                 let assistant_task = assistant.clone();
                 let context_task = context.clone();
                 let processed = tokio::task::spawn_blocking(move || {
@@ -497,7 +497,8 @@ async fn finish(
                         traditional.as_deref(), &vocab, &assistant_task,
                         &text, &context_task, None,
                     )
-                }).await;
+                })
+                .await;
                 if latest.load(Ordering::SeqCst) != session {
                     return;
                 }
@@ -511,7 +512,7 @@ async fn finish(
                     }
                     Err(_) => {
                         responder.send(ServerMessage::error(
-                            Some(session), ErrorCode::Internal, "text processing failed",
+                            Some(session), ErrorCode::Internal, "文字處理失敗，未送出文字",
                         ));
                         return;
                     }
@@ -522,7 +523,15 @@ async fn finish(
                     latency_ms = started.elapsed().as_millis() as u64,
                     "transcribed"
                 );
-                responder.send(ServerMessage::Result { session, text });
+                let sample = review_audio.zip(asr_text).map(|(audio, asr_text)| crate::review::Sample {
+                    audio, asr_text, output_text: text.clone(), session, latest: latest.clone(),
+                });
+                let queued = responder.try_send(ServerMessage::Result { session, text });
+                if queued {
+                    if let (Some(collector), Some(sample)) = (review, sample) {
+                        collector.submit(sample);
+                    }
+                }
             }
             Ok(Err(e)) => {
                 warn!(session, "transcription failed: {e}");
@@ -640,6 +649,9 @@ fn control(pipeline: &Pipeline, message: ClientMessage, responder: Responder) {
             program,
         } => pipeline.assistant.learn(&wrong, &right, &program),
         ClientMessage::ListLearned => pipeline.assistant.list(),
+        ClientMessage::ReviewStatus => Ok(pipeline.review.as_ref()
+            .map(|collector| collector.status())
+            .unwrap_or_else(|| json!({"supported": false, "accepting": false}))),
         ClientMessage::ForgetLearned { wrong, context_id } => {
             pipeline.assistant.forget(&wrong, context_id.as_deref())
         }
