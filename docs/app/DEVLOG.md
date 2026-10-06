@@ -445,3 +445,14 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   Current asset storage takes a prepared source directory; it is not yet a GUI
   downloader. Frontend migration/rollback, shared vocabulary/review/CSC, Google
   and Windows speech remain. Keep the full goal active.
+
+- Asset source `f17c6f6` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37546329991)
+  and [Linux/Windows desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37546330011).
+  The native Windows and Linux logs each explicitly show all five asset cases
+  passing. Both installed UI reports pass eight checks with speech untested.
+  Downloaded packages match their source, sizes and SHA-256: Linux 4,453,498 bytes,
+  `304c79c9a04b0b26b4ee11e5510dbccd7d4115852af3117ad398a3ca705dd4b2`;
+  Windows 2,155,217 bytes,
+  `a6c302d3e6c2267f09928fa89e8faf481df4b9693c1b7b7e3152f8974f11185b`.
+  All 185 remote source blobs were independently matched to the local commit.
+  This verification does not change the remaining setup/speech scope above.
