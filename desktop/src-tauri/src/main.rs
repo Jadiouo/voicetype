@@ -88,7 +88,16 @@ fn main() {
         }))
         .setup(|app| {
             // Distinct preview directory: never change the running dictation setup.
-            let config_dir = app.path().app_config_dir()?;
+            let config_dir = match std::env::var_os("VOICETYPE_PREVIEW_CONFIG_DIR") {
+                Some(path) => {
+                    let path = PathBuf::from(path);
+                    if !path.is_absolute() {
+                        return Err("VOICETYPE_PREVIEW_CONFIG_DIR must be absolute".into());
+                    }
+                    path
+                }
+                None => app.path().app_config_dir()?,
+            };
             app.manage(DesktopState {
                 desktop: Mutex::new(Desktop {
                     app: Application::open(&config_dir),

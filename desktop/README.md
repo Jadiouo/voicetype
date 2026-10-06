@@ -44,3 +44,10 @@ The static UI is bundled locally, has no remote scripts, and cannot directly run
 shell commands or access arbitrary files. Only typed Rust commands expose settings.
 Core tests use temporary directories; no microphone, live dictation, GPU, account
 login or text injection is part of preview validation.
+
+The CI UI check runs the installer payload with a real platform WebDriver, chooses
+Google, reopens the app, and checks error/reload behavior. To use a disposable
+profile, set `VOICETYPE_PREVIEW_CONFIG_DIR` to an absolute temporary directory.
+This overrides only the preview's configuration directory; the setting is never
+used by the production dictation daemon. UI evidence is saved separately from
+installer artifacts. Neither is proof of working speech adapters.

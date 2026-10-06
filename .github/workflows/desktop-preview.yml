@@ -2,9 +2,7 @@ name: Desktop preview
 
 on:
   push:
-    branches: [feat/desktop-app]
-    paths: ["desktop/**", ".github/workflows/desktop-preview.yml"]
-  pull_request:
+    branches: [main, feat/desktop-app]
     paths: ["desktop/**", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
 
@@ -43,7 +41,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11 fonts-noto-cjk
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: desktop
@@ -53,7 +51,7 @@ jobs:
         run: cargo +stable test -p voicetype-app-core --locked
       - name: Build preview installer
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
-      - name: Inspect installer payload (Linux)
+      - name: Inspect and install preview (Linux)
         if: runner.os == 'Linux'
         run: |
           mkdir -p target/inspection
@@ -61,6 +59,8 @@ jobs:
           dpkg-deb --extract target/release/bundle/deb/*.deb target/inspection
           test -s target/inspection/usr/bin/voicetype-desktop
           test -s "target/inspection/usr/share/applications/VoiceType Preview.desktop"
+          sudo dpkg --install target/release/bundle/deb/*.deb
+          dpkg --search /usr/bin/voicetype-desktop
       - name: Inspect and install preview (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -74,6 +74,30 @@ jobs:
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
         run: python tests/artifact_manifest.py
+      - name: Install native UI driver
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: Install matching Windows WebView driver
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool --rev 8c4b34f51b45f5cf08013366d703de464ab871d1 --locked
+          msedgedriver-tool
+          $PWD.Path >> $env:GITHUB_PATH
+      - name: Exercise installed UI (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum dbus-run-session -- python3 tests/shell_smoke.py /usr/bin/voicetype-desktop
+      - name: Exercise installed UI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python tests/shell_smoke.py "$env:VOICETYPE_INSTALLED_EXE"
+      - name: Upload UI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voicetype-ui-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: desktop/target/shell-evidence/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: voicetype-preview-${{ matrix.os }}

@@ -18,6 +18,10 @@
     "shortDescription": "VoiceType desktop settings preview",
     "longDescription": "Development preview of VoiceType's cross-platform settings. Speech adapters are not connected in this build.",
     "license": "GPL-3.0-only",
+    "licenseFile": "../../LICENSE",
+    "publisher": "VoiceType contributors",
+    "homepage": "https://github.com/Jadiouo/voicetype",
+    "resources": { "../../LICENSE": "LICENSE.txt", "../README.md": "PREVIEW.md" },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "windows": { "nsis": { "installMode": "currentUser", "languages": ["TradChinese", "English"], "displayLanguageSelector": true } }
   }

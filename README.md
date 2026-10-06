@@ -10,6 +10,12 @@ Fcitx5 語音聽寫模組。全本機推論，ASR 使用 CPU；可選的文字�
 [CPU 校字](docs/CPU-SPELLING.md)及可選的[Nano CPU 引擎](docs/NANO-PREVIEW.md)。
 完整功能變更見[開發紀錄](docs/CHANGELOG.md)。錄音、模型與個人詞庫不隨程式發布。
 
+Linux／Windows 安裝版正在 [desktop/](desktop/README.md) 開發：目標是讓使用者
+選擇本機離線或 Google 官方 CLI，共用詞庫與校對。現階段是可儲存辨識偏好的
+設定預覽，**尚未接上錄音／送字，不能替代目前的聽寫服務**。
+架構、驗收與進度分別見 [SDD](docs/app/SDD.md)、[TDD](docs/app/TDD.md)、
+[App 開發日誌](docs/app/DEVLOG.md)。
+
 ---
 
 ## 用法

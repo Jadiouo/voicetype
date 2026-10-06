@@ -38,3 +38,22 @@
 - Added locked Rust/npm dependencies and Linux/Windows native packaging workflow.
   Core clippy passed; native installers and UI interaction still await CI evidence.
   No claim of complete packaged dictation or a verified Windows microphone path.
+
+## 2026-10-07 — first Linux/Windows packages built
+
+- CI run `37498271515`, source `965fd80`, succeeded on Ubuntu 24.04 and Windows
+  Server 2022 runners. Five command tests passed independently on both operating
+  systems. Linux `.deb` was extracted and its desktop entry checked; Windows NSIS
+  installer ran silently in the disposable runner and the installed `.exe` existed.
+- Downloaded the Linux artifact and verified its 4,261,590-byte package against the
+  CI SHA-256 manifest. Payload desktop command is `voicetype-desktop`; the local
+  runtime dependency check reported no missing libraries. This is package evidence,
+  not a native-window or speech test.
+- Added a real WebDriver harness for the installed shell: Local default, Google
+  selection, restart persistence, corrupt-settings error and repair/reload. Uses an
+  explicit disposable preview config directory (Windows app-data APIs do not
+  reliably honor a modified APPDATA environment). No fake Tauri commands.
+- Next CI revision adds actual Linux package installation, platform UI drivers,
+  screenshots, bundled license and preview/source documentation. UI verification
+  is pending until that workflow runs successfully. Windows 11 microphone/target
+  app acceptance remains separate from a Windows Server CI shell test.

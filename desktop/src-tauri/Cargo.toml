@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "VoiceType desktop development preview"
+authors = ["VoiceType contributors"]
+homepage = "https://github.com/Jadiouo/voicetype"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
