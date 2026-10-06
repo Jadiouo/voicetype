@@ -10,13 +10,39 @@ use tauri::{
     Manager,
 };
 use voicetype_app_core::{
+    setup::{ModelSetup, SetupStatus},
     worker::{DesktopSnapshot, DesktopWorker, RecoveryText},
     Provider,
 };
 
 struct DesktopState {
     worker: DesktopWorker,
+    models: ModelSetup,
     tray_available: AtomicBool,
+}
+
+#[tauri::command]
+fn get_model_setup(app: tauri::AppHandle) -> SetupStatus {
+    app.state::<DesktopState>().models.status()
+}
+
+#[tauri::command]
+async fn prepare_models(app: tauri::AppHandle) -> Result<SetupStatus, String> {
+    // Only dispatch/join bookkeeping runs here; HTTP, hashing and extraction
+    // stay on ModelSetup's separate thread. No webview paths or URLs accepted.
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<DesktopState>()
+            .models
+            .start()
+            .map_err(|_| "無法開始模型準備，請稍後再試。".into())
+    })
+    .await
+    .map_err(|_| "模型準備工作已中斷。".to_string())?
+}
+
+#[tauri::command]
+fn cancel_model_setup(app: tauri::AppHandle) -> SetupStatus {
+    app.state::<DesktopState>().models.cancel()
 }
 
 #[derive(serde::Serialize)]
@@ -139,8 +165,10 @@ fn main() {
                 }
                 None => app.path().app_config_dir()?,
             };
+            let model_root = config_dir.join("model-assets");
             app.manage(DesktopState {
                 worker: DesktopWorker::spawn(config_dir)?,
+                models: ModelSetup::new(model_root)?,
                 tray_available: AtomicBool::new(false),
             });
             let show = MenuItem::with_id(app, "show", "開啟 VoiceType", true, None::<&str>)?;
@@ -173,7 +201,10 @@ fn main() {
             refresh_providers,
             get_recovery,
             dismiss_recovery,
-            cancel_dictation
+            cancel_dictation,
+            get_model_setup,
+            prepare_models,
+            cancel_model_setup
         ])
         .build(tauri::generate_context!())
         .expect("VoiceType could not start")
@@ -183,6 +214,9 @@ fn main() {
                 // process ends. Parent-death cleanup also covers abrupt exits.
                 if app.state::<DesktopState>().worker.shutdown().is_err() {
                     eprintln!("VoiceType worker could not finish clean shutdown");
+                }
+                if app.state::<DesktopState>().models.shutdown().is_err() {
+                    eprintln!("VoiceType model setup could not finish clean shutdown");
                 }
             }
         });

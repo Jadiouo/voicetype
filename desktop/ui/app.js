@@ -164,3 +164,75 @@ reload.addEventListener('click', () => command('reload_settings'));
 check.addEventListener('click', () => command('refresh_providers'));
 cancel.addEventListener('click', () => command('cancel_dictation'));
 command('get_settings');
+
+// Independent setup status/commands: downloads never occupy the dictation
+// command queue, and setup errors must not hide retained dictation text.
+const modelStatus = document.querySelector('#model-status');
+const modelProgress = document.querySelector('#model-progress');
+const prepareModels = document.querySelector('#prepare-models');
+const cancelModels = document.querySelector('#cancel-models');
+let modelBusy = false;
+let modelRevision = 0;
+let modelPollBusy = false;
+function renderModels(view) {
+  const labels = {
+    not_checked: '尚未檢查模型。準備完成後可供本機引擎使用。',
+    checking_installed: '正在檢查已安裝的模型…',
+    downloading: '正在下載模型…', checking_download: '正在核對下載檔…',
+    extracting: '正在解壓縮模型…', installing: '正在安裝及核對模型…',
+    installed: '模型已通過完整檢查。辨識引擎尚待接入 App。',
+    cancelled: '已取消準備。已完成的模型與原有資料仍保留。',
+    failed: view.error || '模型準備未完成，請檢查網路與可用空間後重試。',
+  };
+  const megabytes = count => (count / 1_000_000).toFixed(1);
+  let detail = '';
+  if (view.busy && view.total_bytes) {
+    detail = view.phase === 'extracting' ? ` 已處理 ${megabytes(view.completed_bytes)} MB`
+      : ` ${megabytes(view.completed_bytes)} / ${megabytes(view.total_bytes)} MB`;
+  }
+  modelStatus.textContent = view.cancel_requested ? '正在取消準備並清理未完成檔案…' : (labels[view.phase] || '模型狀態未知，請重新檢查。') + detail;
+  prepareModels.disabled = modelBusy || view.busy;
+  cancelModels.hidden = !view.busy;
+  cancelModels.disabled = modelBusy || view.cancel_requested;
+  modelProgress.hidden = !view.busy;
+  if (view.total_bytes && view.phase !== 'extracting') {
+    modelProgress.max = view.total_bytes;
+    modelProgress.value = Math.min(view.completed_bytes, view.total_bytes);
+  } else {
+    modelProgress.removeAttribute('value');
+  }
+}
+async function modelCommand(name) {
+  if (modelBusy) return;
+  modelBusy = true;
+  modelRevision++;
+  prepareModels.disabled = true;
+  cancelModels.disabled = true;
+  try {
+    const view = await window.__TAURI__.core.invoke(name);
+    modelBusy = false;
+    renderModels(view);
+  } catch (reason) {
+    modelStatus.textContent = String(reason);
+    prepareModels.disabled = false;
+    cancelModels.disabled = false;
+  } finally {
+    modelBusy = false;
+  }
+}
+prepareModels.addEventListener('click', () => modelCommand('prepare_models'));
+cancelModels.addEventListener('click', () => modelCommand('cancel_model_setup'));
+setInterval(async () => {
+  if (document.hidden || modelBusy || modelPollBusy) return;
+  modelPollBusy = true;
+  const requestedRevision = modelRevision;
+  try {
+    const view = await window.__TAURI__.core.invoke('get_model_setup');
+    if (requestedRevision === modelRevision) renderModels(view);
+  } catch (reason) {
+    if (requestedRevision === modelRevision) modelStatus.textContent = String(reason);
+  } finally {
+    modelPollBusy = false;
+  }
+}, 500);
+modelCommand('get_model_setup');

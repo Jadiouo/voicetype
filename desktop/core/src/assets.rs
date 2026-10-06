@@ -56,7 +56,21 @@ impl AssetStore {
     /// Manifest comes from the reviewed application catalog, never downloaded
     /// alongside arbitrary files and trusted merely because its hashes match.
     pub fn install(&self, manifest: &AssetManifest, source: &Path) -> io::Result<PathBuf> {
+        self.install_with_progress(manifest, source, |_, _| true)
+    }
+
+    /// Returning false cancels before publication, including during copying or
+    /// verification of an existing version. Success is the commit point; a late
+    /// cancellation must not be reported as if an activated version was undone.
+    pub fn install_with_progress(
+        &self,
+        manifest: &AssetManifest,
+        source: &Path,
+        mut progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<PathBuf> {
         manifest.validate()?;
+        let total = manifest.files.iter().map(|file| file.bytes).sum();
+        report(&mut progress, 0, total)?;
         let _lock = self.lock()?;
         let old_bytes = optional_read(&self.root.join("active.json"))?;
         let previous = decode_activation(old_bytes.as_deref())?.map(|value| value.current);
@@ -64,14 +78,17 @@ impl AssetStore {
         let digest = format!("{:x}", Sha256::digest(&encoded));
         if let Some(current) = &previous {
             if version_key(current)? == digest {
-                if let Ok(installed) = self.verify_version(current) {
-                    return Ok(installed);
+                match self.verify_version(current, &mut progress) {
+                    Ok(installed) => return Ok(installed),
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+                    Err(_) => {}
                 }
             }
         }
         let staged = tempfile::Builder::new()
             .prefix(&format!("{digest}-"))
             .tempdir_in(self.root.join("versions"))?;
+        let mut done = 0;
         for file in &manifest.files {
             let mut input = open_regular(source, &file.path)?;
             if input.metadata()?.len() != file.bytes {
@@ -80,7 +97,10 @@ impl AssetStore {
             let destination = staged.path().join(&file.path);
             private_dir(destination.parent().unwrap())?;
             let mut output = File::create(&destination)?;
-            verify_stream(&mut input, file, Some(&mut output))?;
+            verify_stream(&mut input, file, Some(&mut output), &mut |bytes| {
+                report(&mut progress, done + bytes, total)
+            })?;
+            done += file.bytes;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -105,6 +125,7 @@ impl AssetStore {
         receipt.sync_all()?;
         drop(receipt);
         sync_dir(staged.path())?;
+        report(&mut progress, total, total)?;
         // Keep before publishing: a destructor must never erase the active
         // directory after a successful atomic pointer replacement.
         let installed = staged.keep();
@@ -123,10 +144,37 @@ impl AssetStore {
 
     /// Full integrity check for setup/activation, not a per-dictation/status poll.
     pub fn active(&self) -> io::Result<Option<PathBuf>> {
+        self.active_with_progress(|_, _| true)
+    }
+
+    pub fn active_with_progress(
+        &self,
+        mut progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<Option<PathBuf>> {
         let bytes = optional_read(&self.root.join("active.json"))?;
         decode_activation(bytes.as_deref())?
-            .map(|value| self.verify_version(&value.current))
+            .map(|value| self.verify_version(&value.current, &mut progress))
             .transpose()
+    }
+
+    /// Unlike active(), this also checks that the receipt is the exact catalog
+    /// version the application requested, before trusting any installed paths.
+    pub fn matching(
+        &self,
+        manifest: &AssetManifest,
+        mut progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<Option<PathBuf>> {
+        manifest.validate()?;
+        let bytes = optional_read(&self.root.join("active.json"))?;
+        let Some(active) = decode_activation(bytes.as_deref())? else {
+            return Ok(None);
+        };
+        let encoded = serde_json::to_vec(manifest).map_err(io::Error::other)?;
+        if version_key(&active.current)? != format!("{:x}", Sha256::digest(encoded)) {
+            return Ok(None);
+        }
+        self.verify_version(&active.current, &mut progress)
+            .map(Some)
     }
 
     pub fn rollback(&self) -> io::Result<PathBuf> {
@@ -134,7 +182,7 @@ impl AssetStore {
         let bytes = optional_read(&self.root.join("active.json"))?;
         let active = decode_activation(bytes.as_deref())?.ok_or(io::ErrorKind::NotFound)?;
         let previous = active.previous.ok_or(io::ErrorKind::NotFound)?;
-        let path = self.verify_version(&previous)?;
+        let path = self.verify_version(&previous, &mut |_, _| true)?;
         self.activate(
             Activation {
                 schema_version: 1,
@@ -146,7 +194,11 @@ impl AssetStore {
         Ok(path)
     }
 
-    fn verify_version(&self, key: &str) -> io::Result<PathBuf> {
+    fn verify_version(
+        &self,
+        key: &str,
+        progress: &mut dyn FnMut(u64, u64) -> bool,
+    ) -> io::Result<PathBuf> {
         let digest = version_key(key)?;
         let root = self.root.join("versions").join(key);
         let mut receipt = open_regular(&root, "manifest.json")?;
@@ -165,12 +217,18 @@ impl AssetStore {
         }
         let manifest: AssetManifest = serde_json::from_slice(&encoded).map_err(io::Error::other)?;
         manifest.validate()?;
+        let total = manifest.files.iter().map(|file| file.bytes).sum();
+        let mut done = 0;
+        report(progress, 0, total)?;
         for file in &manifest.files {
             let mut input = open_regular(&root, &file.path)?;
             if input.metadata()?.len() != file.bytes {
                 return Err(invalid("installed asset size changed"));
             }
-            verify_stream(&mut input, file, None)?;
+            verify_stream(&mut input, file, None, &mut |bytes| {
+                report(progress, done + bytes, total)
+            })?;
+            done += file.bytes;
         }
         Ok(root)
     }
@@ -207,7 +265,7 @@ impl AssetStore {
 }
 
 impl AssetManifest {
-    fn validate(&self) -> io::Result<()> {
+    pub(crate) fn validate(&self) -> io::Result<()> {
         if self.schema_version != 1
             || self.id.is_empty()
             || self.id.len() > 160
@@ -252,7 +310,7 @@ impl AssetManifest {
     }
 }
 
-fn portable_path(value: &str) -> io::Result<()> {
+pub(crate) fn portable_path(value: &str) -> io::Result<()> {
     if value.is_empty()
         || value.len() > 240
         || !value
@@ -325,11 +383,13 @@ fn verify_stream(
     input: &mut File,
     expected: &AssetFile,
     mut output: Option<&mut File>,
+    progress: &mut dyn FnMut(u64) -> io::Result<()>,
 ) -> io::Result<()> {
     let mut hash = Sha256::new();
     let mut read = 0u64;
     let mut buffer = [0u8; 65536];
     loop {
+        progress(read)?;
         let count = input.read(&mut buffer)?;
         if count == 0 {
             break;
@@ -347,6 +407,17 @@ fn verify_stream(
         return Err(invalid("asset integrity mismatch"));
     }
     Ok(())
+}
+
+fn report(progress: &mut dyn FnMut(u64, u64) -> bool, done: u64, total: u64) -> io::Result<()> {
+    if progress(done, total) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "asset installation cancelled",
+        ))
+    }
 }
 
 fn private_dir(path: &Path) -> io::Result<()> {

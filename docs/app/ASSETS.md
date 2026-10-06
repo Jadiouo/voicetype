@@ -1,7 +1,8 @@
 # Versioned assets for app setup
 
-Status: local staging/verification/activation/rollback is implemented. Network
-download, archive extraction, setup UI and native-runtime packaging are next.
+Status: verified storage, bounded HTTPS/archive preparation and explicit
+download/check/cancel UI are implemented. Native-runtime packaging and activation
+remain. An installed model is not a connected recognizer.
 The catalogs contain metadata only; no weights, native binaries or user data are
 committed. Installing assets does not start a provider or change the daily setup.
 
@@ -23,13 +24,46 @@ downloaded with arbitrary payloads is not its own trust authority.
   versions cannot be reactivated. Unknown/invalid activation records are preserved.
 - Keep the asset root separate from vocabulary, learning, recordings and desktop
   preferences. Do not delete old versions while a process may still map them.
-  Cleanup of unreferenced versions and download cancellation/progress are pending.
+  Copy and verification report progress/check cancellation every 64 KiB and
+  before publication. Cleanup of old/unreferenced versions remains pending.
 
 `active()` performs full integrity verification for setup/activation. It must not
 be called on every recording or status refresh. No hashing/copying belongs in the
 dictation path. Atomic publication is implemented on both target platforms;
 directory fsync is additionally used on Unix. Power-loss behavior on a particular
 Windows filesystem is not established by the current tests.
+
+## Download and setup commands
+
+`ModelSetup` owns a separate thread from the resident dictation worker. Opening
+the app does not start setup. The webview can only start, read status or cancel;
+URLs, manifests and file paths come from the compiled catalog. Full verification
+of an identical installed catalog version permits reuse without network access.
+
+- HTTPS uses normal platform certificate verification, at most five HTTPS
+  redirects, 15-second connect, 20-second stalled-read and 30-minute total request
+  bounds. It sends no cookies or account credentials, uses no automatic retries,
+  environment proxy or content decoding, and checks exact bytes/SHA while reading.
+  See the upstream [reqwest builder](https://docs.rs/reqwest/0.13.5/reqwest/struct.ClientBuilder.html).
+- Cancellation can drop a pending async request, including a stalled TLS
+  handshake. Setup shutdown joins its thread; a bounded Tokio shutdown prevents
+  a blocking OS DNS lookup from holding cancellation indefinitely. Disk calls
+  are synchronous on the setup thread, so this is not a hard real-time deadline
+  for a stalled filesystem.
+- Recheck the complete compressed payload before extraction. The tar reader
+  accepts ordinary regular files/directories only, rejects extended headers,
+  links, traversal and duplicate paths, and enforces a 10,000-entry limit plus a
+  decompressed-byte limit (listed files plus 64 MiB for upstream extras). Only
+  pinned files are written. Unlisted documentation/test audio is discarded.
+- Progress names download, checking, extraction and installation separately.
+  Extraction shows processed bytes without an invented completion percentage.
+  Completed model bundles are retained if a later bundle is cancelled; partial
+  scratch/staged data is removed on normal cancellation/error. A process crash
+  can leave unreferenced temporary files; crash cleanup/resume remains pending.
+
+The active version is published only after verification. Cancellation arriving
+after that commit point cannot undo a successful installation. Installed model
+status does not load the engine, activate a hotkey or migrate the daily setup.
 
 ## Pinned model sources
 
@@ -66,10 +100,13 @@ inventory; these source links alone do not finish that packaging task.
 
 ## Evidence and next integration
 
-Five public installation tests use actual temporary files: corrupt update,
+Nine public installation tests use actual temporary files: corrupt update,
 incomplete staged bundle, upgrade/rollback, preservation of invalid activation
 records and reuse/repair. The latter preserves the original version and refuses
-rollback into its subsequently corrupted files.
+rollback into its subsequently corrupted files. Additional cases exercise
+mid-file copy/extraction cancellation and corrupt/unsafe archives. Three setup
+cases cover a real stalled TLS peer, offline reuse, and cancel/retry while the
+desktop settings worker continues accepting commands.
 
 `probe_asset_install MANIFEST SOURCE_DIRECTORY` copies real reviewed model files
 to a disposable store and reopens/verifies the committed version through the
@@ -77,8 +114,13 @@ public API. It passed for all six Nano files and the Silero model. The models we
 not executed, and the daily files were read only. This establishes file integrity
 and installation behavior, not speech, latency or clean-machine setup acceptance.
 
-Next implement the bounded HTTPS download/extraction worker using these catalog
-pins, with progress/cancellation off the resident dictation worker, then connect
-explicit setup/activation in Tauri. Native CPU libraries and the engine executable
+`probe_model_setup nano-cache ARCHIVE` exercised the actual pinned Nano archive
+through the production decoder and installer, including all six file hashes.
+`probe_model_setup vad-download` exercised a real upstream HTTPS download and
+installation. Both reopened and matched the catalog in disposable stores without
+executing any model. The installed GUI/network combination still needs separate
+acceptance; the CI shell test only verifies explicit-only setup and initial UI.
+
+Next connect native runtime activation. CPU libraries and the engine executable
 need their own platform-specific manifests/build provenance and relocatable
 packaging; model-only installation is not a working recognizer.

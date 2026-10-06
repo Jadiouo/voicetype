@@ -456,3 +456,38 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   `a6c302d3e6c2267f09928fa89e8faf481df4b9693c1b7b7e3152f8974f11185b`.
   All 185 remote source blobs were independently matched to the local commit.
   This verification does not change the remaining setup/speech scope above.
+
+### Cancellable model setup work in progress
+
+- TDD/D: a missing progress/cancel API was the first RED. Copy/verification now
+  checks cancellation in 64 KiB increments and before atomic publication; the
+  passing case cancels inside one large file, removes staging and preserves the
+  old active version. Existing six asset cases pass.
+- TDD/D: the archive-install entry point was missing (RED). It now checks the
+  compressed size/hash before parsing, accepts only ordinary regular files and
+  directories under the catalog prefix, bounds decompressed bytes and entries,
+  and copies only reviewed files before the final per-file integrity check.
+  The positive archive case passes; its changed-body check also passed first run.
+- TDD/A,D: HTTPS transfer and setup-worker APIs were initially absent (RED).
+  The real TLS-stall cancellation case passes within its two-second bound. A
+  native network fixture verifies separate-thread preparation and a second
+  offline check with no download. No fixture replaces internal installer logic.
+- Tauri now exposes explicit prepare/status/cancel commands with no webview
+  paths, URLs or manifests. Setup runs outside the resident dictation worker.
+  The UI distinguishes installed model files from a connected recognizer.
+- Validation still in progress: real pinned archive and live VAD HTTPS probes,
+  cancellation/invalid-archive cases, native Linux/Windows installer/UI CI.
+  No production runtime activation, speech acceptance or service migration is
+  claimed by this milestone. Existing daily setup remains unchanged.
+
+- Validation update: the actual 842 MB Nano archive passed the production
+  decoder/install/reopen path with all six pinned files. Live upstream Silero
+  HTTPS download/install/reopen also passed. Both used disposable stores and
+  executed no model. Unsafe archive, extraction cancellation and worker
+  cancel/retry checks passed on their first behavioral runs; no RED is claimed
+  for those additional coverage cases.
+- Local full core suite: **40 passed**, one intentionally ignored subprocess
+  helper. JavaScript/Python syntax and patch whitespace checks passed. Locked
+  reqwest/rustls, Tokio and Rust bzip2/tar dependencies were added; the daemon
+  lockfile is also updated for its core dev dependency. Native Windows and
+  installed UI validation are pending the next CI run.

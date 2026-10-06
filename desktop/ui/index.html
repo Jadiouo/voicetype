@@ -37,6 +37,14 @@
         </label>
       </fieldset>
       <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="cancel-dictation" type="button" hidden>取消聽寫</button><button id="check-providers" type="button" disabled>檢查服務</button><button id="reload" type="button">重新載入</button></div>
+      <section class="model-setup" aria-labelledby="model-setup-title">
+        <h2 id="model-setup-title">本機模型</h2>
+        <p>下載約 844 MB，首次準備建議保留 4 GB 可用空間。已安裝的模型通過檢查後會直接沿用。</p>
+        <p id="model-status" role="status" aria-live="polite">正在讀取模型準備狀態…</p>
+        <progress id="model-progress" aria-label="模型準備進度" hidden></progress>
+        <div class="model-actions"><button id="prepare-models" type="button" disabled>下載／檢查模型</button><button id="cancel-models" type="button" hidden>取消準備</button></div>
+        <p class="model-note">這一步只準備模型。App 的錄音與輸入法連接仍在整合中。</p>
+      </section>
       <section class="recovery" aria-labelledby="recovery-title">
         <h2 id="recovery-title">文字復原</h2>
         <p id="recovery-note" role="status">目前沒有待處理的文字。</p>

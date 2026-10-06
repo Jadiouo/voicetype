@@ -10,6 +10,8 @@ pub mod local;
 mod providers;
 #[cfg(target_os = "linux")]
 pub mod runtime;
+pub mod setup;
+mod setup_worker;
 pub mod worker;
 pub use dictation::{
     CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationPhase,

@@ -90,6 +90,11 @@ def main():
                 assert js("return document.querySelector('#provider-local').checked")
                 assert js("return document.querySelector('#recovery-note').textContent.includes('沒有待處理')")
                 assert js("return document.querySelector('#recovery-content').hidden")
+                eventually(lambda: js("return document.querySelector('#prepare-models').disabled === false"))
+                assert js("return document.querySelector('#model-status').textContent.includes('尚未檢查模型')")
+                assert js("return document.querySelector('#cancel-models').hidden")
+                assert js("return document.querySelector('#model-progress').hidden")
+                assert not (Path(profile) / "model-assets").exists(), "Opening settings started model setup"
                 assert js("return document.querySelectorAll('.availability').length") == 2
                 click("#check-providers")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
@@ -147,7 +152,8 @@ def main():
                 (output / "result.json").write_text(json.dumps({
                     "passed": ["installed-window", "default-local", "choose-google",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
-                               "provider-status-without-recording", "recovery-empty-state"],
+                               "provider-status-without-recording", "recovery-empty-state",
+                               "model-setup-explicit-only"],
                     "speech_adapters_tested": False,
                 }, indent=2) + "\n", encoding="utf-8")
                 print("PASS: real UI selection, restart, corruption and reload")
