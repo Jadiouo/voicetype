@@ -195,3 +195,31 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   30-second idle stream. Add an explicit suspend/close acknowledgement and versioned
   capability query before a desktop adapter can hand the microphone to Google.
   The actual app transport/input integration and M2–M4 acceptance remain open.
+
+## 2026-10-07 — explicit local microphone handoff and native CPU probe
+
+- [Engine CI 37513330768](https://github.com/Jadiouo/voicetype/actions/runs/37513330768)
+  passed the first lifecycle contract at `690a320`.
+- Added correlated `desktop_status` protocol negotiation and `desktop_suspend`.
+  Outstanding preparation/recording/inference refuses suspend; after work ends,
+  the audio thread closes the warm backend and ring before acknowledging. The
+  normal same-provider warm path stays intact. Wire semantics and ownership
+  prerequisites are documented in [LOCAL_PROTOCOL.md](LOCAL_PROTOCOL.md).
+- The handoff test first failed for the missing capture operation. The capability
+  query independently failed with a real IPC timeout, then passed. Regression
+  checks cover pending cancelled inference refusing handoff, real audio-command
+  acknowledgement, active-capture refusal, repeated suspend and reopening capture.
+  All 23 affected daemon contract/protocol/IPC/capture tests pass locally.
+- Built the real Nano feature against the pinned CPU native libraries and launched
+  that candidate with existing read-only models and a disposable HOME/XDG profile.
+  Status, suspend and ping all returned their exact expected replies. Process maps
+  contained sherpa/ONNX Runtime with no CUDA/cuDNN/TensorRT libraries; startup
+  reported `funasr-nano:int8:cpu` and `provider=cpu`. No Start was sent, no capture
+  opened and Nano's silence warmup remains disabled. SIGINT exited cleanly and
+  removed the candidate socket. This is runtime/control evidence, not a speech
+  accuracy or latency measurement. The reusable probe is in `desktop/tests/`.
+- Existing local, Google and spelling services remained active/running. No service
+  restart, hotkey change, personal-data migration or GPU operation occurred.
+- Next priority is the actual app provider transport and Fcitx delivery path,
+  using the versioned contract and explicit runtime ownership. Google status,
+  shared data UI, packaging assets and Windows work remain; Goal stays active.

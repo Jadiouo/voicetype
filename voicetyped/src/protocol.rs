@@ -82,6 +82,11 @@ pub enum ClientMessage {
         mode: Option<String>,
     },
     Ping,
+    /// Correlated desktop handoff request. Only succeeds when every session's
+    /// capture/inference work has ended and the warm stream has been closed.
+    DesktopSuspend { request: u64 },
+    /// Read-only protocol negotiation; never implies microphone permission.
+    DesktopStatus { request: u64 },
     /// Read-only sampling diagnostics; never starts capture.
     ReviewStatus,
 }

@@ -16,7 +16,7 @@
 //! 「過期結果」的來源, 兩端都要防守: daemon 送出前比對 `latest`,
 //! addon 收到後也比對自己的 sessionId。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -54,6 +54,7 @@ pub struct Pipeline {
 /// 內部命令。比 `ClientMessage` 多一個逾時, 少一個 ping (ping 不需要
 /// 進到序列裡)。
 enum Command {
+    Suspend { request: u64, responder: Responder },
     Start {
         session: u64,
         program: String,
@@ -101,6 +102,7 @@ struct Active {
 struct Lifecycle {
     session: u64,
     responder: Option<Responder>,
+    work: Arc<AtomicUsize>,
 }
 
 impl Lifecycle {
@@ -113,6 +115,7 @@ impl Lifecycle {
 
 impl Drop for Lifecycle {
     fn drop(&mut self) {
+        self.work.fetch_sub(1, Ordering::SeqCst);
         if let Some(responder) = &self.responder {
             responder.send(ServerMessage::State { session: self.session, value: SessionState::Idle });
         }
@@ -123,12 +126,14 @@ pub struct SessionManager {
     tx: mpsc::UnboundedSender<Command>,
     /// 最新的 session id。ASR 完成時用來判斷結果是否已過期。
     latest: Arc<AtomicU64>,
+    work: Arc<AtomicUsize>,
 }
 
 impl SessionManager {
     pub fn new(audio: Arc<dyn CaptureSource>, pipeline: Pipeline) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let latest = Arc::new(AtomicU64::new(0));
+        let work = Arc::new(AtomicUsize::new(0));
         // 迴圈自己也需要 sender: 錄音上限的計時器要把 Timeout 命令送回
         // 同一條序列, 才能安全地與 stop/cancel 競爭。
         tokio::spawn(run(
@@ -137,14 +142,24 @@ impl SessionManager {
             audio,
             Arc::new(pipeline),
             latest.clone(),
+            work.clone(),
         ));
-        Self { tx, latest }
+        Self { tx, latest, work }
     }
 }
 
 impl Handler for SessionManager {
     fn handle(&self, msg: ClientMessage, responder: Responder) {
         let cmd = match msg {
+            ClientMessage::DesktopStatus { request } => {
+                responder.send(ServerMessage::Info { value: serde_json::json!({
+                    "desktop_protocol": 1, "request": request,
+                    "capabilities": ["session_events", "suspend"],
+                    "session_busy": self.work.load(Ordering::SeqCst) != 0,
+                }) });
+                return;
+            }
+            ClientMessage::DesktopSuspend { request } => Command::Suspend { request, responder },
             ClientMessage::Ping => {
                 // 不進序列: ping 只是探活, 不該排在錄音後面。
                 responder.send(ServerMessage::Pong);
@@ -159,7 +174,8 @@ impl Handler for SessionManager {
                 selected_text,
                 session_events,
             } => {
-                let lifecycle = Lifecycle { session, responder: session_events.then(|| responder.clone()) };
+                self.work.fetch_add(1, Ordering::SeqCst);
+                let lifecycle = Lifecycle { session, responder: session_events.then(|| responder.clone()), work: self.work.clone() };
                 // 縱深防禦 (SDD §7)。addon 已經在密碼欄位拒絕啟動,
                 // 走到這裡代表 addon 版本不符或協定被繞過。
                 if is_password {
@@ -209,11 +225,26 @@ async fn run(
     audio: Arc<dyn CaptureSource>,
     pipeline: Arc<Pipeline>,
     latest: Arc<AtomicU64>,
+    work: Arc<AtomicUsize>,
 ) {
     let mut active: Option<Active> = None;
 
     while let Some(cmd) = rx.recv().await {
         match cmd {
+            Command::Suspend { request, responder } => {
+                let microphone = if work.load(Ordering::SeqCst) != 0 {
+                    "busy"
+                } else {
+                    let audio = audio.clone();
+                    match tokio::task::spawn_blocking(move || audio.suspend()).await {
+                        Ok(Ok(())) => "closed",
+                        _ => "error",
+                    }
+                };
+                responder.send(ServerMessage::Info { value: serde_json::json!({
+                    "desktop_protocol": 1, "request": request, "microphone": microphone,
+                }) });
+            }
             Command::Start {
                 session,
                 program,

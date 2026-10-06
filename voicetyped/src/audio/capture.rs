@@ -77,6 +77,7 @@ struct ActiveRing {
 enum Command {
     Ensure(mpsc::Sender<Result<StreamFormat, String>>),
     Release,
+    Suspend(mpsc::Sender<Result<(), String>>),
     Shutdown,
 }
 
@@ -94,12 +95,23 @@ pub trait CaptureSource: Send + Sync {
     fn begin(&self) -> Result<RecordingMark>;
     fn end(&self, mark: RecordingMark) -> Recording;
     fn cancel(&self);
+    /// Close any warm idle stream before another provider acquires the device.
+    fn suspend(&self) -> Result<()>;
 }
 
 impl CaptureSource for AudioCapture {
-    fn begin(&self) -> Result<RecordingMark> { AudioCapture::begin(self) }
-    fn end(&self, mark: RecordingMark) -> Recording { AudioCapture::end(self, mark) }
-    fn cancel(&self) { AudioCapture::cancel(self) }
+    fn begin(&self) -> Result<RecordingMark> {
+        AudioCapture::begin(self)
+    }
+    fn end(&self, mark: RecordingMark) -> Recording {
+        AudioCapture::end(self, mark)
+    }
+    fn cancel(&self) {
+        AudioCapture::cancel(self)
+    }
+    fn suspend(&self) -> Result<()> {
+        AudioCapture::suspend(self)
+    }
 }
 
 impl AudioCapture {
@@ -168,6 +180,16 @@ impl AudioCapture {
     /// 放棄一段錄音, 不取出資料。
     pub fn cancel(&self) {
         let _ = self.tx.send(Command::Release);
+    }
+
+    pub fn suspend(&self) -> Result<()> {
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(Command::Suspend(tx))
+            .map_err(|_| anyhow!("audio thread is gone"))?;
+        rx.recv_timeout(Duration::from_secs(5))
+            .map_err(|_| anyhow!("audio cleanup did not respond"))?
+            .map_err(|e| anyhow!(e))
     }
 }
 
@@ -263,6 +285,15 @@ impl<S> CaptureState<S> {
             }
             Some(Command::Release) => {
                 self.release(shared, mode, now);
+            }
+            Some(Command::Suspend(reply)) => {
+                if self.stream.is_some() && self.idle_since.is_none() {
+                    let _ = reply.send(Err("capture is still active".into()));
+                } else {
+                    close_stream(&mut self.stream, shared);
+                    self.idle_since = None;
+                    let _ = reply.send(Ok(()));
+                }
             }
             Some(Command::Shutdown) => {
                 close_stream(&mut self.stream, shared);
@@ -494,6 +525,18 @@ mod tests {
             self.now = self.origin + Duration::from_secs(seconds);
             self.handle(None);
         }
+        fn suspend(&mut self) -> Result<()> {
+            let capture = &self.capture;
+            let state = &mut self.state;
+            let rx = &self.rx;
+            let now = self.now;
+            std::thread::scope(|scope| {
+                let task = scope.spawn(|| capture.suspend());
+                let cmd = rx.recv().unwrap();
+                assert!(state.handle(Some(cmd), &capture.shared, capture.mode, now, fake_open));
+                task.join().unwrap()
+            })
+        }
         fn release_pending(&mut self) {
             let command = self
                 .rx
@@ -504,6 +547,25 @@ mod tests {
         fn is_open(&self) -> bool {
             self.state.stream.is_some() && self.capture.shared.ring.lock().unwrap().is_some()
         }
+    }
+
+    #[test]
+    fn suspend_acknowledges_idle_stream_close_but_refuses_active_capture() {
+        let mut h = Harness::new(StreamMode::Warm);
+        h.begin();
+        assert!(h.suspend().is_err());
+        assert!(h.is_open());
+        h.capture.cancel();
+        h.release_pending();
+        assert!(h.is_open(), "warm cancel keeps its normal grace period");
+        h.suspend().unwrap();
+        assert!(
+            !h.is_open(),
+            "suspend returns only after backend and ring are closed"
+        );
+        h.suspend().unwrap();
+        h.begin();
+        assert!(h.is_open(), "the next recording can reopen the device");
     }
 
     #[test]
