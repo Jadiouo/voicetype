@@ -126,7 +126,7 @@ GNOME 右上角的麥克風指示燈在這段期間會持續亮著。
 ```bash
 systemctl --user status voicetyped     # 狀態
 journalctl --user -u voicetyped -f     # 即時 log
-systemctl --user restart voicetyped    # 換了新版本或改了詞彙表之後
+systemctl --user restart voicetyped    # 換了新版本之後；詞彙表自動重載
 ```
 
 ---

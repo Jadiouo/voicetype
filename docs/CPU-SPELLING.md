@@ -4,7 +4,7 @@
 
 ## 詞庫與名字
 
-`~/.config/voicetype/vocab.toml` 儲存後下一句自動重載。格式無效時沿用上一份有效詞庫；刪除檔案則清空。大小写不敏感、英文有詞界、取最長單次匹配，保留反引號程式碼、路徑及較長識別字。
+`~/.config/voicetype/vocab.toml` 儲存後下一句自動重載。格式無效時沿用上一份有效詞庫；刪除檔案則清空。大小寫不敏感、英文有詞界、取最長單次匹配，保留反引號程式碼、路徑及較長識別字。
 
 ```toml
 # 放在第一個 [[entry]] 前面。這些是明確指定的正確字形。
@@ -39,9 +39,9 @@ private/csc-build-venv/bin/pip install -r config/csc-requirements.txt onnx==1.20
 private/csc-build-venv/bin/python scripts/prepare_csc.py --output-dir private/csc-prepared
 ```
 
-腳本先核對作者 ONNX／tokenizer 雜湊，再做 CPU 圖融合及動態 INT8 量化，禁止覆寫既有輸出目錄。固定工具版本的重建模型 SHA256 為 `38a1bcad77a183e3a229c839c192a503f730ac8871f611fd698c6bb22575966d`；來源、版本與雜湊記錄在 `prepared.json`。常駐 runtime 不需要 torch 或建置用 onnx 套件。
+腳本先核對作者 ONNX／tokenizer 雜湊，再做 CPU 圖融合及動態 INT8 量化，拒絕覆寫既有量化模型。固定工具版本的重建模型 SHA256 為 `38a1bcad77a183e3a229c839c192a503f730ac8871f611fd698c6bb22575966d`；來源、版本與雜湊記錄在 `prepared.json`。常駐 runtime 不需要 torch 或建置用 onnx 套件。
 
-先依 README 建置並更新 daemon，再準備独立 runtime。以下範例使用一個新的版本目錄；升級既有安裝時先保留舊目錄與原 service 設定。
+先依 README 建置並更新 daemon，再準備獨立 runtime。以下範例使用一個新的版本目錄；升級既有安裝時先保留舊目錄與原 service 設定。
 
 ```bash
 csc_runtime="$HOME/.local/lib/voicetype/csc-v1"
