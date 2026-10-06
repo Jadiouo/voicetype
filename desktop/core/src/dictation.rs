@@ -99,9 +99,11 @@ pub enum SessionFailure {
 pub struct DictationStatus {
     pub busy: bool,
     pub failure: Option<SessionFailure>,
+    pub has_retained_text: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DeliveryOutcome {
     Delivered,
     FocusChanged,
@@ -153,10 +155,23 @@ impl Coordinator {
     pub fn retained_text(&self) -> Option<&RetainedText> {
         self.retained.as_ref()
     }
+    pub fn dismiss_retained(&mut self, provider: Provider, session: u64) -> bool {
+        if self
+            .retained
+            .as_ref()
+            .is_some_and(|text| text.key.provider == provider && text.key.id == session)
+        {
+            self.retained = None;
+            true
+        } else {
+            false
+        }
+    }
     pub fn status(&self) -> DictationStatus {
         DictationStatus {
             busy: self.busy(),
             failure: self.failure,
+            has_retained_text: self.retained.is_some(),
         }
     }
 

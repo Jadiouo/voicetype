@@ -18,6 +18,7 @@ assert os.path.isdir(os.environ['VOICETYPE_NANO_MODEL_DIR'])
 assert os.path.isfile(os.environ['VOICETYPE_NANO_VAD_MODEL'])
 assert os.environ['XDG_CONFIG_HOME'].startswith(os.environ['HOME'].rsplit('/', 1)[0])
 open(os.path.join(os.environ['HOME'], 'endpoint'), 'w').write(os.environ['VOICETYPE_SOCKET'])
+open(os.path.join(os.environ['HOME'], 'pid'), 'w').write(str(os.getpid()))
 with socket.socket(socket.AF_UNIX) as listener:
     listener.bind(os.environ['VOICETYPE_SOCKET'])
     listener.listen(1)
@@ -34,6 +35,10 @@ with socket.socket(socket.AF_UNIX) as listener:
                 response = {'type':'state','session':command['session'],'value':'recording'}
             elif command['type'] == 'cancel':
                 continue # Deliberately never acknowledges release: must reap.
+            elif command['type'] == 'stop':
+                peer.sendall((json.dumps({'type':'result','session':command['session'],
+                    'text':'請 review GitHub pull request，保留 Antigravity。'})+'\n').encode())
+                response = {'type':'state','session':command['session'],'value':'idle'}
             else:
                 raise AssertionError('unexpected command')
             peer.sendall((json.dumps(response)+'\n').encode())
@@ -156,6 +161,203 @@ fn runtime_parent_helper() {
     .unwrap();
     // Simulate application exit without Rust destructors.
     std::process::exit(0);
+}
+
+#[test]
+fn an_idle_engine_crash_is_detected_without_a_frontend_command() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixStream,
+        thread,
+    };
+    use voicetype_app_core::Application;
+    let (root, paths) = fixture();
+    let runtime = OwnedLocal::start(&paths, Duration::from_secs(2)).unwrap();
+    let pid = runtime.process_id().unwrap();
+    let (peer, frontend) = UnixStream::pair().unwrap();
+    let frontend = thread::spawn(move || {
+        let mut input = BufReader::new(frontend);
+        let mut line = String::new();
+        input.read_line(&mut line).unwrap();
+        let hello: Value = serde_json::from_str(&line).unwrap();
+        writeln!(
+            input.get_mut(),
+            "{}",
+            json!({"type":"desktop_hello",
+            "session":hello["session"],"value":"voicetype.fcitx.v1"})
+        )
+        .unwrap();
+        input
+    });
+    let mut session = runtime
+        .attach_frontend(peer, Duration::from_secs(1))
+        .unwrap();
+    let _frontend = frontend.join().unwrap(); // Keep the healthy input connection open.
+    let mut app = Application::open(&root.path().join("settings")).unwrap();
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+    let until = std::time::Instant::now() + Duration::from_secs(1);
+    let mut detected = false;
+    while std::time::Instant::now() < until {
+        if session.step(&mut app, Duration::from_millis(10)).is_err() {
+            detected = true;
+            break;
+        }
+    }
+    let reaped = session.process_id().is_none();
+    session.shutdown(&mut app).unwrap();
+    assert!(detected, "a dead idle engine was still reported usable");
+    assert!(
+        reaped,
+        "crashed engine was not reaped before failure returned"
+    );
+    assert!(!app.snapshot().dictation.busy);
+}
+
+#[test]
+fn desktop_worker_owns_runtime_on_its_resident_thread_and_observes_idle_exit() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixStream,
+        time::Instant,
+    };
+    use voicetype_app_core::worker::{DesktopWorker, LocalRuntimeStatus};
+    let (root, paths) = fixture();
+    let capture = paths.profile.join("home/capture");
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    assert_eq!(
+        worker.settings().unwrap().local_runtime,
+        LocalRuntimeStatus::Inactive
+    );
+    assert!(!capture.exists());
+    let view = worker.activate_local(paths).unwrap();
+    assert_eq!(view.local_runtime, LocalRuntimeStatus::WaitingForInput);
+    assert!(
+        !capture.exists(),
+        "activation opened capture without native input"
+    );
+    let peer = UnixStream::connect(worker.local_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut input = BufReader::new(peer);
+    let mut line = String::new();
+    input.read_line(&mut line).unwrap();
+    let hello: Value = serde_json::from_str(&line).unwrap();
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello",
+        "session":hello["session"],"value":"voicetype.fcitx.v1"})
+    )
+    .unwrap();
+    let until = Instant::now() + Duration::from_secs(2);
+    while worker.settings().unwrap().local_runtime != LocalRuntimeStatus::Ready {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The external child records its actual OS PID. Request completion must not
+    // terminate the spawning thread (and consequently its owned child).
+    let pid: libc::pid_t = fs::read_to_string(root.path().join("app-data/home/pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+    let until = Instant::now() + Duration::from_secs(2);
+    while worker.settings().unwrap().local_runtime != LocalRuntimeStatus::Failed {
+        assert!(
+            Instant::now() < until,
+            "worker never observed idle child exit"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    assert!(!capture.exists());
+    assert!(worker.local_endpoint().unwrap().is_none());
+    worker.shutdown().unwrap();
+}
+
+#[test]
+fn desktop_worker_retains_focus_rejected_text_for_explicit_recovery_only() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixStream,
+        time::Instant,
+    };
+    use voicetype_app_core::{worker::DesktopWorker, DeliveryOutcome, Provider};
+    let (root, paths) = fixture();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker.activate_local(paths).unwrap();
+    let peer = UnixStream::connect(worker.local_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut input = BufReader::new(peer);
+    fn read(input: &mut BufReader<UnixStream>) -> Value {
+        let mut line = String::new();
+        input.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+    let hello = read(&mut input);
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello",
+        "session":hello["session"],"value":"voicetype.fcitx.v1"})
+    )
+    .unwrap();
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"start","session":72,
+        "context_id":"original-field","is_password":false})
+    )
+    .unwrap();
+    assert_eq!(read(&mut input)["value"], "recording");
+    assert!(worker.select_provider(Provider::Google).is_err());
+    writeln!(input.get_mut(), "{}", json!({"type":"stop","session":72})).unwrap();
+    let delivery = read(&mut input);
+    assert_eq!(delivery["type"], "deliver");
+    assert_eq!(delivery["context_id"], "original-field");
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"delivered","session":72,
+        "context_id":"original-field","code":"focus_changed"})
+    )
+    .unwrap();
+    assert_eq!(read(&mut input)["value"], "idle");
+    let retained = worker
+        .recovery()
+        .unwrap()
+        .expect("text available to recovery UI");
+    assert_eq!(
+        retained.text,
+        "請 review GitHub pull request，保留 Antigravity。"
+    );
+    assert_eq!(retained.reason, DeliveryOutcome::FocusChanged);
+    assert!(!serde_json::to_string(&worker.settings().unwrap())
+        .unwrap()
+        .contains("Antigravity"));
+    worker.reload().unwrap();
+    assert_eq!(worker.recovery().unwrap().unwrap().text, retained.text);
+    // A stale UI dismissal cannot erase a newer retained result.
+    assert!(!worker
+        .dismiss_recovery(Provider::Local, "0".into())
+        .unwrap());
+    assert!(worker.recovery().unwrap().is_some());
+    assert!(worker
+        .dismiss_recovery(Provider::Local, retained.session)
+        .unwrap());
+    assert!(worker.recovery().unwrap().is_none());
+    worker.select_provider(Provider::Google).unwrap();
+    assert!(worker.local_endpoint().unwrap().is_none());
+    let until = Instant::now() + Duration::from_secs(1);
+    let mut remainder = String::new();
+    // Closing ownership ends the socket; no recovery action resubmitted text.
+    while input.read_line(&mut remainder).unwrap() != 0 {
+        assert!(Instant::now() < until);
+    }
+    assert!(remainder.is_empty());
+    worker.shutdown().unwrap();
 }
 
 #[test]

@@ -2,75 +2,65 @@
 
 use std::{
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex,
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Manager,
 };
-use voicetype_app_core::{AppError, Application, Provider, Snapshot};
-
-struct Desktop {
-    config_dir: PathBuf,
-    app: Result<Application, AppError>,
-}
+use voicetype_app_core::{
+    worker::{DesktopSnapshot, DesktopWorker, RecoveryText},
+    Provider,
+};
 
 struct DesktopState {
-    desktop: Mutex<Desktop>,
+    worker: DesktopWorker,
     tray_available: AtomicBool,
 }
 
 #[derive(serde::Serialize)]
 struct View {
-    settings: Snapshot,
+    #[serde(flatten)]
+    desktop: DesktopSnapshot,
     tray_available: bool,
 }
 
 #[tauri::command]
 async fn get_settings(app: tauri::AppHandle) -> Result<View, String> {
-    with_desktop(app, |desktop| {
-        Ok(desktop.app.as_ref().map_err(|e| e.to_string())?.snapshot())
-    })
-    .await
+    with_desktop(app, DesktopWorker::settings).await
 }
 
 #[tauri::command]
 async fn select_provider(provider: Provider, app: tauri::AppHandle) -> Result<View, String> {
-    with_desktop(app, move |desktop| {
-        desktop
-            .app
-            .as_mut()
-            .map_err(|e| e.to_string())?
-            .select_provider(provider)
-            .map_err(|e| e.to_string())
-    })
-    .await
+    with_desktop(app, move |worker| worker.select_provider(provider)).await
 }
 
 #[tauri::command]
 async fn reload_settings(app: tauri::AppHandle) -> Result<View, String> {
-    with_desktop(app, |desktop| {
-        if let Ok(app) = desktop.app.as_mut() {
-            return app.reload().map_err(|e| e.to_string());
-        }
-        desktop.app = Application::open(&desktop.config_dir);
-        Ok(desktop
-            .app
-            .as_ref()
-            .map_err(ToString::to_string)?
-            .snapshot())
+    with_desktop(app, DesktopWorker::reload).await
+}
+
+#[tauri::command]
+async fn get_recovery(app: tauri::AppHandle) -> Result<Option<RecoveryText>, String> {
+    with_worker(app, DesktopWorker::recovery).await
+}
+
+#[tauri::command]
+async fn dismiss_recovery(
+    provider: Provider,
+    session: String,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    with_worker(app, move |worker| {
+        worker.dismiss_recovery(provider, session)
     })
     .await
 }
 
 #[tauri::command]
 async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
-    with_desktop(app, |desktop| {
-        let app = desktop.app.as_mut().map_err(|e| e.to_string())?;
+    with_desktop(app, |worker| {
         #[cfg(target_os = "linux")]
         {
             use std::os::unix::fs::MetadataExt;
@@ -86,36 +76,37 @@ async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
                     }
                 },
             };
-            if !socket.is_absolute() {
-                return Err("本機服務位置必須是完整路徑".into());
-            }
-            Ok(app.refresh_local_provider(&socket, std::time::Duration::from_millis(300)))
+            worker.refresh_local(socket)
         }
         #[cfg(not(target_os = "linux"))]
-        Ok(app.snapshot())
+        worker.settings()
     })
     .await
 }
 
-// Settings IO and the bounded status probe never run on the webview event thread.
+// Only request/reply waiting uses the blocking pool. Runtime creation, events
+// and cleanup all stay on DesktopWorker's resident thread.
+async fn with_worker<T: Send + 'static>(
+    app: tauri::AppHandle,
+    operation: impl FnOnce(&DesktopWorker) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || operation(&app.state::<DesktopState>().worker))
+        .await
+        .map_err(|_| "App 工作中斷，請重新開啟".to_string())?
+}
+
 async fn with_desktop(
     app: tauri::AppHandle,
-    operation: impl FnOnce(&mut Desktop) -> Result<Snapshot, String> + Send + 'static,
+    operation: impl FnOnce(&DesktopWorker) -> Result<DesktopSnapshot, String> + Send + 'static,
 ) -> Result<View, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<DesktopState>();
-        let mut desktop = state
-            .desktop
-            .lock()
-            .map_err(|_| "設定暫時無法讀取，請重新開啟 App")?;
-        let settings = operation(&mut desktop)?;
-        Ok(View {
-            settings,
-            tray_available: state.tray_available.load(Ordering::Relaxed),
-        })
+    let tray_available = app
+        .state::<DesktopState>()
+        .tray_available
+        .load(Ordering::Relaxed);
+    Ok(View {
+        desktop: with_worker(app, operation).await?,
+        tray_available,
     })
-    .await
-    .map_err(|_| "設定工作中斷，請重新開啟 App".to_string())?
 }
 
 fn show_settings(app: &tauri::AppHandle) {
@@ -144,10 +135,7 @@ fn main() {
                 None => app.path().app_config_dir()?,
             };
             app.manage(DesktopState {
-                desktop: Mutex::new(Desktop {
-                    app: Application::open(&config_dir),
-                    config_dir,
-                }),
+                worker: DesktopWorker::spawn(config_dir)?,
                 tray_available: AtomicBool::new(false),
             });
             let show = MenuItem::with_id(app, "show", "開啟 VoiceType", true, None::<&str>)?;
@@ -177,8 +165,19 @@ fn main() {
             get_settings,
             select_provider,
             reload_settings,
-            refresh_providers
+            refresh_providers,
+            get_recovery,
+            dismiss_recovery
         ])
-        .run(tauri::generate_context!())
-        .expect("VoiceType could not start");
+        .build(tauri::generate_context!())
+        .expect("VoiceType could not start")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                // Final exit event: let the resident owner reap before the
+                // process ends. Parent-death cleanup also covers abrupt exits.
+                if app.state::<DesktopState>().worker.shutdown().is_err() {
+                    eprintln!("VoiceType worker could not finish clean shutdown");
+                }
+            }
+        });
 }

@@ -33,6 +33,10 @@ fieldset { padding: 0; border: 0; margin: 20px 0 0; display: grid; gap: 12px; }
 button { background: #fff; color: #5c527d; font: inherit; font-size: 11px; border: 1px solid #d9dbe6; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
 button:disabled { opacity: .6; cursor: wait; }
 .shared { border-top: 1px solid #e3e5ed; padding-top: 17px; margin-top: 4px; }
+.recovery { border-top: 1px solid #e3e5ed; margin-top: 8px; padding: 17px 0; }
+.recovery p { color: #6d7388; font-size: 12px; line-height: 1.8; }
+.recovery textarea { width: 100%; resize: vertical; font: inherit; font-size: 14px; line-height: 1.7; padding: 12px; border: 1px solid #dfe2ec; border-radius: 8px; color: #25283b; background: #fff; }
+.recovery-actions { display: flex; gap: 10px; margin-top: 10px; }
 h2 { font-size: 13px; margin: 0 0 7px; }
 .shared p { font-size: 12px; line-height: 1.8; color: #757b8f; margin: 0; }
 footer { margin-top: 18px; color: #9095a5; font-size: 10px; }

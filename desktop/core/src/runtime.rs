@@ -190,6 +190,15 @@ impl OwnedLocal {
         self.child.as_ref().map(Child::id)
     }
 
+    /// Observe the actual child, including idle crashes. A stored PID alone is
+    /// not evidence of health; keep the handle until shutdown finishes cleanup.
+    pub fn is_running(&mut self) -> io::Result<bool> {
+        match self.child.as_mut() {
+            Some(child) => Ok(child.try_wait()?.is_none()),
+            None => Ok(false),
+        }
+    }
+
     /// Success is based on wait/reap, not on sending a stop signal or losing IPC.
     /// The session owner must invalidate pending results before calling this.
     pub fn shutdown(&mut self) -> io::Result<()> {
@@ -225,12 +234,15 @@ pub struct OwnedLocalSession {
 
 impl OwnedLocalSession {
     pub fn step(&mut self, app: &mut Application, budget: Duration) -> io::Result<()> {
-        if self.runtime.process_id().is_none() {
-            return Err(io::ErrorKind::NotConnected.into());
-        }
-        match self.dispatcher.step(app, budget) {
+        let result = match self.runtime.is_running() {
+            Ok(true) => self.dispatcher.step(app, budget),
+            Ok(false) => Err(io::Error::other("local engine exited")),
+            Err(error) => Err(error),
+        };
+        match result {
             Ok(()) => Ok(()),
             Err(error) => {
+                self.dispatcher.fail(app);
                 self.runtime.shutdown()?;
                 self.dispatcher.release_after_exit(app);
                 Err(error)

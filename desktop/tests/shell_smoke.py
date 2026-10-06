@@ -88,6 +88,8 @@ def main():
                 session = open_app()
                 eventually(ready)
                 assert js("return document.querySelector('#provider-local').checked")
+                assert js("return document.querySelector('#recovery-note').textContent.includes('沒有待處理')")
+                assert js("return document.querySelector('#recovery-content').hidden")
                 assert js("return document.querySelectorAll('.availability').length") == 2
                 click("#check-providers")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
@@ -145,7 +147,7 @@ def main():
                 (output / "result.json").write_text(json.dumps({
                     "passed": ["installed-window", "default-local", "choose-google",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
-                               "provider-status-without-recording"],
+                               "provider-status-without-recording", "recovery-empty-state"],
                     "speech_adapters_tested": False,
                 }, indent=2) + "\n", encoding="utf-8")
                 print("PASS: real UI selection, restart, corruption and reload")

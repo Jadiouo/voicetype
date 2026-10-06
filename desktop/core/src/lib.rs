@@ -9,6 +9,7 @@ pub mod local;
 mod providers;
 #[cfg(target_os = "linux")]
 pub mod runtime;
+pub mod worker;
 pub use dictation::{
     CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationStatus,
     ProviderCommand, ProviderEvent, ProviderPort, RetainedText, SessionFailure, SessionKey,
@@ -249,6 +250,10 @@ impl Application {
 
     pub fn retained_text(&self) -> Option<&RetainedText> {
         self.dictation.retained_text()
+    }
+
+    pub fn dismiss_retained_text(&mut self, provider: Provider, session: u64) -> bool {
+        self.dictation.dismiss_retained(provider, session)
     }
 }
 

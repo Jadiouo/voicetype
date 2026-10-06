@@ -335,3 +335,44 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   semantics follow the [WebDriver status contract](https://www.w3.org/TR/webdriver2/#status).
   The native dispatcher/ownership tests passed in that run; UI checks must be
   rerun after this harness fix before recording a complete desktop CI pass.
+
+### Resident app worker and recovery view
+
+- Harness fix `8fca553` passed Linux `.deb` and Windows NSIS build/install/UI CI
+  in [run 37524989608](https://github.com/Jadiouo/voicetype/actions/runs/37524989608).
+  Both downloaded UI reports contain seven passing checks and explicitly record
+  `speech_adapters_tested: false`. Actual file size/SHA-256 match their manifests:
+  Linux 4,314,316 bytes, `4fd39514653c752a86bc37ba64c9e354a4da7e246b3931b0de4f6059ff249f35`;
+  Windows 2,111,812 bytes, `abcab1c982c8af5de83cc1824285409f6bed7c79df81cd27d52b6e97110e2bd1`.
+- TDD/B: a killed idle engine with a healthy frontend first remained usable for
+  the entire observation window (**RED**). Health now checks the actual child,
+  invalidates an active session if present and reaps before returning failure
+  (**GREEN**). Keeping an old PID is no longer treated as health evidence.
+- TDD/A,B: added a resident `DesktopWorker` through the UI-facing command seam.
+  The initial test lacked the worker API (**RED**); the implementation now owns
+  private Linux frontend listening, explicit native activation, routing, child
+  health and shutdown on its spawning thread (**GREEN**). Activation sends no
+  Start; a connected idle child remains alive after command completion. Killing
+  that child changes status to Failed and removes the endpoint after cleanup.
+- TDD/A,B: through the real worker/dispatcher and external process/input fixtures,
+  a complete mixed-language final result is rejected by changed focus and retained
+  for explicit recovery. The recovery commands were missing (**RED**); retrieval,
+  reload preservation and session-matched dismissal now pass (**GREEN**). Busy
+  switches are rejected; switching away while idle reaps the local child; recovery
+  actions never resubmit text. Status JSON contains no transcript.
+- Tauri commands now use this resident worker instead of owning Application in
+  a mutex on transient blocking-pool jobs. Final app exit waits for its worker.
+  Added a separate recovery section with a read-only full result, manual select/
+  copy guidance, explicit dismissal and distinct uncertain/partial-delivery text.
+  Webview polling cannot overwrite an intervening settings operation.
+- Local verification: core suite **24 passed**, one subprocess-only helper
+  ignored as intended; JavaScript/Python syntax and diff checks passed. Local
+  Tauri check reached missing host GTK/Cairo development libraries, so it is not
+  recorded as a build pass; actual Linux/Windows installer and UI validation for
+  this new change must run in CI. No live mic, account login, input injection,
+  discrete-GPU inference or production configuration was used.
+- **Continuation:** phase deadlines, verified runtime/model setup with a concrete
+  activation UI, frontend-owner migration/rollback, shared vocabulary/review and
+  spelling setup, Google integration and Windows speech still remain. The current
+  webview does not expose executable paths or call native activation; these are
+  not yet working end-to-end speech installers. The goal stays active.

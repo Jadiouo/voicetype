@@ -121,8 +121,9 @@ The isolated Fcitx harness covers one commit, duplicate acknowledgement, wrong
 context, focus-out/return, preedit focus changes and weak-target destruction. It
 runs without a live display, bus, microphone or user config. Separate actual
 app/daemon tests exercise the native dispatcher and input acknowledgement with
-an OS frontend fixture. Tauri wiring, recovery UI and target-application
-acceptance remain outstanding.
+an OS frontend fixture. The Tauri shell now uses the resident application worker
+and has a separate recovery view. Installed runtime activation/input-owner
+migration and actual target-application acceptance remain outstanding.
 
 ## Owned Linux runtime
 
@@ -154,7 +155,23 @@ actual Nano runtime with disposable data, checks loaded native libraries and
 absence of GPU libraries, sends no Start, then verifies the owned child was
 reaped. This is process/control evidence, not microphone or latency acceptance.
 
-Remaining supervisor work includes idle-crash reporting and deadlines for a
-non-responsive preparation/finalization/cancellation, then the long-lived Tauri
-worker and frontend owner migration. None of these library additions starts a
-provider merely by opening the current settings preview.
+`DesktopWorker` creates, polls and destroys its owner on one resident thread.
+An explicit native activation command prepares the runtime and a mode-0700
+private frontend endpoint, then authenticates one frontend before marking it
+connected. `try_wait` detects idle crashes even when no input command arrives.
+Switching away from Local while idle first reaps the local owner. Busy switches
+are rejected. The worker's request queue is bounded; commands are not retried on
+an ambiguous request timeout. Tauri's blocking pool only waits on request/reply,
+and the final application exit waits for worker shutdown.
+
+Recovery text is requested separately from diagnostic status. The last retained
+result survives preference reload until an explicit session-matched dismissal or
+app exit. Session IDs cross the JavaScript boundary as opaque strings. Recovery
+does not inject text or change the clipboard. An uncertain acknowledgement says
+the text may already have been committed; users can select and copy manually.
+
+Remaining supervisor work includes phase deadlines for non-responsive capture
+preparation/finalization/cancellation, installed asset activation and frontend
+owner migration. No webview command currently accepts executable/model paths or
+activates this native runtime API. Opening the preview creates only the worker;
+it does not start a provider or alter the daily input integration.

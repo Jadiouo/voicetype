@@ -5,6 +5,30 @@ const reload = document.querySelector('#reload');
 const check = document.querySelector('#check-providers');
 const choices = [...document.querySelectorAll('input[name="provider"]')];
 let lastView;
+let commandBusy = false;
+let pollBusy = false;
+let recoveryBusy = false;
+let revision = 0;
+let recovery;
+const recoveryNote = document.querySelector('#recovery-note');
+const recoveryContent = document.querySelector('#recovery-content');
+const recoveryText = document.querySelector('#recovery-text');
+const dismissRecovery = document.querySelector('#dismiss-recovery');
+
+async function refreshRecovery() {
+  const requestedRevision = revision;
+  const next = await window.__TAURI__.core.invoke('get_recovery');
+  if (requestedRevision !== revision) return;
+  if (next?.session !== recovery?.session || next?.provider !== recovery?.provider) {
+    recoveryText.value = next?.text || '';
+  }
+  recovery = next;
+  recoveryContent.hidden = !next;
+  recoveryNote.textContent = !next ? '目前沒有待處理的文字。'
+    : next.reason === 'unconfirmed' ? '無法確認是否已送出，文字可能已在原欄位中。請先檢查原欄位，避免重複貼上。'
+    : next.reason === 'partial' ? '可能只有部分文字送出。請先檢查原欄位，再選取需要的內容。'
+    : '輸入位置已變更，完整文字保留在這裡。';
+}
 
 function render(view) {
   lastView = view;
@@ -22,6 +46,14 @@ function render(view) {
     const label = document.querySelector(`#${provider.provider}-availability`);
     if (label) label.textContent = labels[provider.availability] || '尚未檢查服務';
   }
+  if (view.local_runtime !== 'inactive') {
+    const runtimeLabels = {
+      waiting_for_input: '引擎已載入 · 等待輸入法連接',
+      ready: '本機引擎與輸入法已連接',
+      failed: '本機引擎已中斷 · 請重新準備',
+    };
+    document.querySelector('#local-availability').textContent = runtimeLabels[view.local_runtime] || '尚未準備引擎';
+  }
   document.querySelector('#version').textContent = `開發預覽 ${view.settings.version}`;
   document.querySelector('#tray-note').textContent = view.tray_available
     ? '可從系統圖示開啟此視窗。關閉視窗會結束預覽 App。'
@@ -29,6 +61,9 @@ function render(view) {
 }
 
 async function command(name, args = {}) {
+  if (commandBusy) return;
+  commandBusy = true;
+  revision++;
   fieldset.disabled = true;
   reload.disabled = true;
   check.disabled = true;
@@ -39,6 +74,7 @@ async function command(name, args = {}) {
     if (!window.__TAURI__) throw new Error('請透過已安裝的 VoiceType App 開啟設定。');
     const view = await window.__TAURI__.core.invoke(name, args);
     render(view);
+    await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
     status.textContent = name === 'select_provider'
       ? '偏好已儲存。現有聽寫方式尚未變更。'
       : name === 'refresh_providers' ? '已檢查服務。此操作不會啟動錄音。'
@@ -50,11 +86,62 @@ async function command(name, args = {}) {
     status.textContent = '尚未套用變更。請處理上方問題後重新載入。';
     lastView = undefined;
   } finally {
-    fieldset.disabled = !lastView;
-    reload.disabled = false;
-    check.disabled = !lastView;
+    commandBusy = false;
+    fieldset.disabled = !lastView || lastView.settings.dictation.busy;
+    reload.disabled = !!lastView?.settings.dictation.busy;
+    check.disabled = !lastView || lastView.settings.dictation.busy;
   }
 }
+
+document.querySelector('#select-recovery').addEventListener('click', () => {
+  recoveryText.focus();
+  recoveryText.select();
+});
+dismissRecovery.addEventListener('click', async () => {
+  if (!recovery || recoveryBusy) return;
+  recoveryBusy = true;
+  revision++;
+  dismissRecovery.disabled = true;
+  try {
+    await window.__TAURI__.core.invoke('dismiss_recovery', {
+      provider: recovery.provider, session: recovery.session,
+    });
+    await refreshRecovery();
+  } catch (reason) {
+    recoveryNote.textContent = String(reason);
+  } finally {
+    recoveryBusy = false;
+    dismissRecovery.disabled = false;
+  }
+});
+
+// Status carries no transcript. Fetch retained text separately only when needed;
+// this display polling never delays capture, inference or delivery on the worker.
+setInterval(async () => {
+  if (document.hidden || commandBusy || pollBusy || recoveryBusy || !lastView) return;
+  pollBusy = true;
+  const requestedRevision = revision;
+  try {
+    const view = await window.__TAURI__.core.invoke('get_settings');
+    if (requestedRevision !== revision) return;
+    render(view);
+    fieldset.disabled = view.settings.dictation.busy;
+    reload.disabled = view.settings.dictation.busy;
+    check.disabled = view.settings.dictation.busy;
+    if (view.settings.dictation.busy) status.textContent = '正在處理聽寫，完成後可切換辨識方式。';
+    else if (view.settings.dictation.failure) status.textContent = '這次聽寫未完成，請檢查引擎狀態。';
+    if (view.settings.dictation.has_retained_text || recovery) await refreshRecovery();
+  } catch (reason) {
+    if (requestedRevision !== revision) return;
+    error.textContent = String(reason);
+    error.hidden = false;
+    fieldset.disabled = true;
+    check.disabled = true;
+    lastView = undefined;
+  } finally {
+    pollBusy = false;
+  }
+}, 1000);
 
 for (const choice of choices) {
   choice.addEventListener('change', () => command('select_provider', { provider: choice.value }));

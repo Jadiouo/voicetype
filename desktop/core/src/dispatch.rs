@@ -85,17 +85,22 @@ impl LocalDispatcher {
         }
         let result = self.step_inner(app, budget.min(Duration::from_millis(10)));
         if result.is_err() {
-            self.failed = true;
-            if let Some(active) = &self.active {
-                app.provider_event(
-                    active.key,
-                    ProviderEvent::Failed(SessionFailure::ProviderFailed),
-                    &mut self.input,
-                );
-                let _ = app.cancel_dictation(&mut self.engine);
-            }
+            self.fail(app);
         }
         result
+    }
+
+    pub(crate) fn fail(&mut self, app: &mut Application) {
+        self.failed = true;
+        self.input.target = None;
+        if let Some(active) = &self.active {
+            app.provider_event(
+                active.key,
+                ProviderEvent::Failed(SessionFailure::ProviderFailed),
+                &mut self.input,
+            );
+            let _ = app.cancel_dictation(&mut self.engine);
+        }
     }
 
     fn step_inner(&mut self, app: &mut Application, budget: Duration) -> io::Result<()> {

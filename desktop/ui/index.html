@@ -37,6 +37,16 @@
         </label>
       </fieldset>
       <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="check-providers" type="button" disabled>檢查服務</button><button id="reload" type="button">重新載入</button></div>
+      <section class="recovery" aria-labelledby="recovery-title">
+        <h2 id="recovery-title">文字復原</h2>
+        <p id="recovery-note" role="status">目前沒有待處理的文字。</p>
+        <div id="recovery-content" hidden>
+          <label for="recovery-text" class="sr-only">保留的完整辨識文字</label>
+          <textarea id="recovery-text" readonly rows="4" spellcheck="false"></textarea>
+          <div class="recovery-actions"><button id="select-recovery" type="button">全選文字</button><button id="dismiss-recovery" type="button">清除這筆文字</button></div>
+          <p>全選後按 Ctrl+C 複製，再自行貼到需要的位置。這裡的文字只保留到 App 結束。</p>
+        </div>
+      </section>
       <section class="shared"><h2>兩種方式，共用你的習慣</h2><p>詞庫、繁體中文與抽樣校對會放在同一個介面。這些功能正在整合，現階段請繼續使用原有設定視窗。</p></section>
       <footer id="tray-note">關閉視窗會結束預覽 App。</footer>
     </main>
