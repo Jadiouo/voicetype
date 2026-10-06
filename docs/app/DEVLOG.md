@@ -266,3 +266,9 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   an operational desktop dictation route. Next connect the native dispatcher,
   original frontend/provider session mapping, complete correction context and
   owned child cleanup. Do not point it at an independently controlled daily daemon.
+
+- At source `161e003`, [engine/Fcitx CI 37518235137](https://github.com/Jadiouo/voicetype/actions/runs/37518235137)
+  and [desktop CI 37518235144](https://github.com/Jadiouo/voicetype/actions/runs/37518235144)
+  both passed. Downloaded Linux/Windows installers match their SHA-256 manifests
+  and source commit; both installed UI reports passed seven checks and explicitly
+  did not test speech adapters. All 173 remote source blobs match the local tree.
