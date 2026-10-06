@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "silero-vad",
+  "version": "5.0",
+  "platform": "any",
+  "source_url": "https://raw.githubusercontent.com/snakers4/silero-vad/5cd2ba54db059f961e7545d4f211b44f005a6dfb/files/silero_vad.onnx",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "silero-v5.0.onnx",
+      "bytes": 2313101,
+      "sha256": "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396",
+      "executable": false
+    }
+  ]
+}

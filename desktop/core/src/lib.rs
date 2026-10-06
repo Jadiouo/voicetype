@@ -1,5 +1,6 @@
 //! UI-facing commands, independent of the webview and platform audio libraries.
 
+pub mod assets;
 mod dictation;
 #[cfg(target_os = "linux")]
 pub mod dispatch;

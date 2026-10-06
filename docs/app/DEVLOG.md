@@ -408,3 +408,40 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   below when the new source reaches CI. Daily services and private user data
   remain unchanged. Next concrete work is verified asset setup/activation, then
   frontend migration and the shared vocabulary/review/provider integrations.
+
+### Verified asset storage and model provenance
+
+- `91cc55c` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37545231543)
+  and [both desktop installer/UI jobs](https://github.com/Jadiouo/voicetype/actions/runs/37545231537).
+  Downloaded source/size/SHA match: Linux 4,457,590 bytes,
+  `4847659e2fb70da66f89a09e4d705df8ce273454e4a12af462cb2ea76b89a7a2`;
+  Windows 2,154,596 bytes,
+  `6127b10cce6c0b6f416f5a82482566e95d6a6f908e35384fbb2aa9d84a7d6f03`.
+  Both UI reports pass eight checks and explicitly exclude speech acceptance.
+- TDD/D: the initial installation test had no asset API (**RED**); a staged
+  `AssetStore` now copies exact pinned regular files, verifies size/SHA-256,
+  preserves previous versions and publishes a complete activation atomically
+  (**GREEN**). Corrupt and incomplete updates keep the working version and
+  sibling vocabulary unchanged. Upgrade/rollback checks passed on first run.
+- An invalid previous activation record was initially overwritten (**RED**);
+  bounded/schema/path validation now preserves it and rejects installation
+  (**GREEN**). Reinstall initially required another source copy (**RED**); it now
+  reuses a fully verified identical version, while a changed version is repaired
+  into a new directory and cannot be selected for rollback (**GREEN**).
+- Five asset cases pass locally. Added only the locked sha2 dependency chain;
+  the daemon lockfile was updated for its dev dependency on the app core. These
+  tests will run natively on Windows as well as Linux in desktop CI.
+- Downloaded and verified the official GitHub Nano archive. All six model files
+  match the existing daily model; a same-name Hugging Face export has different
+  ONNX hashes and was not substituted. The pinned Silero upstream file also
+  matches the daily VAD. Public catalogs contain URLs, versions, platforms, sizes
+  and hashes only; binary downloads stay in ignored private storage.
+- The public `probe_asset_install` example actually copied and verified the six
+  Nano files and Silero into disposable stores. No inference, capture, user-data
+  migration or service change occurred. Details, source links and license-notice
+  limits are in [ASSETS.md](ASSETS.md).
+- **Continuation:** wire bounded HTTPS/archive setup and progress/cancellation,
+  native runtime manifests/relocatable packaging and explicit Tauri activation.
+  Current asset storage takes a prepared source directory; it is not yet a GUI
+  downloader. Frontend migration/rollback, shared vocabulary/review/CSC, Google
+  and Windows speech remain. Keep the full goal active.
