@@ -57,3 +57,48 @@
   screenshots, bundled license and preview/source documentation. UI verification
   is pending until that workflow runs successfully. Windows 11 microphone/target
   app acceptance remains separate from a Windows Server CI shell test.
+
+## 2026-10-07 — M1 installed settings preview verified
+
+- [CI run 37499241303](https://github.com/Jadiouo/voicetype/actions/runs/37499241303)
+  succeeded for source `9abc9a6` on both platforms. Linux installed the `.deb` using
+  dpkg and launched `/usr/bin/voicetype-desktop`; Windows installed the NSIS `.exe`
+  and launched its installed payload. Each independently passed all five public
+  command tests and the six UI checks recorded by `shell_smoke.py`.
+- UI evidence: real installed window; Local initially selected; selecting Google;
+  restarting preserves Google; corrupt config produces a visible error and disables
+  writes; restoring the file and reloading recovers. Linux WebKit and Windows
+  WebView2 screenshots were downloaded and visually checked: Traditional Chinese
+  labels render, Google is selected, and the unavailable-adapter notice is visible.
+  These checks do not verify tray visibility or dictation in other target apps.
+- Both downloadable artifacts were retrieved and matched against their CI source,
+  size and SHA-256 manifest. Linux license and preview guide contents also matched
+  the repository. The Windows executable had already run through native CI UI;
+  inspecting a PE header alone was not counted as functional verification.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux amd64 `.deb` | 4,276,970 | `0ffc1156c96b323aefd732f1830c2864bc6286662ddd2dba0ab1bbdbef23352d` |
+| Windows x64 NSIS `.exe` | 2,085,931 | `d880a25090bcbc6ff840115102db6d0b5e19f8abf4e28f6507251e0b56554457` |
+
+- Public branch `feat/desktop-app`, [draft PR #2](https://github.com/Jadiouo/voicetype/pull/2).
+  Remote source tree at `9abc9a6` matched all 161 local blob hashes. Subsequent
+  documentation updates do not change the tested desktop source.
+- No production service, hotkey, user dictionary, learning file or review data was
+  changed. No models were downloaded and no live recording was made. Preview
+  artifacts are unsigned development builds, not a production dictation release.
+
+### Next implementation slice (M2)
+
+Continue through the four already-agreed seams; do not ask for that agreement again
+or rerun PR #1's full suite. First implement real provider readiness through the
+application command boundary and the existing Linux IPC adapters. Selecting a
+preference must ultimately route the next recording through one coordinator;
+changing only this JSON file does not change the existing Fcitx hotkeys/services.
+
+Then connect session cancellation/focus/deduplication, shared vocabulary and review,
+and versioned model/runtime setup. Preserve the current Linux data formats and
+the working daily installation until migration has an actual rollback path.
+Windows requires the Nano native CPU build plus platform capture, focus/delivery
+and Google ConPTY work. A Windows Server CI settings pass is not Windows 11 real
+microphone/login/target-app acceptance. M2–M4 remain open in SDD.

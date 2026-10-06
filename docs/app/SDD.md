@@ -139,6 +139,11 @@ throughout. Preview installers are development artifacts, not a stable release.
   only equal/lower integrity targets. Successful `SendInput` counts must be checked,
   and a partial insertion must not trigger an automatic full-text retry. See
   [Microsoft SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput).
+  The API also has no target-window argument: unlike a Fcitx input-context commit,
+  checking focus then injecting is not one atomic target-bound operation. This is
+  an architectural inference from that interface. M3 must validate both window
+  and same-window editable-control changes. If Win32 cannot meet APP-03, use TSF
+  before production release rather than weaken the delivery requirement.
 - Google documents Windows installation and microphone permissions, but that is
   not proof that our ConPTY/editor-capture integration works. Verify separately:
   [CLI install](https://antigravity.google/docs/cli/install/) and
