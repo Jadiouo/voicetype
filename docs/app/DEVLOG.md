@@ -525,3 +525,17 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   provenance, full notices, OpenCC/system dependency installation, trusted app
   manifests/resources and activation still need integration. Windows runtime,
   frontend migration/rollback, shared vocabulary/review/CSC and Google also remain.
+
+- Final `7bc040c` verification: [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37549294794)
+  and [Linux/Windows desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37549294793)
+  all passed. Both downloaded packages match their source/size/SHA, and each
+  installed UI report passes nine checks with speech adapters explicitly untested.
+  Linux: 6,681,306 bytes,
+  `205823e071eeb2ea97388b18cb0f9abd6847e54cfc9028350ebf4f2a31ec8ec2`;
+  Windows: 3,497,790 bytes,
+  `66afb91f1172ba78b4d4af74249145b179d078e0e76f30af3232f8891991b194`.
+  All 191 remote source blobs match the reviewed commit. This CI checks the
+  preview app and default engine contracts; the opt-in relocated native build
+  was independently verified locally as described above. The full app objective
+  remains unfinished; native release/activation and shared/provider integration
+  are the next implementation work.
