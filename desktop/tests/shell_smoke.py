@@ -95,6 +95,20 @@ def main():
                 assert js("return document.querySelector('#cancel-models').hidden")
                 assert js("return document.querySelector('#model-progress').hidden")
                 assert not (Path(profile) / "model-assets").exists(), "Opening settings started model setup"
+                assert not (Path(profile) / "runtime-assets").exists(), "Opening settings installed a runtime"
+                assert not (Path(profile) / "local-profile").exists(), "Opening settings launched an engine"
+                if sys.platform == "linux":
+                    eventually(lambda: js("return !document.querySelector('#load-local-runtime').disabled"))
+                    click("#load-local-runtime")
+                    eventually(lambda: js("return !document.querySelector('#error').hidden"))
+                    assert js("return document.querySelector('#error').textContent.includes('請先下載／檢查模型')")
+                    assert not (Path(profile) / "runtime-assets").exists()
+                    assert not (Path(profile) / "local-profile").exists()
+                    click("#reload")
+                    eventually(ready)
+                else:
+                    assert js("return document.querySelector('#load-local-runtime').disabled")
+                    assert js("return document.querySelector('#runtime-note').textContent.includes('仍在準備中')")
                 assert js("return document.querySelectorAll('.availability').length") == 2
                 click("#check-providers")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
@@ -153,7 +167,7 @@ def main():
                     "passed": ["installed-window", "default-local", "choose-google",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
                                "provider-status-without-recording", "recovery-empty-state",
-                               "model-setup-explicit-only"],
+                               "model-setup-explicit-only", "runtime-setup-requires-models"],
                     "speech_adapters_tested": False,
                 }, indent=2) + "\n", encoding="utf-8")
                 print("PASS: real UI selection, restart, corruption and reload")

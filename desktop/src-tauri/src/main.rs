@@ -19,6 +19,43 @@ struct DesktopState {
     worker: DesktopWorker,
     models: ModelSetup,
     tray_available: AtomicBool,
+    #[cfg(target_os = "linux")]
+    local_installer: voicetype_app_core::local_install::LocalInstaller,
+    #[cfg(target_os = "linux")]
+    runtime_resources: PathBuf,
+}
+
+#[tauri::command]
+async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(target_os = "linux")]
+    {
+        with_desktop(app.clone(), move |worker| {
+            let state = app.state::<DesktopState>();
+            // Hash/copy work stays off the resident dictation thread. No paths,
+            // URLs, manifests or command lines are accepted from the webview.
+            let paths = state
+                .local_installer
+                .prepare(&state.runtime_resources, |_, _| true)
+                .map_err(|error| match error.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        "請先下載／檢查模型，再載入本機引擎。".to_string()
+                    }
+                    _ => "無法核對本機引擎或模型，請重新檢查模型與安裝包。".to_string(),
+                })?;
+            worker.activate_local(paths)
+        })
+        .await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err("此平台的本機引擎封裝仍在準備中。".into())
+    }
+}
+
+#[tauri::command]
+async fn unload_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, DesktopWorker::deactivate_local).await
 }
 
 #[tauri::command]
@@ -50,6 +87,7 @@ struct View {
     #[serde(flatten)]
     desktop: DesktopSnapshot,
     tray_available: bool,
+    local_runtime_bundled: bool,
 }
 
 #[tauri::command]
@@ -137,6 +175,7 @@ async fn with_desktop(
     Ok(View {
         desktop: with_worker(app, operation).await?,
         tray_available,
+        local_runtime_bundled: cfg!(target_os = "linux"),
     })
 }
 
@@ -167,6 +206,16 @@ fn main() {
             };
             let model_root = config_dir.join("model-assets");
             app.manage(DesktopState {
+                #[cfg(target_os = "linux")]
+                local_installer: voicetype_app_core::local_install::LocalInstaller::bundled(
+                    config_dir.clone(),
+                    serde_json::from_str(include_str!(concat!(
+                        env!("OUT_DIR"),
+                        "/runtime-catalog.json"
+                    )))?,
+                )?,
+                #[cfg(target_os = "linux")]
+                runtime_resources: app.path().resource_dir()?.join("runtime"),
                 worker: DesktopWorker::spawn(config_dir)?,
                 models: ModelSetup::new(model_root)?,
                 tray_available: AtomicBool::new(false),
@@ -204,7 +253,9 @@ fn main() {
             cancel_dictation,
             get_model_setup,
             prepare_models,
-            cancel_model_setup
+            cancel_model_setup,
+            load_local_runtime,
+            unload_local_runtime
         ])
         .build(tauri::generate_context!())
         .expect("VoiceType could not start")

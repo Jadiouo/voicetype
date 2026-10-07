@@ -43,7 +43,9 @@
         <p id="model-status" role="status" aria-live="polite">正在讀取模型準備狀態…</p>
         <progress id="model-progress" aria-label="模型準備進度" hidden></progress>
         <div class="model-actions"><button id="prepare-models" type="button" disabled>下載／檢查模型</button><button id="cancel-models" type="button" hidden>取消準備</button></div>
-        <p class="model-note">這一步只準備模型。App 的錄音與輸入法連接仍在整合中。</p>
+        <p class="model-note">模型完成後，可明確載入安裝包附帶的本機引擎。App 的錄音與輸入法連接仍在整合中。</p>
+        <div class="model-actions"><button id="load-local-runtime" type="button" disabled>載入本機引擎</button><button id="unload-local-runtime" type="button" hidden>卸載本機引擎</button></div>
+        <p id="runtime-note">正在讀取引擎封裝狀態…</p>
       </section>
       <section class="recovery" aria-labelledby="recovery-title">
         <h2 id="recovery-title">文字復原</h2>

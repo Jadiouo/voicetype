@@ -16,10 +16,10 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def verify(root):
+def verify(root, capi_sha="72408cc5f2407eb0ba46cd381614229107f225b8ccc4149e2f5e4b09957834dd"):
     root = root.resolve(strict=True)
     pins = {
-        "libsherpa-onnx-c-api.so": "72408cc5f2407eb0ba46cd381614229107f225b8ccc4149e2f5e4b09957834dd",
+        "libsherpa-onnx-c-api.so": capi_sha,
         "libonnxruntime.so": "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e",
     }
     paths = {"bin/voicetyped": "$ORIGIN/../lib"}
@@ -47,4 +47,4 @@ def verify(root):
 
 
 if __name__ == "__main__":
-    verify(Path(sys.argv[1]))
+    verify(Path(sys.argv[1]), *sys.argv[2:])

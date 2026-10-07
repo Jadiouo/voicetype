@@ -8,6 +8,12 @@ the existing dictation services or bundle speech models.** Keep using the existi
 Linux installation for dictation, vocabulary and review until the adapters pass
 the staged acceptance gates.
 
+Model download/check/cancel is available in the UI. Linux installers now carry a
+source-built Nano CPU runtime: "載入本機引擎" verifies installed models and packaged
+bytes, then loads a private owned engine; "卸載本機引擎" releases it. Loading does
+not record or migrate hotkeys/input integration. Windows runtime loading remains
+unavailable, with an explicit message in the same UI.
+
 "Check services" sends a read-only ping to an existing Linux local engine and
 distinguishes response, missing service, timeout and incompatible reply. It does
 not start audio or establish Google login readiness. The shared core now also
@@ -23,6 +29,20 @@ also opens settings where the desktop supports it. No autostart is installed.
 
 Use Rust 1.90+ and Node 22+. For native prerequisites, follow
 [Tauri's platform instructions](https://v2.tauri.app/start/prerequisites/).
+
+Before a Linux Tauri build or `dev`, prepare the native runtime from the repo root
+(Ubuntu 24.04; requires CMake, Ninja, C/C++ toolchain, curl, patch, `libasound2-dev`
+and `libopencc-dev`, in addition to Tauri prerequisites):
+
+```sh
+python3 scripts/build-desktop-native.py --cache private/native-source-cache --output private/release-native
+bash scripts/build-desktop-runtime.sh private/release-native desktop/target/runtime --source-built
+```
+
+Both outputs must be new directories. Retain or move previous candidates before
+rebuilding. Downloads are hash-pinned; `--offline` uses only a complete verified
+source cache. This is CPU compilation and does not download speech models. See
+[asset provenance](../docs/app/ASSETS.md) for the build/runtime trust boundary.
 
 ```sh
 cd desktop

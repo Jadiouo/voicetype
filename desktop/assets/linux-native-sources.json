@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "platform": "linux-x86_64",
+  "source_commit": "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf",
+  "patch_sha256": "5206aa456897f13e04c32a3184f80048167b81d528d57c4bdd294b10f64f3812",
+  "inputs": [
+    {
+      "id": "sherpa-onnx",
+      "url": "https://codeload.github.com/k2-fsa/sherpa-onnx/tar.gz/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf",
+      "bytes": 11645413,
+      "sha256": "0a8db6c55dd318f4a688faba85f7760b99a6c92e8ef8864479d418531bee1ac2",
+      "format": "tar",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    {
+      "id": "kaldi-native-fbank",
+      "url": "https://codeload.github.com/csukuangfj/kaldi-native-fbank/tar.gz/refs/tags/v1.22.3",
+      "bytes": 71144,
+      "sha256": "9176cc66fc7ce1edf85cf355b06e320c57db6297df74277f575183468893cf61",
+      "format": "tar",
+      "licenses": [
+        "LICENSE"
+      ],
+      "cmake": "KALDI_NATIVE_FBANK"
+    },
+    {
+      "id": "kaldi-decoder",
+      "url": "https://codeload.github.com/k2-fsa/kaldi-decoder/tar.gz/refs/tags/v0.3.0",
+      "bytes": 51199,
+      "sha256": "b9f34cfb4fd3b1344100eead79ef4d37aa15962274b9e3056de345021f76a1b0",
+      "format": "tar",
+      "licenses": [
+        "LICENSE"
+      ],
+      "cmake": "KALDI_DECODER"
+    },
+    {
+      "id": "kaldifst",
+      "url": "https://codeload.github.com/k2-fsa/kaldifst/tar.gz/refs/tags/v1.8.0",
+      "bytes": 172147,
+      "sha256": "3f247b7e5a2409071202f5e2bc6200060f66728c0a3443c03923ad2723e040b3",
+      "format": "tar",
+      "licenses": [
+        "LICENSE"
+      ],
+      "cmake": "KALDIFST"
+    },
+    {
+      "id": "openfst",
+      "url": "https://codeload.github.com/csukuangfj/openfst/tar.gz/refs/tags/v1.8.5-2026-07-09",
+      "bytes": 1501685,
+      "sha256": "2ff712a32952fcb01d351121a6bc8ccf4fdc6b2aa06ce8df2b3095dedd518c0e",
+      "format": "tar",
+      "licenses": [
+        "COPYING"
+      ],
+      "cmake": "OPENFST"
+    },
+    {
+      "id": "eigen",
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz",
+      "bytes": 2967272,
+      "sha256": "e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec",
+      "format": "tar",
+      "licenses": [
+        "LICENSE",
+        "COPYING.APACHE",
+        "COPYING.BSD",
+        "COPYING.MINPACK",
+        "COPYING.MPL2",
+        "COPYING.README"
+      ],
+      "cmake": "EIGEN"
+    },
+    {
+      "id": "simple-sentencepiece",
+      "url": "https://codeload.github.com/pkufool/simple-sentencepiece/tar.gz/refs/tags/v0.7",
+      "bytes": 355335,
+      "sha256": "1748a822060a35baa9f6609f84efc8eb54dc0e74b9ece3d82367b7119fdc75af",
+      "format": "tar",
+      "licenses": [
+        "LICENSE"
+      ],
+      "cmake": "SIMPLE-SENTENCEPIECE"
+    },
+    {
+      "id": "json",
+      "url": "https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.12.0",
+      "bytes": 9678593,
+      "sha256": "4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187",
+      "format": "tar",
+      "licenses": [
+        "LICENSE.MIT"
+      ],
+      "cmake": "JSON"
+    },
+    {
+      "id": "kissfft",
+      "url": "https://codeload.github.com/mborgerding/kissfft/zip/febd4caeed32e33ad8b2e0bb5ea77542c40f18ec",
+      "bytes": 74252,
+      "sha256": "497103e664168ebe39580b757adbe616f6cf85a16572af581ca7bc42d0ab13fd",
+      "format": "zip",
+      "licenses": [
+        "COPYING",
+        "LICENSES/BSD-3-Clause",
+        "LICENSES/Unlicense"
+      ],
+      "cmake": "KISSFFT"
+    },
+    {
+      "id": "onnxruntime_cxx_api.h",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/include/onnxruntime/core/session/onnxruntime_cxx_api.h",
+      "bytes": 168928,
+      "sha256": "c6bf005e4063b7db911d0a6b030452bcb9d4fc5e87530a39d94c4a5fcd311b61",
+      "format": "file",
+      "destination": "ort-include/onnxruntime_cxx_api.h"
+    },
+    {
+      "id": "onnxruntime_c_api.h",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/include/onnxruntime/core/session/onnxruntime_c_api.h",
+      "bytes": 394991,
+      "sha256": "b69a133143c0da61782b2b02cc8a620d21ac139231fd211719776d10385135c1",
+      "format": "file",
+      "destination": "ort-include/onnxruntime_c_api.h"
+    },
+    {
+      "id": "onnxruntime_float16.h",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/include/onnxruntime/core/session/onnxruntime_float16.h",
+      "bytes": 17991,
+      "sha256": "88b242845d25981633a0bbd1c148e273cf8bfb016ea3f57c4af41a06530f72b0",
+      "format": "file",
+      "destination": "ort-include/onnxruntime_float16.h"
+    },
+    {
+      "id": "onnxruntime_cxx_inline.h",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/include/onnxruntime/core/session/onnxruntime_cxx_inline.h",
+      "bytes": 157610,
+      "sha256": "97f960b1bc4a372918893ef4c77102dee725ccfce0d76607f4570b03e7e28325",
+      "format": "file",
+      "destination": "ort-include/onnxruntime_cxx_inline.h"
+    },
+    {
+      "id": "onnxruntime_error_code.h",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/include/onnxruntime/core/session/onnxruntime_error_code.h",
+      "bytes": 2775,
+      "sha256": "5ce3b054e798eced8d14f5b86e98692fd33470463f96194ce0700a2d53dd8721",
+      "format": "file",
+      "destination": "ort-include/onnxruntime_error_code.h"
+    },
+    {
+      "id": "onnxruntime_ep_c_api.h",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/include/onnxruntime/core/session/onnxruntime_ep_c_api.h",
+      "bytes": 152985,
+      "sha256": "db86df0f846b8d3bdbf429a5c76c5805293196575ca3c475878612591cd18e51",
+      "format": "file",
+      "destination": "ort-include/onnxruntime_ep_c_api.h"
+    },
+    {
+      "id": "onnxruntime",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-shared-no-tts-lib.tar.bz2",
+      "bytes": 9249201,
+      "sha256": "bf2d998c8b07012cd5098f3b92673bc1333fd9b927767d7cb664be8190d8bc0b",
+      "format": "tar",
+      "licenses": []
+    },
+    {
+      "id": "onnxruntime-LICENSE",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE",
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "format": "file",
+      "destination": "licenses/onnxruntime/LICENSE"
+    },
+    {
+      "id": "onnxruntime-ThirdPartyNotices.txt",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt",
+      "bytes": 325054,
+      "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+      "format": "file",
+      "destination": "licenses/onnxruntime/ThirdPartyNotices.txt"
+    }
+  ]
+}

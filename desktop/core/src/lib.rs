@@ -6,6 +6,8 @@ mod dictation;
 pub mod dispatch;
 #[cfg(target_os = "linux")]
 pub mod local;
+#[cfg(target_os = "linux")]
+pub mod local_install;
 #[cfg(unix)]
 mod providers;
 #[cfg(target_os = "linux")]

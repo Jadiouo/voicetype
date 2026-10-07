@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": { "../target/runtime": "runtime" },
+    "linux": {
+      "deb": { "depends": ["libasound2t64", "libopencc1.1", "libopencc-data", "libstdc++6"] }
+    }
+  }
+}

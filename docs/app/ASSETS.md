@@ -126,11 +126,35 @@ worker flow: actual GitHub Nano redirect/download plus VAD, installation and
 reopening both bundles. The real network source and installer were used together,
 without model execution. This remains separate from interactive GUI acceptance.
 
-Next connect native runtime activation. CPU libraries and the engine executable
-need their own platform-specific manifests/build provenance and relocatable
-packaging; model-only installation is not a working recognizer.
-The Linux opt-in runtime build now uses bundle-relative library paths and has
-passed actual relocated process-map/cleanup checks; see
-[native runtime preparation](../NANO-PREVIEW.md#preparing-a-relocatable-desktop-runtime-linux).
-Its preparation directory does not yet include complete release notices or a
-Tauri installer resource and must not be treated as a distributable package.
+## Linux packaged runtime
+
+`linux-native-sources.json` fixes the source/dependency archives, ORT headers,
+official CPU shared library and Microsoft license/third-party notices by URL,
+size and SHA-256. `build-desktop-native.py` verifies inputs before extracting
+ordinary files/directories, applies the pinned integrity patch, checks patched
+file hashes, and builds with CMake FetchContent disconnected and every optional
+Sherpa capability disabled except C API. No installed private library is an input.
+The result includes source-build provenance, patch and native dependency notices.
+
+`build-desktop-runtime.sh --source-built` verifies that build output and compiles
+the Nano daemon against its exact C API digest. Different compilers need different
+output digests; the fixed ORT/header pins and the legacy development C API pin
+remain unchanged. A release-builder digest is accepted only for the isolated
+relocatable feature. It is a build-time input, never an installed sidecar override.
+Diagnostics remap builder source paths; both native libraries resolve relative
+to the bundled executable. Ubuntu runtime dependencies include OpenCC data/library,
+ALSA and the C++ standard library.
+
+The Linux Tauri build embeds the generated catalog after checking every payload
+hash and includes the runtime resource directory in the `.deb`. On explicit load,
+`LocalInstaller` first checks installed models against the compiled model catalog,
+then installs runtime bytes into a private immutable version using the embedded
+catalog. Replacing a resource manifest cannot authorize different executable bytes.
+Opening settings does no runtime installation or process launch. Hashing/copying
+runs off the resident dictation worker; warm recording never rehashes assets.
+
+CI rebuilds the native dependencies, checks extracted installer bytes against the
+build-time catalog and verifies real loader paths. Windows still has no packaged
+speech runtime. Shared input integration, complete app/model/Rust dependency notice
+inventory and real speech acceptance remain release work; this preview is not a
+production dictation installer.

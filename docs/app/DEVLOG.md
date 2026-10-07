@@ -539,3 +539,35 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   was independently verified locally as described above. The full app objective
   remains unfinished; native release/activation and shared/provider integration
   are the next implementation work.
+
+### Source-built Linux runtime and explicit app loading
+
+- Added a portable build entry point with reviewed source/dependency archive,
+  patch, ORT/header and notice pins. CMake is disconnected after verified fetch;
+  only CPU C API is enabled. No daily/private runtime is a build input. The
+  build collects native notices, patch and provenance without developer paths.
+- Release builds pass their exact newly compiled C API digest to the isolated
+  relocatable daemon build. Legacy development pins and fixed ORT/header checks
+  remain. The app embeds and verifies the build-time catalog; installed resource
+  manifests cannot replace that trust anchor. Linux resources/dependencies and
+  native CI build/installer inspection are wired.
+- Added explicit load/unload UI commands. Full model/runtime verification occurs
+  away from the dictation worker, then its existing owner loads Nano CPU. Missing
+  models prevent publication/start. No microphone, hotkey migration or daily
+  service change occurs. Windows correctly reports runtime loading unavailable.
+- TDD/D RED: corrupt-cache build entry point did not exist; GREEN rejects the
+  damaged source before output. TDD/D RED: app installation composition API did
+  not exist; GREEN refuses preparation when models are absent. Additional
+  existing-output, private-version/personal-file preservation, substituted
+  sidecar and cancelled verification cases passed on their first runs; no RED
+  claim is made for them.
+- Local core suite: 44 passed, one ignored subprocess helper; two build-entry
+  checks passed. Actual fresh native compilation and daemon package passed exact
+  loader-path/payload inspection. Real-model preparation/owned-process probe and
+  native Linux/Windows installer/UI CI are being completed. These checks do not
+  constitute microphone, recognition accuracy or delivery acceptance.
+- The real `--package` ownership probe also passed: production installer copied
+  and verified the pinned model files and new runtime into a disposable profile;
+  the actual CPU process loaded both libraries from that installed version, sent
+  no Start, loaded no GPU libraries, and was reaped on shutdown. All three daily
+  services remain active/running with zero restarts. Installed UI CI is next.

@@ -15,6 +15,20 @@ const recoveryNote = document.querySelector('#recovery-note');
 const recoveryContent = document.querySelector('#recovery-content');
 const recoveryText = document.querySelector('#recovery-text');
 const dismissRecovery = document.querySelector('#dismiss-recovery');
+const loadRuntime = document.querySelector('#load-local-runtime');
+const unloadRuntime = document.querySelector('#unload-local-runtime');
+
+function runtimeControls(view) {
+  const loaded = ['waiting_for_input', 'ready'].includes(view?.local_runtime);
+  loadRuntime.disabled = commandBusy || !view?.local_runtime_bundled || loaded
+    || view.settings.dictation.busy || view.settings.selected_provider !== 'local';
+  unloadRuntime.hidden = !loaded;
+  unloadRuntime.disabled = commandBusy || !!view?.settings.dictation.busy;
+  document.querySelector('#runtime-note').textContent = !view?.local_runtime_bundled
+    ? '這個平台的引擎封裝仍在準備中。'
+    : loaded ? '引擎已載入記憶體，尚未接管現有輸入法或錄音快捷鍵。'
+    : '載入時會核對完整模型並使用 CPU。這一步不會開始錄音。';
+}
 
 async function refreshRecovery() {
   const requestedRevision = revision;
@@ -33,6 +47,7 @@ async function refreshRecovery() {
 
 function render(view) {
   lastView = view;
+  runtimeControls(view);
   cancel.hidden = !view.settings.dictation.busy;
   cancel.disabled = view.settings.dictation.phase === 'releasing';
   for (const choice of choices) {
@@ -66,6 +81,7 @@ function render(view) {
 async function command(name, args = {}) {
   if (commandBusy) return;
   commandBusy = true;
+  runtimeControls(lastView);
   revision++;
   fieldset.disabled = true;
   reload.disabled = true;
@@ -73,6 +89,8 @@ async function command(name, args = {}) {
   cancel.disabled = true;
   error.hidden = true;
   status.textContent = name === 'select_provider' ? '正在儲存…'
+    : name === 'load_local_runtime' ? '正在核對模型並載入本機引擎，首次載入可能需要一些時間…'
+    : name === 'unload_local_runtime' ? '正在卸載本機引擎…'
     : name === 'cancel_dictation' ? '正在取消聽寫…'
     : name === 'refresh_providers' ? '正在檢查服務…' : '正在讀取設定…';
   try {
@@ -82,6 +100,8 @@ async function command(name, args = {}) {
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
     status.textContent = name === 'select_provider'
       ? '偏好已儲存。現有聽寫方式尚未變更。'
+      : name === 'load_local_runtime' ? '引擎已載入，等待輸入法整合。尚未開始錄音。'
+      : name === 'unload_local_runtime' ? '本機引擎已卸載。'
       : name === 'cancel_dictation' ? '已要求取消，正在等待引擎停止。'
       : name === 'refresh_providers' ? '已檢查服務。此操作不會啟動錄音。'
       : '已讀取你的偏好設定。';
@@ -93,6 +113,7 @@ async function command(name, args = {}) {
     lastView = undefined;
   } finally {
     commandBusy = false;
+    runtimeControls(lastView);
     fieldset.disabled = !lastView || lastView.settings.dictation.busy;
     reload.disabled = !!lastView?.settings.dictation.busy;
     check.disabled = !lastView || lastView.settings.dictation.busy;
@@ -163,6 +184,8 @@ for (const choice of choices) {
 reload.addEventListener('click', () => command('reload_settings'));
 check.addEventListener('click', () => command('refresh_providers'));
 cancel.addEventListener('click', () => command('cancel_dictation'));
+loadRuntime.addEventListener('click', () => command('load_local_runtime'));
+unloadRuntime.addEventListener('click', () => command('unload_local_runtime'));
 command('get_settings');
 
 // Independent setup status/commands: downloads never occupy the dictation
@@ -180,7 +203,7 @@ function renderModels(view) {
     checking_installed: '正在檢查已安裝的模型…',
     downloading: '正在下載模型…', checking_download: '正在核對下載檔…',
     extracting: '正在解壓縮模型…', installing: '正在安裝及核對模型…',
-    installed: '模型已通過完整檢查。辨識引擎尚待接入 App。',
+    installed: '模型已通過完整檢查，可供本機引擎載入。',
     cancelled: '已取消準備。已完成的模型與原有資料仍保留。',
     failed: view.error || '模型準備未完成，請檢查網路與可用空間後重試。',
   };

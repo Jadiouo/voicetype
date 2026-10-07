@@ -82,6 +82,7 @@ fn main() {
 
 fn link_nano() {
     println!("cargo:rerun-if-env-changed=VOICETYPE_SHERPA_NATIVE_ROOT");
+    println!("cargo:rerun-if-env-changed=VOICETYPE_SHERPA_CAPI_SHA256");
     println!("cargo:rerun-if-changed=shim/nano_shim.cpp");
     println!("cargo:rerun-if-changed=shim/nano_shim.h");
     let root = PathBuf::from(std::env::var_os("VOICETYPE_SHERPA_NATIVE_ROOT")
@@ -90,9 +91,22 @@ fn link_nano() {
     assert!(!root.to_string_lossy().contains([':', ',', '\n']), "native artifact path cannot contain colon/comma/newline");
     let include = root.join("include");
     let lib = root.join("lib");
+    // An explicit release-builder pin is necessary because compilers produce
+    // different C API bytes. Only the isolated desktop build can use it. The
+    // reviewed source-build pipeline verifies inputs and passes its exact output
+    // digest; a runtime/installer sidecar is never allowed to choose this value.
+    let capi_sha = std::env::var("VOICETYPE_SHERPA_CAPI_SHA256").unwrap_or_else(|_| {
+        "72408cc5f2407eb0ba46cd381614229107f225b8ccc4149e2f5e4b09957834dd".into()
+    });
+    if std::env::var_os("VOICETYPE_SHERPA_CAPI_SHA256").is_some() {
+        assert!(std::env::var_os("CARGO_FEATURE_RELOCATABLE_RUNTIME").is_some(),
+            "a release-builder C API pin is allowed only with relocatable-runtime");
+        assert!(capi_sha.len() == 64 && capi_sha.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "invalid release-builder C API SHA256");
+    }
     for (path, expected) in [
         (include.join("sherpa-onnx/c-api/c-api.h"), "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"),
-        (lib.join("libsherpa-onnx-c-api.so"), "72408cc5f2407eb0ba46cd381614229107f225b8ccc4149e2f5e4b09957834dd"),
+        (lib.join("libsherpa-onnx-c-api.so"), capi_sha.as_str()),
         (lib.join("libonnxruntime.so"), "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e"),
     ] {
         assert!(path.is_file(), "missing native Nano dependency: {}", path.display());
