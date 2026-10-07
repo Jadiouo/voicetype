@@ -641,3 +641,25 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
 - Remaining: shared vocabulary/review/CSC in the app profile, Google and Windows
   speech paths, full license inventory and live platform speech/latency acceptance.
   This input milestone is not the complete app goal or a measured speedup.
+
+- Final local coverage is 46 core tests plus the explicit installed-module worker
+  integration, and 93 Fcitx cases. Clippy reports only the existing EngineOwner
+  enum-size warning. [Engine/Fcitx CI at `54936a0`](https://github.com/Jadiouo/voicetype/actions/runs/37575451343) passed.
+- `9195c2a` installer/UI CI passed on both platforms. Screenshot review then
+  corrected legacy-service/readiness wording and documented the Fcitx desktop
+  prerequisite. Final [`45ec5de` Linux/Windows CI](https://github.com/Jadiouo/voicetype/actions/runs/37576475135) passes, with eleven native installed UI checks per platform and Linux
+  module install/restore. No microphone or speech-quality acceptance is claimed.
+- Downloaded final installers match their source commit, size and SHA-256. Linux:
+  18,517,626 bytes,
+  `752efa7874e3565608c728ae64d1d3b6dbc452aa8b5ced288aa2aa6ba7f47cda`.
+  Windows: 3,506,623 bytes,
+  `3126bb070398251ecaf272ec4ce2709165a08ceed9773d9f2a477fee635d9307`.
+  Both final screenshots were inspected. Linux runtime hashes/notices/loader
+  inspection passes. Its input bundle is byte-identical to the downloaded
+  `9195c2a` module that passed production installer/worker/Fcitx integration.
+- The rebuilt C API differs from `9195c2a` only in its 20-byte ELF build ID; every
+  other file-backed ELF section matches. Nevertheless, the exact final package
+  also passed real-model preparation/OwnedLocal loading: expected installed CPU
+  libraries, no GPU libraries, no Start and verified child reaping. This is setup
+  evidence, not an inference benchmark. All three daily services remain running
+  with zero restarts. No live Fcitx registration or personal data was changed.
