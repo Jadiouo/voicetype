@@ -589,3 +589,10 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   Caller cache/output paths remain ordinary argv paths. Curl configuration is
   disabled to keep fetch behavior defined by the build recipe. Existing-output
   and corrupt-input checks pass; full space-path build verification is running.
+- The full native build and Rust runtime wrapper both passed with spaces in the
+  caller's native/output paths. `2bbc48a` Windows installer/UI passed; Linux CI
+  rebuilt the native library successfully, then correctly refused a runtime
+  destination restored by the Rust cache. CI now discards only generated runtime,
+  installer/extraction and UI-report outputs after cache restore, retaining Rust
+  compilation caches. This also prevents a failed run uploading an earlier run's
+  UI result as current evidence. The builder's no-overwrite rule stays intact.
