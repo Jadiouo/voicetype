@@ -663,3 +663,16 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   libraries, no GPU libraries, no Start and verified child reaping. This is setup
   evidence, not an inference benchmark. All three daily services remain running
   with zero restarts. No live Fcitx registration or personal data was changed.
+
+
+## 2026-10-07：階段收尾，依使用者要求暫停
+
+使用者要求「先這樣吧，寫一下開發日誌」。本次到此收尾，不再繼續功能開發；完整 App 尚未完成，PR #2 保持 draft，等使用者明確續接。
+
+- **已完成：** Linux App 可明確啟用 Fcitx 本機聽寫接管；等待舊錄音及待送文字結束後才切換，連線未就緒或 App 離開時回到原服務。GUI 已有輸入模組安裝／更新／還原，保存原設定並檢查外部變更。安裝不會自動重啟正在使用的 Fcitx。
+- **已驗證：** 46 個 core 測試、93 個 Fcitx 案例，以及實際載入模組、經 worker 送出一次繁中／英文測試文字的整合驗證。Linux／Windows 安裝包 CI 通過，兩平台各有 11 項已安裝 UI 檢查；Linux 另驗證模組安裝與還原。下載包的來源、大小及 SHA-256 均已核對。詳細證據與 CI 連結見上一節。
+- **驗證界線：** 整合送字的錄音及辨識採測試替身；真實 CPU 模型僅驗證準備、載入及子程序清理。尚未完成真人麥克風、辨識品質或延遲驗收，也未宣稱此次變更加快推論。
+- **日常環境：** 原有三個服務在最後檢查時均運作中，重啟次數為 0。未修改正在使用的 Fcitx 註冊、個人詞庫或錄音，也未執行 GPU 工作。
+- **下次接續：** 先整合 App 共用詞庫、抽樣校對與錯字校正設定，再完成 Google 辨識、Windows 錄音／程序／送字介面、授權清單及真人跨平台驗收。完成遷移驗證前保留目前日常安裝。
+
+本次已驗證程式與安裝包來源為 `45ec5de`，完整驗證紀錄已於 `69f5d50` 提交。本筆只補收尾文件，不更動程式或安裝包。
