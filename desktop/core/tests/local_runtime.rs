@@ -78,6 +78,128 @@ fn preparing_an_owned_cpu_engine_does_not_record_and_shutdown_reaps_it() {
 }
 
 #[test]
+fn input_handoff_is_explicit_exclusive_and_removed_before_shutdown() {
+    use voicetype_app_core::worker::DesktopWorker;
+    let (root, paths) = fixture();
+    let runtime = root.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    assert!(worker.enable_local_input(runtime.clone()).is_err());
+    let profile = paths.profile.clone();
+    worker.activate_local(paths).unwrap();
+    let route = runtime.join("voicetype-app-input/owner");
+    assert!(!route.exists());
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(worker.enable_local_input(runtime.clone()).is_err());
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        worker
+            .enable_local_input(runtime.clone())
+            .unwrap()
+            .input_requested
+    );
+    let record = fs::read_to_string(&route).unwrap();
+    assert_eq!(
+        record,
+        format!(
+            "voicetype-input-v1\n{}\n{}\n",
+            std::process::id(),
+            worker.local_endpoint().unwrap().unwrap().display()
+        )
+    );
+    assert_eq!(
+        fs::metadata(&route).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!profile.join("home/capture").exists());
+    let (other_root, other_paths) = fixture();
+    let other = DesktopWorker::spawn(other_root.path().join("settings")).unwrap();
+    other.activate_local(other_paths).unwrap();
+    assert!(other.enable_local_input(runtime.clone()).is_err());
+    assert_eq!(fs::read_to_string(&route).unwrap(), record);
+    worker.deactivate_local().unwrap();
+    assert!(!route.exists());
+    assert!(!worker.settings().unwrap().input_requested);
+    assert!(other.enable_local_input(runtime).unwrap().input_requested);
+    other.shutdown().unwrap();
+    assert!(!route.exists());
+    worker.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "requires the native Fcitx harness and packaged module; run explicitly in Linux CI"]
+fn installed_fcitx_and_resident_worker_complete_one_mixed_language_dictation() {
+    use std::{path::PathBuf, process::Command, thread, time::Instant};
+    use voicetype_app_core::{
+        assets::AssetManifest,
+        input_install::FcitxInstaller,
+        worker::{DesktopWorker, LocalRuntimeStatus},
+        DictationPhase,
+    };
+    let (root, paths) = fixture();
+    let profile = paths.profile.clone();
+    let runtime = root.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let source = PathBuf::from(std::env::var_os("VOICETYPE_TEST_INPUT_BUNDLE").unwrap());
+    let manifest: AssetManifest =
+        serde_json::from_slice(&fs::read(source.join("manifest.json")).unwrap()).unwrap();
+    let installer = FcitxInstaller::new(
+        root.path().join("settings"),
+        root.path().join("fcitx/addon/voicetype.conf"),
+        manifest,
+    )
+    .unwrap();
+    installer.install(&source).unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker.activate_local(paths).unwrap();
+    worker.enable_local_input(runtime.clone()).unwrap();
+    let mut frontend = Command::new(std::env::var_os("VOICETYPE_TEST_FCITX").unwrap())
+        .arg(root.path())
+        .spawn()
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(7);
+    let wait = |condition: &dyn Fn() -> bool| {
+        while !condition() {
+            assert!(
+                Instant::now() < until,
+                "native frontend/worker did not complete"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait(&|| worker.settings().unwrap().local_runtime == LocalRuntimeStatus::Ready);
+    assert!(!profile.join("home/capture").exists());
+    fs::write(root.path().join("control"), "start").unwrap();
+    wait(&|| {
+        worker.settings().unwrap().settings.dictation.phase == Some(DictationPhase::Recording)
+    });
+    assert!(profile.join("home/capture").exists());
+    fs::write(root.path().join("control"), "stop").unwrap();
+    wait(&|| !worker.settings().unwrap().settings.dictation.busy);
+    assert_eq!(
+        fs::read_to_string(root.path().join("commits")).unwrap(),
+        "請 review GitHub pull request，保留 Antigravity。\n"
+    );
+    assert!(worker.recovery().unwrap().is_none());
+    assert!(worker
+        .settings()
+        .unwrap()
+        .settings
+        .dictation
+        .failure
+        .is_none());
+    worker.deactivate_local().unwrap();
+    assert!(!runtime.join("voicetype-app-input/owner").exists());
+    fs::write(root.path().join("control"), "finish").unwrap();
+    assert!(frontend.wait().unwrap().success());
+    worker.shutdown().unwrap();
+    installer.restore().unwrap();
+    assert!(!root.path().join("fcitx/addon/voicetype.conf").exists());
+}
+
+#[test]
 fn losing_the_input_frontend_reaps_a_non_acknowledging_engine_before_releasing_the_app() {
     use serde_json::{json, Value};
     use std::{

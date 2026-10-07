@@ -17,6 +17,7 @@ find_package(Fcitx5Utils REQUIRED)
 # Optional at build and runtime; the input-panel fallback needs no extra module.
 find_package(Fcitx5ModuleNotifications QUIET)
 option(VOICETYPE_X11_CAPS_RESTORE "Preserve Ctrl+Caps Lock state on verified native X11" ON)
+option(VOICETYPE_REQUIRE_X11_CAPS_RESTORE "Refuse a release module missing X11 Caps Lock restoration" OFF)
 find_package(Fcitx5ModuleXCB QUIET)
 find_path(XCB_XKB_INCLUDE_DIR NAMES xcb/xkb.h)
 find_path(XCB_EWMH_INCLUDE_DIR NAMES xcb/xcb_ewmh.h HINTS ${XCB_XKB_INCLUDE_DIR})
@@ -43,6 +44,9 @@ endif()
 add_compile_options(-Wall -Wextra)
 
 add_subdirectory(src)
+if(VOICETYPE_REQUIRE_X11_CAPS_RESTORE AND NOT VOICETYPE_X11_CAPS_RESTORE_ENABLED)
+    message(FATAL_ERROR "Release input module requires native X11 Caps Lock restoration")
+endif()
 
 include(CTest)
 if(BUILD_TESTING)

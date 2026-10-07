@@ -3,7 +3,7 @@ name: Desktop preview
 on:
   push:
     branches: [main, feat/desktop-app]
-    paths: ["desktop/**", "voicetyped/**", "patches/**", "scripts/build-desktop-*", "scripts/desktop_native_catalog.py", ".github/workflows/desktop-preview.yml"]
+    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "scripts/build-desktop-*", "scripts/desktop_native_catalog.py", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
 
 permissions:
@@ -41,7 +41,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11 fonts-noto-cjk libasound2-dev libopencc-dev cmake ninja-build
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11 fonts-noto-cjk libasound2-dev libopencc-dev cmake ninja-build extra-cmake-modules libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev fcitx5-modules-dev libxcb-xkb-dev libxcb-ewmh-dev fcitx5
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: desktop
@@ -57,6 +57,10 @@ jobs:
           python3 tests/native_build_test.py
           python3 ../scripts/build-desktop-native.py --cache ../private/native-source-cache --output ../private/release-native --jobs 2
           bash ../scripts/build-desktop-runtime.sh ../private/release-native target/runtime --source-built
+          python3 ../scripts/build-desktop-input.py target/input
+          cmake -S ../voicetype-fcitx5 -B target/input-tests -DFCITX_INSTALL_USE_FCITX_SYS_PATHS=ON
+          cmake --build target/input-tests --target test_app_frontend -j 2
+          VOICETYPE_TEST_FCITX="$PWD/target/input-tests/tests/test_app_frontend" VOICETYPE_TEST_INPUT_BUNDLE="$PWD/target/input" cargo test -p voicetype-app-core --test local_runtime installed_fcitx --locked -- --ignored
       - name: Build preview installer
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
       - name: Inspect and install preview (Linux)
@@ -68,6 +72,7 @@ jobs:
           test -s target/inspection/usr/bin/voicetype-desktop
           test -s "target/inspection/usr/share/applications/VoiceType Preview.desktop"
           python3 tests/installed_runtime.py target/inspection target/runtime/manifest.json
+          python3 tests/installed_input.py target/inspection target/input/manifest.json
           sudo dpkg --install target/release/bundle/deb/*.deb
           dpkg --search /usr/bin/voicetype-desktop
       - name: Inspect and install preview (Windows)

@@ -53,6 +53,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix="voicetype-shell-") as profile:
         env = os.environ.copy()
         env["VOICETYPE_PREVIEW_CONFIG_DIR"] = profile
+        env["XDG_DATA_HOME"] = str(Path(profile) / "data")
+        registration = Path(profile) / "data/fcitx5/addon/voicetype.conf"
+        registration.parent.mkdir(parents=True)
+        previous_registration = b"[Addon]\nLibrary=/fixture/previous/libvoicetype\n"
+        registration.write_bytes(previous_registration)
         # Probe a disposable endpoint, never a developer's running engine.
         engine_socket = Path(profile) / "engine.sock"
         env["VOICETYPE_SOCKET"] = str(engine_socket)
@@ -97,7 +102,18 @@ def main():
                 assert not (Path(profile) / "model-assets").exists(), "Opening settings started model setup"
                 assert not (Path(profile) / "runtime-assets").exists(), "Opening settings installed a runtime"
                 assert not (Path(profile) / "local-profile").exists(), "Opening settings launched an engine"
+                assert js("return document.querySelector('#enable-local-input').disabled"), "Input enabled before runtime"
                 if sys.platform == "linux":
+                    click("#install-input-module")
+                    eventually(lambda: js("return document.querySelector('#input-module-status').textContent.includes('模組已安裝')"))
+                    installed_registration = registration.read_text()
+                    assert "input-assets/versions/" in installed_registration
+                    assert (Path(profile) / "fcitx-rollback.json").is_file()
+                    assert not (Path(profile) / "local-profile").exists()
+                    click("#restore-input-module")
+                    eventually(lambda: js("return document.querySelector('#input-module-status').textContent.includes('已還原')"))
+                    assert registration.read_bytes() == previous_registration
+                    assert not (Path(profile) / "fcitx-rollback.json").exists()
                     eventually(lambda: js("return !document.querySelector('#load-local-runtime').disabled"))
                     click("#load-local-runtime")
                     eventually(lambda: js("return !document.querySelector('#error').hidden"))
@@ -167,8 +183,9 @@ def main():
                     "passed": ["installed-window", "default-local", "choose-google",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
                                "provider-status-without-recording", "recovery-empty-state",
-                               "model-setup-explicit-only", "runtime-setup-requires-models"],
+                               "model-setup-explicit-only", "runtime-setup-requires-models", "input-requires-runtime"],
                     "speech_adapters_tested": False,
+                    "fcitx_install_restore_tested": sys.platform == "linux",
                 }, indent=2) + "\n", encoding="utf-8")
                 print("PASS: real UI selection, restart, corruption and reload")
             finally:

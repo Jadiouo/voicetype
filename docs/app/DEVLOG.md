@@ -613,3 +613,31 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   and explicit app loading. The full app remains unfinished: input-owner
   migration/rollback and shortcuts, shared vocabulary/review/CSC, Google/Windows
   speech paths, complete app/model notices and real speech acceptance are next.
+
+### Explicit Linux input ownership and reversible Fcitx setup
+
+- Added an explicit input lease to the resident worker and GUI. Loading models or
+  the runtime alone never publishes it. One login owner holds the private lease;
+  shutdown/unload removes it. Busy dictation rejects unload/provider/setup changes.
+- The existing Fcitx module now follows a private app endpoint only after its old
+  recording/pending result ends. It authenticates PID/UID and completes the desktop
+  handshake before accepting keys. A missing, crashed or unready endpoint returns
+  to the unchanged legacy service. Ctrl+Alt recording, Esc cancellation and the
+  original focus/duplicate-delivery guards remain. No second input owner is loaded.
+- Linux packages carry a separately cataloged source-built Fcitx module and license.
+  Release builds require native X11 Caps restoration. Explicit install/update saves
+  a write-ahead original registration before publishing a versioned private module;
+  restore preserves prior absence or original bytes. Drift, symlinks and oversized
+  records are refused. Running Fcitx is never restarted automatically.
+- TDD RED/GREEN: missing lease API; Fcitx handoff never occurred after the old result;
+  unready peer never fell back; missing installer API. Additional tests cover
+  exclusivity, unsafe runtime permissions, registration drift/restore and a real
+  dynamically loaded module through the production installer/worker/dispatcher.
+  That full chain sends one exact mixed Traditional-Chinese/English fixture result,
+  then removes the lease and restores registration. Only capture/model are fixtures.
+- Local core, native input/module inspection and existing Fcitx regressions are
+  passing. Linux/Windows installer and native UI CI are the next verification step.
+  No live service, microphone, GPU workload or personal data was changed.
+- Remaining: shared vocabulary/review/CSC in the app profile, Google and Windows
+  speech paths, full license inventory and live platform speech/latency acceptance.
+  This input milestone is not the complete app goal or a measured speedup.

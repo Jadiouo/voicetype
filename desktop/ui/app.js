@@ -17,16 +17,27 @@ const recoveryText = document.querySelector('#recovery-text');
 const dismissRecovery = document.querySelector('#dismiss-recovery');
 const loadRuntime = document.querySelector('#load-local-runtime');
 const unloadRuntime = document.querySelector('#unload-local-runtime');
+const enableInput = document.querySelector('#enable-local-input');
+let moduleBusy = false;
+const installModule = document.querySelector('#install-input-module');
+const restoreModule = document.querySelector('#restore-input-module');
 
 function runtimeControls(view) {
+  document.querySelector('#input-module-setup').hidden = !view?.local_runtime_bundled;
+  installModule.disabled = restoreModule.disabled = moduleBusy || commandBusy
+    || !view?.local_runtime_bundled || view.input_requested || view.settings.dictation.busy;
   const loaded = ['waiting_for_input', 'ready'].includes(view?.local_runtime);
   loadRuntime.disabled = commandBusy || !view?.local_runtime_bundled || loaded
     || view.settings.dictation.busy || view.settings.selected_provider !== 'local';
   unloadRuntime.hidden = !loaded;
   unloadRuntime.disabled = commandBusy || !!view?.settings.dictation.busy;
+  enableInput.disabled = commandBusy || !view?.local_runtime_bundled || !loaded
+    || view?.input_requested || !!view?.settings.dictation.busy;
   document.querySelector('#runtime-note').textContent = !view?.local_runtime_bundled
     ? '這個平台的引擎封裝仍在準備中。'
-    : loaded ? '引擎已載入記憶體，尚未接管現有輸入法或錄音快捷鍵。'
+    : view.local_runtime === 'ready' ? '按住 Ctrl＋Alt 說話，放開後送字；Esc 取消。停用或結束 App 後回到原服務。'
+    : view.input_requested ? '等待 Fcitx 接管：原聽寫結束後才切換。若持續等待，請確認已載入本版 Fcitx 模組；舊的使用者模組可能遮住安裝包版本。'
+    : loaded ? '引擎已載入。按「啟用本機聽寫」後，Fcitx 才會在空閒時接管快捷鍵。'
     : '載入時會核對完整模型並使用 CPU。這一步不會開始錄音。';
 }
 
@@ -91,6 +102,7 @@ async function command(name, args = {}) {
   status.textContent = name === 'select_provider' ? '正在儲存…'
     : name === 'load_local_runtime' ? '正在核對模型並載入本機引擎，首次載入可能需要一些時間…'
     : name === 'unload_local_runtime' ? '正在卸載本機引擎…'
+    : name === 'enable_local_input' ? '正在要求 Fcitx 接管…'
     : name === 'cancel_dictation' ? '正在取消聽寫…'
     : name === 'refresh_providers' ? '正在檢查服務…' : '正在讀取設定…';
   try {
@@ -100,7 +112,8 @@ async function command(name, args = {}) {
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
     status.textContent = name === 'select_provider'
       ? '偏好已儲存。現有聽寫方式尚未變更。'
-      : name === 'load_local_runtime' ? '引擎已載入，等待輸入法整合。尚未開始錄音。'
+      : name === 'load_local_runtime' ? '引擎已載入，可啟用本機聽寫。尚未開始錄音。'
+      : name === 'enable_local_input' ? '已要求接管，請等待顯示「本機引擎與輸入法已連接」。'
       : name === 'unload_local_runtime' ? '本機引擎已卸載。'
       : name === 'cancel_dictation' ? '已要求取消，正在等待引擎停止。'
       : name === 'refresh_providers' ? '已檢查服務。此操作不會啟動錄音。'
@@ -186,6 +199,20 @@ check.addEventListener('click', () => command('refresh_providers'));
 cancel.addEventListener('click', () => command('cancel_dictation'));
 loadRuntime.addEventListener('click', () => command('load_local_runtime'));
 unloadRuntime.addEventListener('click', () => command('unload_local_runtime'));
+enableInput.addEventListener('click', () => command('enable_local_input'));
+async function configureModule(restore) {
+  if (moduleBusy || commandBusy) return;
+  moduleBusy = true;
+  runtimeControls(lastView);
+  const note = document.querySelector('#input-module-status');
+  note.textContent = restore ? '正在還原模組設定…' : '正在核對並安裝模組…';
+  try {
+    note.textContent = await window.__TAURI__.core.invoke('configure_input_module', { restore });
+  } catch (reason) { note.textContent = String(reason); }
+  finally { moduleBusy = false; runtimeControls(lastView); }
+}
+installModule.addEventListener('click', () => configureModule(false));
+restoreModule.addEventListener('click', () => configureModule(true));
 command('get_settings');
 
 // Independent setup status/commands: downloads never occupy the dictation

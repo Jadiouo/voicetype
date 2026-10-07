@@ -49,6 +49,7 @@ int main() {
     if (!dir) { return EXIT_FAILURE; }
     const std::string socketPath = std::string(dir) + "/ipc.sock";
     setenv("VOICETYPE_SOCKET", socketPath.c_str(), 1);
+    setenv("XDG_RUNTIME_DIR", dir, 1);
     setenv("FCITX_CONFIG_HOME", dir, 1);
     setenv("FCITX_DATA_HOME", dir, 1);
     unsetenv("DISPLAY");

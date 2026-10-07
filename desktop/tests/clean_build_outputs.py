@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 
 target = Path(__file__).resolve().parents[1] / "target"
-for relative in ("runtime", "inspection", "shell-evidence", "release/bundle", "preview-manifest.json"):
+for relative in ("runtime", "input", "inspection", "shell-evidence", "release/bundle", "preview-manifest.json"):
     path = target / relative
     if path.is_symlink():
         path.unlink()

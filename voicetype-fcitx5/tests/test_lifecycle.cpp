@@ -63,6 +63,7 @@ int main() {
     const std::string path = std::string(dir) + "/ipc.sock";
     setenv("VOICETYPE_SOCKET", path.c_str(), 1);
     setenv("VOICETYPE_SELECTION_HELPER", "/nonexistent/voicetype-selection-fixture", 1);
+    setenv("XDG_RUNTIME_DIR", dir, 1);
     setenv("FCITX_CONFIG_HOME", dir, 1);
     setenv("FCITX_DATA_HOME", dir, 1);
     const int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);

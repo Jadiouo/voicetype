@@ -1,10 +1,21 @@
 # Versioned assets for app setup
 
 Status: verified storage, bounded HTTPS/archive preparation and explicit
-download/check/cancel UI are implemented. Native-runtime packaging and activation
-remain. An installed model is not a connected recognizer.
+download/check/cancel UI, Linux CPU runtime and explicit Fcitx setup are implemented.
+Windows native-runtime packaging and activation remain. An installed model is not
+a connected recognizer.
 The catalogs contain metadata only; no weights, native binaries or user data are
 committed. Installing assets does not start a provider or change the daily setup.
+
+Linux `build-desktop-input.py` builds the repo's Fcitx module with required native
+Caps Lock support and produces an exact two-member module/license catalog. The
+Tauri build embeds this catalog and packages its bytes; the GUI cannot supply
+replacement manifests or module paths. Explicit installation reuses AssetStore,
+then writes a rollback journal before replacing only the per-user addon
+registration. Existing module binaries/settings are preserved. Interrupted
+publication can be retried; subsequent external registration changes block both
+update and restore. No Fcitx restart, microphone access or shortcut takeover is
+part of installation. Keep the original installation until live acceptance.
 
 ## Installation boundary
 

@@ -97,9 +97,15 @@ the microphone; merely opening settings never starts recording.
    interruption keeps the old working runtime. Native Windows assets require their
    own provenance; a Linux `.so` hash says nothing about a Windows DLL.
 8. **No ambient migration.** Preview builds use a distinct app identifier and do
-   not start/stop existing services or take their shortcuts. Production migration
-   first detects active sessions, then switches the owning input integration with
-   a rollback record. App uninstall retains user data by default.
+   not start/stop existing services. An explicit per-user Fcitx installer records
+   the original addon registration before publishing a verified version; restoring
+   refuses external drift. Loading that module requires a later Fcitx restart/login,
+   never an automatic restart of an active input session. A separate explicit
+   input lease requests routing to the app: the one Fcitx module waits until its
+   current recording/pending delivery ends, authenticates the app PID/UID and
+   completes its handshake before accepting keys. Legacy configuration stays
+   unchanged. Withdrawal, connection failure or an unready app restores that
+   endpoint; no cloud fallback is involved. App uninstall retains user data by default.
 
 ## 4. User flow
 

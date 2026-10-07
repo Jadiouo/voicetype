@@ -26,6 +26,7 @@ pub enum LocalRuntimeStatus {
 pub struct DesktopSnapshot {
     pub settings: Snapshot,
     pub local_runtime: LocalRuntimeStatus,
+    pub input_requested: bool,
 }
 
 /// Transcripts are fetched separately and never enter diagnostic snapshots or
@@ -221,8 +222,60 @@ impl DesktopWorker {
         })
     }
 
+    /// Explicit native input opt-in. The shell supplies its login runtime
+    /// directory; the webview cannot choose a socket, executable or file path.
+    #[cfg(target_os = "linux")]
+    pub fn enable_local_input(&self, runtime_dir: PathBuf) -> Result<DesktopSnapshot, String> {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            let local = desktop.local.as_mut().ok_or("請先載入本機引擎")?;
+            if local.input.is_none() {
+                local.input = Some(
+                    crate::input_lease::InputLease::acquire(
+                        &runtime_dir,
+                        &local.endpoint.path().join("frontend.sock"),
+                    )
+                    .map_err(|_| {
+                        "無法接管輸入法：請確認登入環境，並關閉其他 VoiceType App".to_string()
+                    })?,
+                );
+            }
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn configure_input_module(
+        &self,
+        installer: crate::input_install::FcitxInstaller,
+        source: Option<PathBuf>,
+    ) -> Result<bool, String> {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy
+                || desktop
+                    .local
+                    .as_ref()
+                    .is_some_and(|local| local.input.is_some())
+            {
+                return Err("請先停用 App 聽寫，再變更輸入法模組".into());
+            }
+            match source {
+                Some(source) => installer.install(&source).map(|_| true),
+                None => installer.restore(),
+            }
+            .map_err(|_| {
+                "無法變更輸入法模組：原設定已保留；請檢查是否有外部修改或安裝檔損壞".into()
+            })
+        })
+    }
+
     pub fn deactivate_local(&self) -> Result<DesktopSnapshot, String> {
         self.call(|desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
             desktop.deactivate()?;
             desktop.snapshot()
         })
@@ -290,6 +343,18 @@ impl Desktop {
         Ok(DesktopSnapshot {
             settings: self.app()?.snapshot(),
             local_runtime: self.local_status,
+            input_requested: {
+                #[cfg(target_os = "linux")]
+                {
+                    self.local
+                        .as_ref()
+                        .is_some_and(|local| local.input.is_some())
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    false
+                }
+            },
         })
     }
     fn deactivate(&mut self) -> Result<(), String> {
@@ -328,6 +393,7 @@ enum EngineOwner {
 
 #[cfg(target_os = "linux")]
 struct LocalHost {
+    input: Option<crate::input_lease::InputLease>,
     owner: Option<EngineOwner>,
     listener: std::os::unix::net::UnixListener,
     endpoint: tempfile::TempDir,
@@ -344,6 +410,7 @@ impl LocalHost {
         listener.set_nonblocking(true)?;
         let runtime = crate::runtime::OwnedLocal::start(&paths, Duration::from_secs(30))?;
         Ok(Self {
+            input: None,
             owner: Some(EngineOwner::Waiting(runtime)),
             listener,
             endpoint,
@@ -379,6 +446,7 @@ impl LocalHost {
     }
 
     fn shutdown(&mut self, app: &mut Application) -> io::Result<()> {
+        self.input = None;
         if let Some(owner) = self.owner.as_mut() {
             match owner {
                 EngineOwner::Waiting(runtime) => runtime.shutdown()?,

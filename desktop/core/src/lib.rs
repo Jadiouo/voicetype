@@ -5,6 +5,10 @@ mod dictation;
 #[cfg(target_os = "linux")]
 pub mod dispatch;
 #[cfg(target_os = "linux")]
+pub mod input_install;
+#[cfg(target_os = "linux")]
+mod input_lease;
+#[cfg(target_os = "linux")]
 pub mod local;
 #[cfg(target_os = "linux")]
 pub mod local_install;

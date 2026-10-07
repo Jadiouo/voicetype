@@ -19,6 +19,16 @@ Use real temporary files; substitute only system boundaries such as OS focus,
 capture, clock or official CLI process. No live microphone, account login, real
 input injection or GPU is needed for offline tests.
 
+Linux input continuation uses B for actual Fcitx events/Unix sockets and the
+resident worker, D for explicit module registration/rollback and A for installed
+UI controls. RED observed before implementation: absent input lease command;
+Fcitx never switched after the legacy result; a connected unready peer failed to
+fall back; absent module installer. Additional native loading,
+drift/symlink preservation and UI checks are integration coverage, not claimed
+as additional RED cycles. Capture and ASR remain external fixtures; the input
+frontend dynamically loads the actual cataloged module through production
+registration and executes real worker/dispatcher/delivery logic.
+
 ## Red → green sequence
 
 One scenario and minimal implementation at a time. Record the failure before the

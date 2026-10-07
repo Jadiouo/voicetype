@@ -49,6 +49,8 @@ private:
     bool onKeyEvent(fcitx::KeyEvent &event);
     void onDaemonMessage(const IpcMessage &msg);
     void onDaemonDisconnected();
+    void pollInputRoute();
+    void connectInput(const std::string &path, int pid = 0);
 
     // --- 動作 ---
     void startRecording(fcitx::InputContext *ic);
@@ -70,6 +72,12 @@ private:
     // --- 狀態 ---
     fcitx::Instance *instance_;
     std::unique_ptr<IpcClient> ipc_;
+    std::unique_ptr<fcitx::EventSourceTime> inputRouteTimer_;
+    std::string appInputPath_;
+    std::string rejectedInputPath_;
+    int appInputPid_ = 0;
+    bool appInputReady_ = false;
+    uint64_t appInputDeadline_ = 0;
     std::unique_ptr<SelectionReader> selectionReader_;
     std::unique_ptr<CapsLockGuard> capsLockGuard_;
     NotificationSink notification_;

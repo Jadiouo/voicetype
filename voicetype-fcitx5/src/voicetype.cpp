@@ -1,4 +1,5 @@
 #include "voicetype.h"
+#include "input_route.h"
 
 #include <fcitx-config/iniparser.h>
 #include <fcitx-utils/log.h>
@@ -202,10 +203,43 @@ VoiceType::VoiceType(fcitx::Instance *instance, NotificationSink notification,
 
     // --- 3. 連線 daemon, 並把 socket fd 掛進 fcitx5 的事件迴圈 ---
     // 不開執行緒。回呼在主執行緒執行, 可以安全呼叫 commitString()。
+    connectInput(socketPath());
+    inputRouteTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 100000, 0,
+        [this](fcitx::EventSourceTime *source, uint64_t now) {
+            pollInputRoute();
+            source->setTime(now + 100000); source->setOneShot(); return true;
+        });
+}
+
+void VoiceType::connectInput(const std::string &path, int pid) {
+    // Called only from construction or the routing timer, never an IPC callback.
+    ipc_.reset();
+    onDaemonDisconnected();
     ipc_ = std::make_unique<IpcClient>(
-        &instance_->eventLoop(), socketPath(),
+        &instance_->eventLoop(), path,
         [this](const IpcMessage &m) { onDaemonMessage(m); },
-        [this]() { onDaemonDisconnected(); });
+        [this]() { onDaemonDisconnected(); }, pid);
+}
+
+void VoiceType::pollInputRoute() {
+    // Includes recognition/delivery waiting after release. An old result can
+    // never cross into the next route: switching replaces the whole connection.
+    if (recording_ || deliveryPending_) return;
+    const auto route = desktopInputRoute();
+    if (!route) rejectedInputPath_.clear();
+    if (!appInputPath_.empty() && (!ipc_->connected() ||
+        (!appInputReady_ && fcitx::now(CLOCK_MONOTONIC) >= appInputDeadline_))) {
+        rejectedInputPath_ = appInputPath_;
+    }
+    const bool useApp = route && route->socket != rejectedInputPath_;
+    const std::string desired = useApp ? route->socket : "";
+    const int pid = useApp ? route->pid : 0;
+    if (desired == appInputPath_ && pid == appInputPid_) return;
+    appInputPath_ = desired; appInputPid_ = pid;
+    appInputReady_ = false;
+    appInputDeadline_ = fcitx::now(CLOCK_MONOTONIC) + 1000000;
+    connectInput(useApp ? desired : socketPath(), pid);
 }
 
 VoiceType::~VoiceType() { capsLockGuard_.reset(); selectionReader_.reset(); clearFeedback(); }
@@ -236,7 +270,7 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
             notify(ic, "此欄位無法學習", "請在一般文字欄位使用詞彙學習。");
         } else if (recording_) {
             notify(ic, "正在錄音，尚未學習", "請先放開語音鍵，等文字送出並修正後再按 " + learnKeyLabel() + "。");
-        } else if (!ipc_ || !ipc_->connected()) {
+        } else if (!ipc_ || !ipc_->connected() || (!appInputPath_.empty() && !appInputReady_)) {
             notify(ic, "語音服務未連線", "這次修正尚未送出，請確認 VoiceType 服務已啟動後再試。");
         } else {
             maybeLearnCorrection(ic, true);
@@ -293,7 +327,7 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
 
         // SDD §4.3: daemon 不可用時不攔截熱鍵, 直接放行給輸入法,
         // 使用者不會感覺到按鍵失效。
-        if (!ipc_ || !ipc_->connected()) {
+        if (!ipc_ || !ipc_->connected() || (!appInputPath_.empty() && !appInputReady_)) {
             FCITX_DEBUG() << "voicetype: daemon unavailable, passing key through";
             notify(event.inputContext(), "語音服務未連線", "尚未開始錄音，請確認 VoiceType 服務已啟動後再試。");
             return false;
@@ -390,7 +424,7 @@ void VoiceType::onDaemonMessage(const IpcMessage &msg) {
         reply.type = "desktop_hello";
         reply.setSession(msg.session);
         reply.value = "voicetype.fcitx.v1";
-        ipc_->send(reply);
+        if (ipc_->send(reply) && !appInputPath_.empty()) appInputReady_ = true;
         return;
     }
     if (msg.type == "deliver" && msg.hasSession) {

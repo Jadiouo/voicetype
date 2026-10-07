@@ -23,6 +23,57 @@ struct DesktopState {
     local_installer: voicetype_app_core::local_install::LocalInstaller,
     #[cfg(target_os = "linux")]
     runtime_resources: PathBuf,
+    #[cfg(target_os = "linux")]
+    config_dir: PathBuf,
+}
+
+#[tauri::command]
+async fn configure_input_module(restore: bool, app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let source = if restore {
+            None
+        } else {
+            Some(
+                app.path()
+                    .resource_dir()
+                    .map_err(|e| e.to_string())?
+                    .join("input"),
+            )
+        };
+        let registration = app
+            .path()
+            .data_dir()
+            .map_err(|e| e.to_string())?
+            .join("fcitx5/addon/voicetype.conf");
+        let installer = voicetype_app_core::input_install::FcitxInstaller::new(
+            app.state::<DesktopState>().config_dir.clone(),
+            registration,
+            serde_json::from_str(include_str!(concat!(
+                env!("OUT_DIR"),
+                "/input-catalog.json"
+            )))
+            .map_err(|_| "輸入法模組目錄無效")?,
+        )
+        .map_err(|_| "輸入法模組設定無效")?;
+        let changed = with_worker(app, move |worker| {
+            worker.configure_input_module(installer, source)
+        })
+        .await?;
+        Ok(if !changed {
+            "沒有需要還原的模組設定。"
+        } else if restore {
+            "原模組設定已還原。請在方便時重新登入桌面；執行中的輸入法未被重啟。"
+        } else {
+            "模組已安裝，原設定已備份。請先結束目前聽寫，再重新登入桌面，讓 Fcitx 載入新版。"
+        }
+        .into())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (restore, app);
+        Err("此平台不使用 Fcitx 模組。".into())
+    }
 }
 
 #[tauri::command]
@@ -56,6 +107,24 @@ async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
 #[tauri::command]
 async fn unload_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
     with_desktop(app, DesktopWorker::deactivate_local).await
+}
+
+#[tauri::command]
+async fn enable_local_input(app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, |worker| {
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+                .ok_or("無法找到登入環境，請從桌面重新開啟 App")?;
+            worker.enable_local_input(PathBuf::from(runtime))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = worker;
+            Err("此平台的輸入整合仍在準備中。".into())
+        }
+    })
+    .await
 }
 
 #[tauri::command]
@@ -216,6 +285,8 @@ fn main() {
                 )?,
                 #[cfg(target_os = "linux")]
                 runtime_resources: app.path().resource_dir()?.join("runtime"),
+                #[cfg(target_os = "linux")]
+                config_dir: config_dir.clone(),
                 worker: DesktopWorker::spawn(config_dir)?,
                 models: ModelSetup::new(model_root)?,
                 tray_available: AtomicBool::new(false),
@@ -255,7 +326,9 @@ fn main() {
             prepare_models,
             cancel_model_setup,
             load_local_runtime,
-            unload_local_runtime
+            unload_local_runtime,
+            enable_local_input,
+            configure_input_module
         ])
         .build(tauri::generate_context!())
         .expect("VoiceType could not start")
