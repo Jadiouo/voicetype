@@ -191,4 +191,31 @@ The Linux load command now verifies installed model catalogs and copies bundled
 runtime assets using a catalog embedded at app build time, then activates this
 native owner. No webview command accepts executable/model paths, catalogs or
 URLs. Opening the preview creates only the worker; it does not start a provider
-or alter daily input integration. Frontend-owner migration is still pending.
+or alter daily input integration.
+
+## Explicit Linux input routing
+
+`enable_local_input` publishes a mode-0600 record under the private login runtime
+directory `voicetype-app-input/owner`, while holding an exclusive stable-file lock.
+The record is three newline-terminated fields: `voicetype-input-v1`, the owning
+app PID and its private frontend socket path. It carries no user text. A second
+app cannot acquire the same login's route. The native shell supplies the login
+directory; the webview supplies no paths. Unload/provider switch/exit withdraws
+the record before disposing of the owner.
+
+The single Fcitx module polls routing every 100 ms outside key handling. It waits
+while recording or delivering the previous result, validates private owned
+directories/regular record (no symlinks), and authenticates the connected app's
+UID/PID. Until `desktop_hello` completes, recording keys cannot reach the app. An
+unready connection expires after one second. Failed routes are not retried in a
+loop; the unchanged legacy socket resumes until a new app endpoint is published.
+None of these setup checks adds a deliberate wait to normal recognition/delivery.
+
+Module registration is a separate explicit setup step. Verified module versions
+are installed under the app profile. A write-ahead journal stores the original
+per-user Fcitx addon registration and managed versions before a new registration
+is published. Restore preserves the original bytes or absence and refuses
+unrelated edits. It never kills/restarts Fcitx; the new registration loads at the
+next user-controlled restart/login. After that, the new module also continues to
+support the legacy daemon whenever app input is inactive. Vocabulary/CSC/review
+sharing and live recognition acceptance are still separate unfinished work.
