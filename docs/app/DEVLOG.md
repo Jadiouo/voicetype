@@ -596,3 +596,20 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   installer/extraction and UI-report outputs after cache restore, retaining Rust
   compilation caches. This also prevents a failed run uploading an earlier run's
   UI result as current evidence. The builder's no-overwrite rule stays intact.
+- Final `a090f7d` [Linux/Windows desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37571932283)
+  passed after clearing cached derived outputs. Both downloaded packages match
+  source/size/hash, and both newly produced installed UI reports pass ten checks.
+  Their screenshots are byte-identical to the already inspected `4778c9e` images.
+  Linux: 18,351,766 bytes,
+  `0f0fad7e0c15dc7de1c31ba413f05c77b9b797673b206f02a860d425e5d4f744`;
+  Windows: 3,503,914 bytes,
+  `03d8fb7421744733e5eb6a0b6ec9a4badac5286cd61922b6502e9fe5edcd3890`.
+  The latest extracted Linux runtime passes every catalog hash and loader check;
+  that exact CI runtime also passed real-model installation, expected CPU library
+  maps, no Start/no GPU and verified child reaping. All 200 remote source blobs
+  match the reviewed commit. Clippy reports only the existing EngineOwner size
+  warning. No daily installation changed.
+- Milestone complete: Linux runtime source build, packaged native notices/catalog
+  and explicit app loading. The full app remains unfinished: input-owner
+  migration/rollback and shortcuts, shared vocabulary/review/CSC, Google/Windows
+  speech paths, complete app/model notices and real speech acceptance are next.
