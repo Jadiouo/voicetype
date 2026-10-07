@@ -66,7 +66,7 @@ function render(view) {
   }
   const labels = {
     not_connected: '準備中 · 尚未連接辨識引擎',
-    service_available: '本機服務有回應 · App 錄音仍在整合中',
+    service_available: '本機服務有回應 · 尚未啟用 App 聽寫',
     offline: '找不到本機服務 · 請確認引擎已啟動',
     timed_out: '本機服務回應逾時 · 可稍後重新檢查',
     incompatible: '本機服務回應不相容 · 請檢查安裝版本',
