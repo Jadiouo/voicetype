@@ -571,3 +571,21 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
   the actual CPU process loaded both libraries from that installed version, sent
   no Start, loaded no GPU libraries, and was reaped on shutdown. All three daily
   services remain active/running with zero restarts. Installed UI CI is next.
+- `4778c9e` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37570751134)
+  and [both installer/UI jobs](https://github.com/Jadiouo/voicetype/actions/runs/37570751141).
+  Each installed UI report passes ten checks, with speech explicitly untested.
+  Downloaded packages match source/size/hash: Linux 18,351,852 bytes,
+  `52894573037f4eda07d2bcaa4fcd9624fb3482fc9681d81f62e4289fed680a28`;
+  Windows 3,502,337 bytes,
+  `c46f6faf8d71397420d7cb4d28030a9dca68ad6b620c1b74127655a740c6d251`.
+  Extracted Linux runtime/notices match its build catalog, loader paths and
+  declared system dependencies. The actual downloaded CI runtime also passed
+  production installation plus the CPU process/map/reaping probe with no Start.
+  Screenshots were inspected and all 199 remote source blobs match the commit.
+- Follow-up RED: source building under a path with spaces exposed both an
+  unquoted compiler flag and upstream's unquoted linker version-script path.
+  The builder now uses private space-free `/tmp` scratch, then copies to a
+  destination-volume staging directory before no-replacement publication.
+  Caller cache/output paths remain ordinary argv paths. Curl configuration is
+  disabled to keep fetch behavior defined by the build recipe. Existing-output
+  and corrupt-input checks pass; full space-path build verification is running.

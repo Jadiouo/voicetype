@@ -122,8 +122,9 @@ context, focus-out/return, preedit focus changes and weak-target destruction. It
 runs without a live display, bus, microphone or user config. Separate actual
 app/daemon tests exercise the native dispatcher and input acknowledgement with
 an OS frontend fixture. The Tauri shell now uses the resident application worker
-and has a separate recovery view. Installed runtime activation/input-owner
-migration and actual target-application acceptance remain outstanding.
+and has a separate recovery view. Linux now exposes explicit verified runtime
+loading. Input-owner migration and actual target-application acceptance remain
+outstanding.
 
 ## Owned Linux runtime
 
@@ -161,8 +162,9 @@ private frontend endpoint, then authenticates one frontend before marking it
 connected. `try_wait` detects idle crashes even when no input command arrives.
 Switching away from Local while idle first reaps the local owner. Busy switches
 are rejected. The worker's request queue is bounded; commands are not retried on
-an ambiguous request timeout. Tauri's blocking pool only waits on request/reply,
-and the final application exit waits for worker shutdown.
+an ambiguous request timeout. Tauri's blocking pool performs setup asset checks
+and waits on request/reply; runtime ownership stays on the resident worker. The
+final application exit waits for worker shutdown.
 
 Recovery text is requested separately from diagnostic status. The last retained
 result survives preference reload until an explicit session-matched dismissal or
@@ -185,7 +187,8 @@ The settings UI can cancel through the resident worker and displays preparation,
 recording, finalization and release separately. A non-acknowledging child is reaped
 at the release deadline without another frontend command.
 
-Remaining supervisor work includes installed asset activation and frontend
-owner migration. No webview command currently accepts executable/model paths or
-activates this native runtime API. Opening the preview creates only the worker;
-it does not start a provider or alter the daily input integration.
+The Linux load command now verifies installed model catalogs and copies bundled
+runtime assets using a catalog embedded at app build time, then activates this
+native owner. No webview command accepts executable/model paths, catalogs or
+URLs. Opening the preview creates only the worker; it does not start a provider
+or alter daily input integration. Frontend-owner migration is still pending.

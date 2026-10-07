@@ -43,7 +43,7 @@ def fetch(entry, cache, offline):
         with tempfile.TemporaryDirectory(prefix=".download-", dir=cache) as tmp:
             partial = Path(tmp) / "download"
             subprocess.run([
-                "curl", "--fail", "--location", "--silent", "--show-error",
+                "curl", "--disable", "--fail", "--location", "--silent", "--show-error",
                 "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5",
                 "--connect-timeout", "15", "--max-time", "300",
                 "--max-filesize", str(entry["bytes"]), "--output", str(partial), entry["url"],
@@ -130,7 +130,10 @@ def build(args):
     args.cache.mkdir(parents=True, exist_ok=True)
     inputs = [(entry, fetch(entry, args.cache, args.offline)) for entry in recipe["inputs"]]
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".native-build-", dir=output.parent) as tmp:
+    # Upstream CMake's version-script linker option is not quoted. Keep its
+    # entire source/build tree in a private, space-free Linux scratch directory;
+    # the caller's cache and output paths may still contain spaces.
+    with tempfile.TemporaryDirectory(prefix="voicetype-native-build-", dir="/tmp") as tmp:
         work = Path(tmp)
         payload = work / "payload"
         sources = work / "sources"
@@ -208,9 +211,14 @@ def build(args):
                       for p in sorted(payload.rglob("*")) if p.is_file()},
         }
         (payload / "build-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
-        # Linux rename with no replacement, even if an empty output appeared.
-        subprocess.run(["mv", "-T", "--no-clobber", "--", str(payload), str(output)], check=True)
-        require(not payload.exists(), "Output appeared during the build; preserved existing directory")
+        # Stage on the destination filesystem before publishing. /tmp may be a
+        # different volume, so moving directly from scratch could expose a
+        # partially copied output. Never replace even an empty existing output.
+        with tempfile.TemporaryDirectory(prefix=".native-stage-", dir=output.parent) as staged:
+            ready = Path(staged) / "payload"
+            shutil.copytree(payload, ready)
+            subprocess.run(["mv", "-T", "--no-clobber", "--", str(ready), str(output)], check=True)
+            require(not ready.exists(), "Output appeared during the build; preserved existing directory")
     print("Prepared CPU native build: " + str(output))
 
 
