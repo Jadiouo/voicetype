@@ -111,7 +111,7 @@ async function command(name, args = {}) {
     render(view);
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
     status.textContent = name === 'select_provider'
-      ? '偏好已儲存。現有聽寫方式尚未變更。'
+      ? '偏好已儲存。請確認所選方式的就緒狀態。'
       : name === 'load_local_runtime' ? '引擎已載入，可啟用本機聽寫。尚未開始錄音。'
       : name === 'enable_local_input' ? '已要求接管，請等待顯示「本機引擎與輸入法已連接」。'
       : name === 'unload_local_runtime' ? '本機引擎已卸載。'
