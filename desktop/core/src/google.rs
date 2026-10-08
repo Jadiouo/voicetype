@@ -274,13 +274,6 @@ impl GoogleProvider {
                 let mut attempt: Option<GoogleAttempt> = None;
                 loop {
                     if worker_shutdown.load(Ordering::Acquire) {
-                        if let Some(mut started) = attempt.take() {
-                            let _ = started.cancel(&mut boundary);
-                        }
-                        // Keep this owner alive until cleanup verifies release.
-                        while boundary.cleanup().is_err() {
-                            thread::sleep(Duration::from_millis(50));
-                        }
                         break;
                     }
                     let request = match input.recv_timeout(Duration::from_millis(25)) {
@@ -414,6 +407,15 @@ impl GoogleProvider {
                             }
                         }
                     }
+                }
+                // Shutdown and sender disconnection share the same verified
+                // cleanup path. A disconnect can arrive after the final flag
+                // check if Drop's bounded wait expires before recv returns.
+                if let Some(mut started) = attempt.take() {
+                    let _ = started.cancel(&mut boundary);
+                }
+                while boundary.cleanup().is_err() {
+                    thread::sleep(Duration::from_millis(50));
                 }
             })?;
         Ok(Self {
