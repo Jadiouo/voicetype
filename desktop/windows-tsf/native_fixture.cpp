@@ -41,6 +41,7 @@ int wmain(int argc, wchar_t **argv) {
   IUnknown *canonical = nullptr, *other = nullptr;
   ITfThreadMgr *manager = nullptr;
   ITfClientId *client_ids = nullptr;
+  ITfInputProcessorProfileMgr *local_profiles = nullptr;
   ITfKeystrokeMgr *keys = nullptr;
   ITfDocumentMgr *doc = nullptr;
   ITfContext *context = nullptr;
@@ -48,6 +49,8 @@ int wmain(int argc, wchar_t **argv) {
   TfClientId client = TF_CLIENTID_NULL;
   TfClientId service_client = TF_CLIENTID_NULL;
   bool manager_active = false, service_active = false, pushed = false;
+  bool local_registered = false;
+  const LANGID local_lang = GetUserDefaultLangID();
   bool server_locked = false;
   do {
     if (!get_factory || !can_unload ||
@@ -123,6 +126,18 @@ int wmain(int argc, wchar_t **argv) {
     if (!check(CoCreateInstance(CLSID_TF_ThreadMgr, nullptr, CLSCTX_INPROC_SERVER,
                   IID_ITfThreadMgr, reinterpret_cast<void **>(&manager)),
                "CoCreateInstance ThreadMgr")) break;
+    if (!check(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
+                  CLSCTX_INPROC_SERVER, IID_ITfInputProcessorProfileMgr,
+                  reinterpret_cast<void **>(&local_profiles)),
+               "CoCreateInstance local ProfileMgr")) break;
+    const WCHAR desc[] = L"VoiceType process-local fixture";
+    if (!check(local_profiles->RegisterProfile(CLSID_VoiceTypeSpeechProbe,
+                  local_lang, GUID_VoiceTypeSpeechProfile, desc,
+                  static_cast<ULONG>(wcslen(desc)), argv[1],
+                  static_cast<ULONG>(wcslen(argv[1])), 0, nullptr, 0,
+                  FALSE, TF_RP_LOCALPROCESS),
+               "RegisterProfile LOCALPROCESS")) break;
+    local_registered = true;
     if (!check(manager->Activate(&client), "ThreadMgr Activate")) break;
     manager_active = true;
     // ThreadMgr::Activate returns the application ID used by CreateContext.
@@ -217,6 +232,13 @@ int wmain(int argc, wchar_t **argv) {
   if (client_ids) client_ids->Release();
   if (keys) keys->Release();
   if (manager) manager->Release();
+  if (local_registered && local_profiles &&
+      local_profiles->UnregisterProfile(CLSID_VoiceTypeSpeechProbe,
+          local_lang, GUID_VoiceTypeSpeechProfile, TF_URP_LOCALPROCESS) != S_OK) {
+    std::fputs("process-local profile cleanup failed\n", stderr);
+    exit_code = 1;
+  }
+  if (local_profiles) local_profiles->Release();
   if (other) other->Release();
   if (canonical) canonical->Release();
   if (event_sink) event_sink->Release();
