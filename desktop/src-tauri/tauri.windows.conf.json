@@ -7,7 +7,8 @@
       "../target/opencc/opencc.dll": "opencc.dll",
       "../target/opencc/data/": "opencc/",
       "../target/opencc/licenses/": "licenses/opencc/",
-      "../target/opencc/manifest.json": "opencc-manifest.json"
+      "../target/opencc/manifest.json": "opencc-manifest.json",
+      "../target/runtime/": "runtime/"
     }
   }
 }

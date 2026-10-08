@@ -2,6 +2,7 @@
 //! helper is constructed. References arrive only in later Correction messages.
 use std::collections::HashSet;
 use std::io::{BufRead, Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
@@ -32,11 +33,11 @@ pub fn run(input: &str) -> Result<()> {
     validate_store(&path)?;
     // Create-new makes the empty-store requirement atomic, including symlinks.
     // A nonempty valid JSON store is deliberately NOT copied from production.
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&path)?;
     file.write_all(b"{\"version\":1,\"rules\":[]}")?;
     file.sync_all()?;
     drop(file);

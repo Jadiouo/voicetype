@@ -16,6 +16,7 @@ relocatable-runtime = ["sherpa-nano"]
 
 [build-dependencies]
 cc = "1"
+sha2 = "0.10.9"
 
 [dependencies]
 voicetype-text = { path = "../desktop/text" }
@@ -27,7 +28,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 socket2 = "0.6.5"
 thiserror = "2.0.19"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "signal"] }
 toml = "1.1.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
@@ -40,3 +41,6 @@ codegen-units = 1
 [dev-dependencies]
 tempfile = "3"
 voicetype-app-core = { path = "../desktop/core" }
+
+[target.'cfg(windows)'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

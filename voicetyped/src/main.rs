@@ -6,7 +6,15 @@
 mod asr;
 mod assistant;
 mod audio;
+#[cfg(unix)]
 mod csc;
+#[cfg(windows)]
+#[path = "csc_windows.rs"]
+mod csc;
+#[cfg(unix)]
+mod ipc;
+#[cfg(windows)]
+#[path = "ipc_stdio.rs"]
 mod ipc;
 mod personalization;
 mod output;
@@ -84,14 +92,21 @@ async fn main() -> Result<()> {
         },
     ));
 
-    let path = ipc::socket_path();
-    let server = ipc::Server::bind(&path)?;
-
-    tokio::select! {
-        r = server.run(manager) => r?,
-        _ = tokio::signal::ctrl_c() => {
-            info!("shutting down");
+    #[cfg(unix)]
+    {
+        let path = ipc::socket_path();
+        let server = ipc::Server::bind(&path)?;
+        tokio::select! {
+            r = server.run(manager) => r?,
+            _ = tokio::signal::ctrl_c() => info!("shutting down"),
         }
+    }
+    #[cfg(windows)]
+    {
+        if std::env::args().skip(1).collect::<Vec<_>>() != ["--desktop-stdio"] {
+            anyhow::bail!("Windows daemon requires --desktop-stdio");
+        }
+        ipc::run(manager).await?;
     }
     Ok(())
 }

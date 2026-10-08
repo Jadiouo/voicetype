@@ -81,6 +81,9 @@ fn main() {
 }
 
 fn link_nano() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        return link_nano_windows();
+    }
     println!("cargo:rerun-if-env-changed=VOICETYPE_SHERPA_NATIVE_ROOT");
     println!("cargo:rerun-if-env-changed=VOICETYPE_SHERPA_CAPI_SHA256");
     println!("cargo:rerun-if-changed=shim/nano_shim.cpp");
@@ -133,6 +136,35 @@ fn link_nano() {
     }
 }
 
+fn link_nano_windows() {
+    use sha2::{Digest, Sha256};
+    assert!(std::env::var_os("CARGO_FEATURE_RELOCATABLE_RUNTIME").is_some(),
+        "Windows Nano must use the isolated relocatable runtime feature");
+    let root = PathBuf::from(std::env::var_os("VOICETYPE_SHERPA_NATIVE_ROOT")
+        .expect("Windows Nano requires verified VOICETYPE_SHERPA_NATIVE_ROOT"));
+    let include = root.join("include");
+    let lib = root.join("lib");
+    let capi = lib.join("sherpa-onnx-c-api.dll");
+    let capi_pin = std::env::var("VOICETYPE_SHERPA_CAPI_SHA256")
+        .expect("Windows source-build C API digest required");
+    assert!(capi_pin.len() == 64 && capi_pin.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "invalid Windows C API pin");
+    for (path, expected) in [
+        (include.join("sherpa-onnx/c-api/c-api.h"), "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"),
+        (capi, capi_pin.as_str()),
+        (lib.join("onnxruntime.dll"), "1becbd71adbf49609d33195e29c9214969db3c3de69c81425bebe5a4b69aef97"),
+    ] {
+        let data = std::fs::read(&path).expect("missing Windows native dependency");
+        assert_eq!(format!("{:x}", Sha256::digest(&data)), expected, "Windows native digest mismatch: {}", path.display());
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    assert!(lib.join("sherpa-onnx-c-api.lib").is_file(), "missing C API import library");
+    cc::Build::new().cpp(true).std("c++17").file("shim/nano_shim.cpp")
+        .include("shim").include(include).compile("nano_shim");
+    println!("cargo:rustc-link-search=native={}", lib.display());
+    println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
+}
+
 /// 連結 OpenCC (SDD §4.6 ② 的繁化)。
 ///
 /// 不透過 feature: 輸出繁體是 §1.1 的目標之一, 不是選配。而 OpenCC 是
@@ -144,6 +176,8 @@ fn link_nano() {
 /// runtime (`libopencc1.1`) 的系統會有 `.so.1.1` 卻沒有 `.so`,
 /// `-lopencc` 因此找不到東西。這種情形下用 `-l:` 指名實際檔名。
 fn link_opencc() {
+    // voicetype-text loads the absolute bundled Windows DLL itself.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") { return; }
     println!("cargo:rerun-if-changed=build.rs");
 
     if pkg_config_ok() {

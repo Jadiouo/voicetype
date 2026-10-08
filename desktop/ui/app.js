@@ -23,7 +23,7 @@ const installModule = document.querySelector('#install-input-module');
 const restoreModule = document.querySelector('#restore-input-module');
 
 function runtimeControls(view) {
-  document.querySelector('#input-module-setup').hidden = !view?.local_runtime_bundled;
+  document.querySelector('#input-module-setup').hidden = !view?.local_runtime_bundled || !!view?.windows_input;
   installModule.disabled = restoreModule.disabled = moduleBusy || commandBusy
     || !view?.local_runtime_bundled || view.input_requested || view.settings.dictation.busy;
   const loaded = ['waiting_for_input', 'ready'].includes(view?.local_runtime);
@@ -35,6 +35,9 @@ function runtimeControls(view) {
     || view?.input_requested || !!view?.settings.dictation.busy;
   document.querySelector('#runtime-note').textContent = !view?.local_runtime_bundled
     ? '這個平台的引擎封裝仍在準備中。'
+    : view.windows_input && view.local_runtime === 'ready' ? '按一次 Ctrl＋CapsLock 開始，再按一次結束並辨識；Esc 取消。結果目前保留在待處理文字供手動複製，尚未自動送字。'
+    : view.windows_input && view.input_requested ? 'Windows 快捷鍵已啟用；目前只支援一般 Win32 Edit 欄位。'
+    : view.windows_input && loaded ? '引擎已載入。啟用快捷鍵後，只在一般 Win32 Edit 欄位開始錄音。'
     : view.local_runtime === 'ready' ? '按住 Ctrl＋Alt 說話，放開後送字；Esc 取消。停用或結束 App 後回到原服務。'
     : view.input_requested ? '等待 Fcitx 接管：原聽寫結束後才切換。若持續等待，請確認已載入本版 Fcitx 模組；舊的使用者模組可能遮住安裝包版本。'
     : loaded ? '引擎已載入。按「啟用本機聽寫」後，Fcitx 才會在空閒時接管快捷鍵。'
@@ -51,6 +54,7 @@ async function refreshRecovery() {
   recovery = next;
   recoveryContent.hidden = !next;
   recoveryNote.textContent = !next ? '目前沒有待處理的文字。'
+    : next.reason === 'not_sent' ? '尚未自動送字；完整文字保留在這裡，可自行複製。'
     : next.reason === 'unconfirmed' ? '無法確認是否已送出，文字可能已在原欄位中。請先檢查原欄位，避免重複貼上。'
     : next.reason === 'partial' ? '可能只有部分文字送出。請先檢查原欄位，再選取需要的內容。'
     : '輸入位置已變更，完整文字保留在這裡。';
@@ -77,8 +81,8 @@ function render(view) {
   }
   if (view.local_runtime !== 'inactive') {
     const runtimeLabels = {
-      waiting_for_input: '引擎已載入 · 等待輸入法連接',
-      ready: '本機引擎與輸入法已連接',
+      waiting_for_input: view.windows_input ? '引擎已載入 · 尚未啟用快捷鍵' : '引擎已載入 · 等待輸入法連接',
+      ready: view.windows_input ? '本機引擎與 Windows 快捷鍵已連接 · 自動送字未驗證' : '本機引擎與輸入法已連接',
       failed: '本機引擎已中斷 · 請重新準備',
     };
     document.querySelector('#local-availability').textContent = runtimeLabels[view.local_runtime] || '尚未準備引擎';
@@ -102,7 +106,7 @@ async function command(name, args = {}) {
   status.textContent = name === 'select_provider' ? '正在儲存…'
     : name === 'load_local_runtime' ? '正在核對模型並載入本機引擎，首次載入可能需要一些時間…'
     : name === 'unload_local_runtime' ? '正在卸載本機引擎…'
-    : name === 'enable_local_input' ? '正在要求 Fcitx 接管…'
+    : name === 'enable_local_input' ? (lastView?.windows_input ? '正在啟用 Windows 快捷鍵…' : '正在要求 Fcitx 接管…')
     : name === 'cancel_dictation' ? '正在取消聽寫…'
     : name === 'refresh_providers' ? '正在檢查服務…' : '正在讀取設定…';
   try {

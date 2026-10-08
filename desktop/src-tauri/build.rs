@@ -8,7 +8,7 @@ fn main() {
         let bundles: &[&str] = if target == "linux" {
             &["runtime", "input"]
         } else {
-            &["opencc"]
+            &["opencc", "runtime"]
         };
         for name in bundles {
             let root = std::path::PathBuf::from("../target").join(name);

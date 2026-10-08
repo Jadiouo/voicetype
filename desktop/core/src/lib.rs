@@ -10,7 +10,6 @@ pub mod input_install;
 mod input_lease;
 #[cfg(target_os = "linux")]
 pub mod local;
-#[cfg(target_os = "linux")]
 pub mod local_install;
 #[cfg(unix)]
 mod providers;
@@ -21,6 +20,11 @@ pub mod setup;
 mod setup_worker;
 pub mod vocabulary;
 pub mod worker;
+pub mod windows_engine;
+#[cfg(windows)]
+pub mod windows_input;
+#[cfg(windows)]
+pub mod windows_job;
 pub use dictation::{
     CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationPhase,
     DictationStatus, ProviderCommand, ProviderEvent, ProviderPort, RetainedText, SessionClock,

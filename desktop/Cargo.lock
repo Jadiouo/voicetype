@@ -4490,6 +4490,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "toml_edit 0.25.15+spec-1.1.0",
  "voicetype-text",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

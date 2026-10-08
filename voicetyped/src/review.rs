@@ -1,7 +1,9 @@
 //! Opt-in, bounded review sampling. Disk work never runs before result delivery.
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -168,6 +170,15 @@ fn now() -> u64 {
 }
 
 fn day(timestamp: u64) -> Result<String> {
+    #[cfg(windows)]
+    {
+        use chrono::{DateTime, Local, Utc};
+        let utc = DateTime::<Utc>::from_timestamp(i64::try_from(timestamp)?, 0)
+            .context("invalid review timestamp")?;
+        return Ok(utc.with_timezone(&Local).format("%Y-%m-%d").to_string());
+    }
+    #[cfg(unix)]
+    {
     let time = libc::time_t::try_from(timestamp)?;
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
     // localtime_r writes to our stack value; the libc timezone is the desktop's.
@@ -181,6 +192,7 @@ fn day(timestamp: u64) -> Result<String> {
         local.tm_mon + 1,
         local.tm_mday
     ))
+    }
 }
 
 struct StoreLock(File);
@@ -191,28 +203,25 @@ impl StoreLock {
             !fs::symlink_metadata(root)?.file_type().is_symlink(),
             "review directory is a link"
         );
+        #[cfg(unix)]
         fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
-        let file = OpenOptions::new()
+        let mut options = OpenOptions::new();
+        options
             .read(true)
             .write(true)
             .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(root.join(".lock"))?;
+            .truncate(false);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        let file = options.open(root.join(".lock"))?;
         // Never block the worker indefinitely behind an editor.
-        ensure!(
-            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "review store busy"
-        );
+        file.try_lock().context("review store busy")?;
         Ok(Self(file))
     }
 }
 impl Drop for StoreLock {
     fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-        }
+        let _ = self.0.unlock();
     }
 }
 
@@ -230,15 +239,16 @@ fn atomic_json(path: &Path, data: &impl Serialize) -> Result<()> {
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&temp)?;
         serde_json::to_writer(&mut file, data)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
         fs::rename(&temp, path)?;
+        #[cfg(unix)]
         File::open(path.parent().context("missing parent")?)?.sync_all()?;
         Ok(())
     })();
@@ -399,6 +409,7 @@ fn persist(root: &Path, config: &Config, sample: Sample, timestamp: u64) -> Resu
     );
     let temp = root.join(format!(".pending-{id}"));
     fs::create_dir(&temp)?;
+    #[cfg(unix)]
     fs::set_permissions(&temp, fs::Permissions::from_mode(0o700))?;
     let result = (|| -> Result<bool> {
         let record = Record {
@@ -413,17 +424,18 @@ fn persist(root: &Path, config: &Config, sample: Sample, timestamp: u64) -> Resu
             corrected_text: None,
             reviewed_at: None,
         };
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(temp.join("audio.wav"))?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(temp.join("audio.wav"))?;
         wav(file, &sample.audio)?;
         atomic_json(&temp.join("record.json"), &record)?;
         if sample.latest.load(Ordering::SeqCst) != sample.session {
             return Ok(false);
         }
         fs::rename(&temp, root.join(&id))?;
+        #[cfg(unix)]
         File::open(root)?.sync_all()?;
         tracing::info!("review sample retained locally");
         Ok(true)

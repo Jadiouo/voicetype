@@ -127,8 +127,16 @@ def main():
                     click("#reload")
                     eventually(ready)
                 else:
-                    assert js("return document.querySelector('#load-local-runtime').disabled")
-                    assert js("return document.querySelector('#runtime-note').textContent.includes('仍在準備中')")
+                    assert js("return document.querySelector('#input-module-setup').hidden")
+                    assert js("return document.querySelector('#runtime-note').textContent.includes('引擎')")
+                    eventually(lambda: js("return !document.querySelector('#load-local-runtime').disabled"))
+                    click("#load-local-runtime")
+                    eventually(lambda: js("return !document.querySelector('#error').hidden"))
+                    assert js("return document.querySelector('#error').textContent.includes('請先下載／檢查模型')")
+                    assert not (Path(profile) / "runtime-assets").exists()
+                    assert not (Path(profile) / "local-profile").exists()
+                    click("#reload")
+                    eventually(ready)
                 assert js("return document.querySelectorAll('.availability').length") == 2
                 click("#check-providers")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
