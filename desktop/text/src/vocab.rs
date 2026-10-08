@@ -99,7 +99,7 @@ impl Vocab {
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(path) = &self.path {
             match file_stamp(path) {
-                Ok(stamp) if cache.stamp != Some(stamp) => {
+                Ok(stamp) if cache.stamp.as_ref() != Some(&stamp) => {
                     match read_data(path) {
                         Ok(data) => {
                             info!(rules = data.rules.len(), "詞彙修正表已自動重載");
