@@ -715,3 +715,20 @@ OpenCC、讀取 s2tw 字典並保留中英與名字。此輪發現並修正 Wind
 - 整句修正不自動學成永久規則。短詞建議保守判斷單一差異，正常英文需要上下文；不得改動其他已確認的用法。加入詞庫先保存可重試意圖，失敗不丟校對結果，重試不重複新增規則。
 - 本機離線驗證：59 個 core 測試、28 個共用文字測試、9 個 collector 測試通過；包含實際 collector thread 與 App 儲存／播放命令的合成音訊互通。Clippy 只有既有 worker enum 大小警告。TDD 缺少公開 API／明確路徑與損壞樣本未清理的 RED→GREEN 記於 TDD 文件。
 - 校對頁的 Linux／Windows 已安裝 GUI 與新版包驗證仍待 CI；未做真人錄音、品質或延遲比較，不宣稱縮短推論時間。CSC、Google／Windows 語音及完整驗收繼續列為未完成，PR #2 保持 draft。
+
+## 2026-10-08：抽樣校對安裝包驗證完成
+
+來源 `d24e7e5` 的 [Desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37760912158)
+與 [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37760912485) 均成功。
+Linux／Windows 各通過 22 項已安裝 UI 檢查；新增六項涵蓋明確 opt-in、
+7 天到期、合成 WAV 的原生解碼（9 秒且不自動播放）、確認／修正／獨立加入詞庫、
+版本衝突保留編輯，以及重啟／刪除／關閉抽樣。
+
+- 下載兩平台 installer/UI evidence，核對來源 commit、大小與 SHA-256；查看兩平台校對頁截圖，繁中及英文可讀，側欄在頁面捲動時可見。
+- Linux 解包後再次驗證 CPU runtime、native notices、Fcitx 模組、loader、Caps Lock symbols 與 payload catalog。Windows CI 包含中文安裝路徑的 OpenCC 驗證。
+- 表格及 GUI 證據都對應 `d24e7e5`。抽樣為合成資料，沒有使用私人錄音，沒有真人麥克風／辨識品質／速度驗收；Google、Windows 語音與 App 自動錯字校正仍未完成。PR #2 保持 draft。
+
+| `d24e7e5` 安裝包 | bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux `.deb` | 18977800 | `3c92f8ec51a95c861003e1cca1a6f33b617cb441cf1ce303de89ca0b0052d024` |
+| Windows NSIS `.exe` | 4383775 | `344aee6c613a41393b84ca8eaa2227dea736dd4a4c2cc9ce78e15757b01f895f` |
