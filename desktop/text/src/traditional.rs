@@ -25,7 +25,10 @@ use tracing::warn;
 #[allow(non_camel_case_types)]
 type opencc_t = *mut c_void;
 
+#[cfg(not(windows))]
 type Open = unsafe extern "C" fn(*const c_char) -> opencc_t;
+#[cfg(windows)]
+type Open = unsafe extern "C" fn(*const u16) -> opencc_t;
 type Close = unsafe extern "C" fn(opencc_t) -> i32;
 type Convert = unsafe extern "C" fn(opencc_t, *const c_char, usize) -> *mut c_char;
 type Free = unsafe extern "C" fn(*mut c_char);
@@ -38,7 +41,7 @@ struct Api {
 }
 
 /// OpenCC 的配置檔。系統的 `/usr/share/opencc/` 下。
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 const CONFIG: &str = "s2tw.json";
 
 pub struct Traditional {
@@ -90,31 +93,37 @@ impl Traditional {
     }
 
     fn open() -> Result<Self> {
-        #[cfg(target_os = "linux")]
+        #[cfg(not(windows))]
         let (library_path, config) = (
             std::path::PathBuf::from("libopencc.so.1.1"),
-            CONFIG.to_owned(),
+            CString::new(CONFIG)?,
         );
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
         let (library_path, config) = {
             // Only the application-owned absolute DLL/data location is allowed;
             // never search the current directory or take paths from a webview.
             let exe = std::env::current_exe()?;
             let base = exe.parent().context("missing executable directory")?;
-            (
-                base.join("opencc.dll"),
-                base.join("opencc/s2tw.json")
-                    .to_str()
-                    .context("OpenCC path is not UTF-8")?
-                    .to_owned(),
-            )
+            use std::os::windows::ffi::OsStrExt;
+            let config: Vec<u16> = base
+                .join("opencc/s2tw.json")
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            (base.join("opencc.dll"), config)
         };
-        let config = CString::new(config)?;
+
         // SAFETY: C ABI signatures follow OpenCC's public header. Function
         // pointers remain owned with the Library for the whole handle lifetime.
         let (open, api) = unsafe {
             let library = libloading::Library::new(library_path)?;
+            #[cfg(not(windows))]
             let open = *library.get::<Open>(b"opencc_open\0")?;
+            // MSVC's narrow entry point decodes the active ANSI code page, not
+            // UTF-8. Use the wide API for Chinese/spaced installation paths.
+            #[cfg(windows)]
+            let open = *library.get::<Open>(b"opencc_open_w\0")?;
             let api = Api {
                 close: *library.get::<Close>(b"opencc_close\0")?,
                 convert: *library.get::<Convert>(b"opencc_convert_utf8\0")?,
