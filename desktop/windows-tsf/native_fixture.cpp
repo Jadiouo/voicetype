@@ -40,11 +40,13 @@ int wmain(int argc, wchar_t **argv) {
   ITfThreadMgrEventSink *event_sink = nullptr;
   IUnknown *canonical = nullptr, *other = nullptr;
   ITfThreadMgr *manager = nullptr;
+  ITfClientId *client_ids = nullptr;
   ITfKeystrokeMgr *keys = nullptr;
   ITfDocumentMgr *doc = nullptr;
   ITfContext *context = nullptr;
   ITextStoreACP *store = nullptr;
   TfClientId client = TF_CLIENTID_NULL;
+  TfClientId service_client = TF_CLIENTID_NULL;
   bool manager_active = false, service_active = false, pushed = false;
   bool server_locked = false;
   do {
@@ -123,7 +125,14 @@ int wmain(int argc, wchar_t **argv) {
                "CoCreateInstance ThreadMgr")) break;
     if (!check(manager->Activate(&client), "ThreadMgr Activate")) break;
     manager_active = true;
-    if (!check(service->Activate(manager, client), "TIP Activate")) break;
+    // ThreadMgr::Activate returns the application ID used by CreateContext.
+    // A TIP receives its own client ID; do not pass the application's ID to
+    // AdviseKeyEventSink through a manually activated service.
+    if (!check(manager->QueryInterface(IID_ITfClientId,
+                  reinterpret_cast<void **>(&client_ids)), "QI ClientId") ||
+        !check(client_ids->GetClientId(CLSID_VoiceTypeSpeechProbe,
+                                      &service_client), "GetClientId TIP")) break;
+    if (!check(service->Activate(manager, service_client), "TIP Activate")) break;
     service_active = true;
     if (!check(manager->CreateDocumentMgr(&doc), "CreateDocumentMgr")) break;
     store = CreateFixtureTextStore();
@@ -205,6 +214,7 @@ int wmain(int argc, wchar_t **argv) {
   if (doc) doc->Release();
   if (store) store->Release();
   if (manager_active) manager->Deactivate();
+  if (client_ids) client_ids->Release();
   if (keys) keys->Release();
   if (manager) manager->Release();
   if (other) other->Release();
