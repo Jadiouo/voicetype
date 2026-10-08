@@ -46,3 +46,46 @@ jobs:
           }
           $digest = (Get-FileHash -Path $dll -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "Validated x64 TSF DLL: bytes=$($bytes.Length) sha256=$digest"
+      - name: Package isolated standard-user B candidate
+        id: package
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:GITHUB_WORKSPACE '.scratch/tsf-native/build/Release'
+          $files = @('voicetype_tsf_probe.dll', 'voicetype_tsf_registrar.exe',
+                     'voicetype_tsf_b_target.exe')
+          foreach ($name in $files) {
+            if (-not (Test-Path -LiteralPath (Join-Path $release $name) -PathType Leaf)) {
+              Write-Host "Candidate unavailable: missing $name"
+              exit 0
+            }
+          }
+          $root = Join-Path $env:GITHUB_WORKSPACE '.scratch/tsf-candidate'
+          $stage = Join-Path $root 'package'
+          $bin = Join-Path $stage '.scratch/tsf-native/build/Release'
+          $scripts = Join-Path $stage 'desktop/windows-tsf'
+          New-Item -ItemType Directory -Force -Path $bin, $scripts | Out-Null
+          foreach ($name in $files) {
+            Copy-Item -LiteralPath (Join-Path $release $name) -Destination $bin
+          }
+          Copy-Item -LiteralPath 'desktop/windows-tsf/Invoke-TsfBProbe.ps1' -Destination $scripts
+          Copy-Item -LiteralPath 'desktop/windows-tsf/README-CANDIDATE.md' -Destination (Join-Path $stage 'README-CANDIDATE.md')
+          $hashes = foreach ($name in $files) {
+            $digest = (Get-FileHash -LiteralPath (Join-Path $bin $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$digest  .scratch/tsf-native/build/Release/$name"
+          }
+          [System.IO.File]::WriteAllLines((Join-Path $stage 'SHA256SUMS.txt'), $hashes)
+          $zip = Join-Path $root "voicetype-tsf-b-probe-$($env:GITHUB_SHA.Substring(0, 7)).zip"
+          Push-Location $stage
+          try {
+            Compress-Archive -LiteralPath 'desktop', '.scratch', 'README-CANDIDATE.md', 'SHA256SUMS.txt' -DestinationPath $zip
+          } finally { Pop-Location }
+          $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Candidate zip: $zip sha256=$zipHash"
+          "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.package.outputs.ready == 'true' }}
+        with:
+          name: windows-tsf-b-candidate
+          path: .scratch/tsf-candidate/voicetype-tsf-b-probe-*.zip
+          if-no-files-found: error
