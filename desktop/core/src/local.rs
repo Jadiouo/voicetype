@@ -25,6 +25,7 @@ pub struct LocalConnection {
     active: Option<SessionKey>,
     faulted: bool,
     request: u64,
+    spelling_ready: Option<bool>,
 }
 
 impl LocalConnection {
@@ -52,12 +53,22 @@ impl LocalConnection {
         if value["session_busy"] != false {
             return Err(io::Error::other("local engine is not idle"));
         }
+        let spelling_ready = match value["spelling_status"].as_str() {
+            Some("ready") => Some(true),
+            Some("unavailable" | "disabled") => Some(false),
+            _ => None,
+        };
         Ok(Self {
             wire,
             active: None,
             faulted: false,
             request: 1,
+            spelling_ready,
         })
+    }
+
+    pub fn spelling_ready(&self) -> Option<bool> {
+        self.spelling_ready
     }
 
     /// A polling timeout is normal while recording. EOF/protocol errors are not

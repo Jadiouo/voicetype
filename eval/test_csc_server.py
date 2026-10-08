@@ -44,11 +44,15 @@ class ServerTests(unittest.TestCase):
             target=launch, args=(self.path, self.log))
         self.worker.start()
         until = time.monotonic() + 3
-        while not self.path.exists() and time.monotonic() < until:
+        def ready():
+            return self.log.exists() and '"status": "ready"' in self.log.read_text()
+        # bind() publishes the socket before listen(); pathname existence alone
+        # can race the first connection. Wait for the public ready diagnostic.
+        while not ready() and time.monotonic() < until:
             if not self.worker.is_alive():
                 self.fail(self.log.read_text())
             time.sleep(.005)
-        self.assertTrue(self.path.exists())
+        self.assertTrue(ready(), self.log.read_text() if self.log.exists() else "worker not ready")
 
     def tearDown(self):
         if self.worker.is_alive():

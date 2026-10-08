@@ -82,3 +82,35 @@ fn user_can_reload_after_a_conflict_and_then_save_their_next_choice() {
         Provider::Local
     );
 }
+#[test]
+fn cpu_spelling_choice_persists_without_starting_a_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = voicetype_app_core::Application::open(root.path()).unwrap();
+    assert!(app.snapshot().spelling_enabled);
+    assert!(!app.set_spelling_enabled(false).unwrap().spelling_enabled);
+    let reopened = voicetype_app_core::Application::open(root.path()).unwrap();
+    assert!(!reopened.snapshot().spelling_enabled);
+    assert!(!reopened.snapshot().dictation.busy);
+    assert_eq!(
+        reopened.snapshot().selected_provider,
+        voicetype_app_core::Provider::Local
+    );
+}
+
+#[test]
+fn spelling_choice_preserves_unknown_settings_and_rejects_a_stale_window() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("desktop.json");
+    std::fs::write(
+        &path,
+        r#"{"schema_version":1,"selected_provider":"local","future_option":42}"#,
+    )
+    .unwrap();
+    let mut stale = Application::open(root.path()).unwrap();
+    let mut current = Application::open(root.path()).unwrap();
+    current.set_spelling_enabled(false).unwrap();
+    assert!(stale.set_spelling_enabled(true).is_err());
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(saved["future_option"], 42);
+    assert_eq!(saved["spelling_enabled"], false);
+}

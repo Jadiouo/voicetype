@@ -21,6 +21,7 @@ open(os.path.join(os.environ['HOME'], 'endpoint'), 'w').write(os.environ['VOICET
 open(os.path.join(os.environ['HOME'], 'pid'), 'w').write(str(os.getpid()))
 open(os.path.join(os.environ['HOME'], 'vocab-path'), 'w').write(os.environ.get('VOICETYPE_VOCAB', ''))
 open(os.path.join(os.environ['HOME'], 'review-paths'), 'w').write(json.dumps([os.environ.get('VOICETYPE_REVIEW_CONFIG'), os.environ.get('VOICETYPE_REVIEW_ROOT')]))
+open(os.path.join(os.environ['HOME'], 'spelling-config'), 'w').write(os.environ.get('VOICETYPE_CSC_PROCESS', ''))
 with socket.socket(socket.AF_UNIX) as listener:
     listener.bind(os.environ['VOICETYPE_SOCKET'])
     listener.listen(1)
@@ -62,8 +63,69 @@ while True: time.sleep(1)
         vocabulary: root.path().join("vocab.toml"),
         review_config: root.path().join("review.json"),
         review_root: root.path().join("review"),
+        spelling: None,
     };
     (root, paths)
+}
+
+#[test]
+fn owned_engine_receives_only_the_explicit_verified_spelling_bundle() {
+    use voicetype_text::spelling::SpellingPaths;
+    let (root, mut paths) = fixture();
+    let spelling = SpellingPaths {
+        executable: root.path().join("spelling/voicetype-csc"),
+        model: root.path().join("spelling/model.onnx"),
+        tokenizer: root.path().join("spelling/tokenizer.json"),
+        model_sha256: "a".repeat(64),
+        tokenizer_sha256: "b".repeat(64),
+        threads: 4,
+    };
+    paths.spelling = Some(spelling.clone());
+    let mut runtime = OwnedLocal::start(&paths, Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        fs::read_to_string(paths.profile.join("home/spelling-config")).unwrap(),
+        serde_json::to_string(&spelling).unwrap()
+    );
+    assert!(!paths.profile.join("home/capture").exists());
+    runtime.shutdown().unwrap();
+    paths.spelling = None;
+    let mut runtime = OwnedLocal::start(&paths, Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        fs::read_to_string(paths.profile.join("home/spelling-config")).unwrap(),
+        ""
+    );
+    runtime.shutdown().unwrap();
+}
+
+#[test]
+fn reaped_engine_releases_profile_even_if_an_unrelated_fork_inherited_the_lock() {
+    let (_root, paths) = fixture();
+    let mut runtime = OwnedLocal::start(&paths, Duration::from_secs(2)).unwrap();
+    let mut signal = [0; 2];
+    // A concurrent fork inherits the open file description carrying flock.
+    // It deliberately stays alive through shutdown without executing Rust.
+    unsafe {
+        assert_eq!(libc::pipe(signal.as_mut_ptr()), 0);
+        let child = libc::fork();
+        assert!(child >= 0);
+        if child == 0 {
+            libc::close(signal[1]);
+            let mut byte = 0u8;
+            libc::read(signal[0], (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+        libc::close(signal[0]);
+        runtime.shutdown().unwrap();
+        // Capture the result before releasing the fork, so failure is evidence
+        // of the inherited lock rather than an arbitrary sleep/race.
+        let restarted = OwnedLocal::start(&paths, Duration::from_secs(2));
+        libc::write(signal[1], b"x".as_ptr().cast(), 1);
+        libc::close(signal[1]);
+        let mut status = 0;
+        assert_eq!(libc::waitpid(child, &mut status, 0), child);
+        let mut restarted = restarted.unwrap();
+        restarted.shutdown().unwrap();
+    }
 }
 
 #[test]
@@ -145,10 +207,30 @@ fn input_handoff_is_explicit_exclusive_and_removed_before_shutdown() {
     other.activate_local(other_paths).unwrap();
     assert!(other.enable_local_input(runtime.clone()).is_err());
     assert_eq!(fs::read_to_string(&route).unwrap(), record);
-    worker.deactivate_local().unwrap();
-    assert!(!route.exists());
-    assert!(!worker.settings().unwrap().input_requested);
-    assert!(other.enable_local_input(runtime).unwrap().input_requested);
+    // Another process can fork while the lease is active. Its inherited file
+    // description must not keep the route locked after this owner withdraws.
+    let mut signal = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe(signal.as_mut_ptr()), 0);
+        let fork = libc::fork();
+        assert!(fork >= 0);
+        if fork == 0 {
+            libc::close(signal[1]);
+            let mut byte = 0u8;
+            libc::read(signal[0], (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+        libc::close(signal[0]);
+        worker.deactivate_local().unwrap();
+        assert!(!route.exists());
+        assert!(!worker.settings().unwrap().input_requested);
+        let next_owner = other.enable_local_input(runtime);
+        libc::write(signal[1], b"x".as_ptr().cast(), 1);
+        libc::close(signal[1]);
+        let mut status = 0;
+        assert_eq!(libc::waitpid(fork, &mut status, 0), fork);
+        assert!(next_owner.unwrap().input_requested);
+    }
     other.shutdown().unwrap();
     assert!(!route.exists());
     worker.shutdown().unwrap();
@@ -302,6 +384,7 @@ fn runtime_parent_helper() {
             vocabulary: paths[3].join("vocab.toml"),
             review_config: paths[3].join("review.json"),
             review_root: paths[3].join("review"),
+            spelling: None,
         },
         Duration::from_secs(2),
     )
@@ -385,6 +468,10 @@ fn desktop_worker_owns_runtime_on_its_resident_thread_and_observes_idle_exit() {
     assert!(!capture.exists());
     let view = worker.activate_local(paths).unwrap();
     assert_eq!(view.local_runtime, LocalRuntimeStatus::WaitingForInput);
+    assert_eq!(
+        serde_json::to_value(&view).unwrap()["spelling_runtime"],
+        "unavailable"
+    );
     assert!(
         !capture.exists(),
         "activation opened capture without native input"
@@ -425,6 +512,18 @@ fn desktop_worker_owns_runtime_on_its_resident_thread_and_observes_idle_exit() {
     assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
     assert!(!capture.exists());
     assert!(worker.local_endpoint().unwrap().is_none());
+    assert!(worker.set_spelling_enabled(false).is_err());
+    assert_eq!(
+        worker.deactivate_local().unwrap().local_runtime,
+        LocalRuntimeStatus::Inactive
+    );
+    assert!(
+        !worker
+            .set_spelling_enabled(false)
+            .unwrap()
+            .settings
+            .spelling_enabled
+    );
     worker.shutdown().unwrap();
 }
 
@@ -489,6 +588,12 @@ fn desktop_worker_retains_focus_rejected_text_for_explicit_recovery_only() {
     assert!(!serde_json::to_string(&worker.settings().unwrap())
         .unwrap()
         .contains("Antigravity"));
+    assert!(worker.reload().err().unwrap().contains("卸載"));
+    assert_eq!(
+        worker.settings().unwrap().local_runtime,
+        voicetype_app_core::worker::LocalRuntimeStatus::Ready
+    );
+    worker.deactivate_local().unwrap();
     worker.reload().unwrap();
     assert_eq!(worker.recovery().unwrap().unwrap().text, retained.text);
     // A stale UI dismissal cannot erase a newer retained result.
@@ -510,6 +615,252 @@ fn desktop_worker_retains_focus_rejected_text_for_explicit_recovery_only() {
     }
     assert!(remainder.is_empty());
     worker.shutdown().unwrap();
+}
+
+#[test]
+fn public_reload_keeps_effective_spelling_until_engine_is_unloaded() {
+    use voicetype_app_core::worker::{DesktopWorker, LocalRuntimeStatus};
+    let (root, paths) = fixture();
+    let settings = root.path().join("settings");
+    let worker = DesktopWorker::spawn(settings.clone()).unwrap();
+    assert!(worker.settings().unwrap().settings.spelling_enabled);
+    worker.activate_local(paths).unwrap();
+    fs::create_dir_all(&settings).unwrap();
+    fs::write(
+        settings.join("desktop.json"),
+        r#"{"schema_version":1,"selected_provider":"local","spelling_enabled":false}"#,
+    )
+    .unwrap();
+    assert!(worker.reload().err().unwrap().contains("卸載"));
+    let still_running = worker.settings().unwrap();
+    assert!(still_running.settings.spelling_enabled);
+    assert_eq!(
+        still_running.local_runtime,
+        LocalRuntimeStatus::WaitingForInput
+    );
+    assert!(worker.local_endpoint().unwrap().is_some());
+    worker.deactivate_local().unwrap();
+    let reloaded = worker.reload().unwrap();
+    assert!(!reloaded.settings.spelling_enabled);
+    assert_eq!(reloaded.local_runtime, LocalRuntimeStatus::Inactive);
+    worker.shutdown().unwrap();
+}
+
+#[test]
+fn loaded_app_refreshes_owned_spelling_health_without_losing_asr() {
+    use serde_json::{json, Value};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Instant;
+    use voicetype_app_core::worker::{DesktopWorker, LocalRuntimeStatus, SpellingRuntimeStatus};
+    let (root, mut paths) = fixture();
+    fs::write(
+        &paths.executable,
+        r#"#!/usr/bin/python3
+import json, os, socket, threading, time
+marker=os.path.join(os.environ['HOME'],'csc-dead')
+slow=os.path.join(os.environ['HOME'],'slow-status')
+entered=os.path.join(os.environ['HOME'],'status-entered')
+bad=os.path.join(os.environ['HOME'],'bad-status')
+bad_count=os.path.join(os.environ['HOME'],'bad-status-count')
+def serve(peer):
+    with peer, peer.makefile('r') as stream:
+        for line in stream:
+            command=json.loads(line)
+            if command['type']=='desktop_status':
+                if os.path.exists(slow):
+                    open(entered,'w').close()
+                    time.sleep(.2)
+                value={'desktop_protocol':1,'request':command['request'],
+                    'session_busy':False,'capabilities':['session_events','suspend']}
+                if os.path.exists(bad):
+                    n=int(open(bad_count).read()) if os.path.exists(bad_count) else 0
+                    open(bad_count,'w').write(str(n+1))
+                    if open(bad).read().strip()=='unknown':
+                        value['spelling_status']='unexpected'
+                else:
+                    value['spelling_status']='unavailable' if os.path.exists(marker) else 'ready'
+                reply={'type':'info','value':value}
+            elif command['type']=='start':
+                reply={'type':'state','session':command['session'],'value':'recording'}
+            elif command['type']=='stop':
+                peer.sendall((json.dumps({'type':'result','session':command['session'],
+                    'text':'請檢查 GitHub。'})+'\n').encode())
+                reply={'type':'state','session':command['session'],'value':'idle'}
+            else:
+                continue
+            peer.sendall((json.dumps(reply)+'\n').encode())
+with socket.socket(socket.AF_UNIX) as listener:
+    listener.bind(os.environ['VOICETYPE_SOCKET'])
+    listener.listen(8)
+    while True:
+        peer,_=listener.accept()
+        threading.Thread(target=serve,args=(peer,),daemon=True).start()
+"#,
+    )
+    .unwrap();
+    paths.spelling = Some(voicetype_text::spelling::SpellingPaths {
+        executable: root.path().join("csc"),
+        model: root.path().join("model.onnx"),
+        tokenizer: root.path().join("tokenizer.json"),
+        model_sha256: "a".repeat(64),
+        tokenizer_sha256: "b".repeat(64),
+        threads: 4,
+    });
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    let loaded = worker.activate_local(paths).unwrap();
+    assert_eq!(loaded.spelling_runtime, SpellingRuntimeStatus::Ready);
+    let home = root.path().join("app-data/home");
+    fs::write(home.join("slow-status"), b"slow").unwrap();
+    let until = Instant::now() + Duration::from_secs(2);
+    while !home.join("status-entered").exists() {
+        assert!(Instant::now() < until, "no idle health query");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let before = Instant::now();
+    assert_eq!(
+        worker.settings().unwrap().spelling_runtime,
+        SpellingRuntimeStatus::Ready
+    );
+    assert!(
+        before.elapsed() < Duration::from_millis(35),
+        "idle health query blocked the command worker"
+    );
+    fs::remove_file(home.join("slow-status")).unwrap();
+    fs::write(home.join("bad-status"), b"missing").unwrap();
+    let await_bad_queries = |target: u64| {
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            let count = fs::read_to_string(home.join("bad-status-count"))
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            if count >= target {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "invalid status stopped health refresh"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    await_bad_queries(2);
+    fs::write(home.join("bad-status"), b"unknown").unwrap();
+    await_bad_queries(4);
+    assert_eq!(
+        worker.settings().unwrap().spelling_runtime,
+        SpellingRuntimeStatus::Ready
+    );
+    fs::remove_file(home.join("bad-status")).unwrap();
+    fs::write(root.path().join("app-data/home/csc-dead"), b"dead").unwrap();
+    let until = Instant::now() + Duration::from_secs(3);
+    while worker.settings().unwrap().spelling_runtime != SpellingRuntimeStatus::Unavailable {
+        assert!(Instant::now() < until, "App kept stale CSC ready status");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        worker.settings().unwrap().local_runtime,
+        LocalRuntimeStatus::WaitingForInput
+    );
+    let peer = UnixStream::connect(worker.local_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut input = BufReader::new(peer);
+    let mut line = String::new();
+    input.read_line(&mut line).unwrap();
+    let hello: Value = serde_json::from_str(&line).unwrap();
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello","session":hello["session"],"value":"voicetype.fcitx.v1"})
+    )
+    .unwrap();
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"start","session":1,"context_id":"editor","is_password":false})
+    )
+    .unwrap();
+    line.clear();
+    input.read_line(&mut line).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["value"],
+        "recording"
+    );
+    writeln!(input.get_mut(), "{}", json!({"type":"stop","session":1})).unwrap();
+    line.clear();
+    input.read_line(&mut line).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["type"],
+        "deliver"
+    );
+    writeln!(
+        input.get_mut(),
+        "{}",
+        json!({"type":"delivered","session":1,"context_id":"editor","code":"committed"})
+    )
+    .unwrap();
+    line.clear();
+    input.read_line(&mut line).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["value"],
+        "idle"
+    );
+    worker.deactivate_local().unwrap();
+    worker.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "exercises the real 30-second optional CSC startup boundary"]
+fn near_inner_csc_timeout_still_allows_outer_asr_readiness() {
+    use std::time::Instant;
+    let (root, mut paths) = fixture();
+    let csc = root.path().join("csc-slow-fail");
+    fs::write(
+        &csc,
+        "#!/usr/bin/python3\nimport time,sys\ntime.sleep(30.2)\nsys.exit(1)\n",
+    )
+    .unwrap();
+    fs::set_permissions(&csc, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        &paths.executable,
+        r#"#!/usr/bin/python3
+import json, os, socket, subprocess, time
+config=json.loads(os.environ['VOICETYPE_CSC_PROCESS'])
+assert subprocess.call([config['executable']]) != 0
+with socket.socket(socket.AF_UNIX) as listener:
+    listener.bind(os.environ['VOICETYPE_SOCKET'])
+    listener.listen(1)
+    peer,_=listener.accept()
+    with peer, peer.makefile('r') as stream:
+        for line in stream:
+            command=json.loads(line)
+            if command['type']=='desktop_status':
+                peer.sendall((json.dumps({'type':'info','value':{
+                    'desktop_protocol':1,'request':command['request'],
+                    'capabilities':['session_events','suspend'],'session_busy':False,
+                    'spelling_status':'unavailable'}})+'\n').encode())
+while True: time.sleep(1)
+"#,
+    )
+    .unwrap();
+    paths.spelling = Some(voicetype_text::spelling::SpellingPaths {
+        executable: csc,
+        model: root.path().join("model.onnx"),
+        tokenizer: root.path().join("tokenizer.json"),
+        model_sha256: "a".repeat(64),
+        tokenizer_sha256: "b".repeat(64),
+        threads: 4,
+    });
+    let started = Instant::now();
+    let mut runtime = OwnedLocal::start(&paths, Duration::from_secs(35)).unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(30));
+    assert!(!runtime.spelling_ready());
+    assert!(
+        runtime.is_running().unwrap(),
+        "ASR must survive CSC startup failure"
+    );
+    runtime.shutdown().unwrap();
 }
 
 #[test]
@@ -702,7 +1053,7 @@ fn application_exit_without_destructors_terminates_the_owned_engine() {
     let endpoint =
         std::path::PathBuf::from(fs::read_to_string(paths.profile.join("home/endpoint")).unwrap());
     let directory = endpoint.parent().unwrap();
-    assert_eq!(directory.parent(), Some(std::path::Path::new("/tmp")));
+    assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
     assert!(directory
         .file_name()
         .unwrap()

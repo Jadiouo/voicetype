@@ -8,7 +8,8 @@
       "../target/opencc/data/": "opencc/",
       "../target/opencc/licenses/": "licenses/opencc/",
       "../target/opencc/manifest.json": "opencc-manifest.json",
-      "../target/runtime/": "runtime/"
+      "../target/runtime/": "runtime/",
+      "../target/spelling": "spelling"
     }
   }
 }

@@ -32,7 +32,7 @@ fn same_window_other_editable_retains_child_result() {
         "for line in sys.stdin:\n",
         " m = json.loads(line)\n",
         " if m['type'] == 'desktop_status':\n",
-        "  print(json.dumps({'type':'info','value':{'desktop_protocol':1,'request':1,'session_busy':False,'capabilities':['session_events','suspend']}}),flush=True)\n",
+        "  print(json.dumps({'type':'info','value':{'desktop_protocol':1,'request':1,'session_busy':False,'spelling_status':'disabled','capabilities':['session_events','suspend']}}),flush=True)\n",
         " elif m['type'] == 'start':\n",
         "  print(json.dumps({'type':'state','session':m['session'],'value':'recording'}),flush=True)\n",
         " elif m['type'] == 'stop':\n",
@@ -48,6 +48,7 @@ fn same_window_other_editable_retains_child_result() {
         executable: script, model_dir: model, vad_model: vad,
         profile: dir.path().join("profile"), vocabulary: dir.path().join("vocab.toml"),
         review_config: dir.path().join("review.json"), review_root: dir.path().join("review"),
+        spelling: None,
     }).unwrap();
     let mut app = Application::open(dir.path()).unwrap();
     let key = app.start_dictation(TargetLease::new("win:100/edit:1", 1), &mut engine).unwrap();

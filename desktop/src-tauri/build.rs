@@ -6,9 +6,9 @@ fn main() {
     if target == "linux" || target == "windows" {
         use sha2::{Digest, Sha256};
         let bundles: &[&str] = if target == "linux" {
-            &["runtime", "input"]
+            &["runtime", "input", "spelling"]
         } else {
-            &["opencc", "runtime"]
+            &["opencc", "runtime", "spelling"]
         };
         for name in bundles {
             let root = std::path::PathBuf::from("../target").join(name);
@@ -42,6 +42,7 @@ fn main() {
     } else {
         std::fs::write(out.join("runtime-catalog.json"), b"null").unwrap();
         std::fs::write(out.join("input-catalog.json"), b"null").unwrap();
+        std::fs::write(out.join("spelling-catalog.json"), b"null").unwrap();
     }
     tauri_build::build();
 }

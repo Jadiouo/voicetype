@@ -18,6 +18,7 @@ pub struct EnginePaths {
     pub vocabulary: PathBuf,
     pub review_config: PathBuf,
     pub review_root: PathBuf,
+    pub spelling: Option<voicetype_text::spelling::SpellingPaths>,
 }
 
 enum Frame { Value(Value), Fault }
@@ -31,6 +32,8 @@ pub struct WindowsEngine {
     frames: Receiver<Frame>,
     reader: Option<thread::JoinHandle<()>>,
     active: Option<SessionKey>,
+    spelling_requested: bool,
+    spelling_ready: bool,
     faulted: bool,
 }
 
@@ -43,6 +46,7 @@ impl WindowsEngine {
         if !paths.executable.is_file() || !paths.model_dir.is_dir() || !paths.vad_model.is_file() {
             return Err(io::ErrorKind::NotFound.into());
         }
+        if let Some(spelling) = &paths.spelling { spelling.validate()?; }
         std::fs::create_dir_all(paths.profile.join("home"))?;
         std::fs::create_dir_all(paths.profile.join("config"))?;
         std::fs::create_dir_all(paths.profile.join("data"))?;
@@ -73,6 +77,9 @@ impl WindowsEngine {
         for name in ["SystemRoot", "WINDIR"] {
             if let Some(value) = std::env::var_os(name) { command.env(name, value); }
         }
+        if let Some(spelling) = &paths.spelling {
+            command.env("VOICETYPE_CSC_PROCESS", serde_json::to_string(spelling)?);
+        }
         let mut child = command.spawn()?;
         #[cfg(windows)]
         let job = match crate::windows_job::WindowsJob::attach(&child) {
@@ -101,7 +108,8 @@ impl WindowsEngine {
                 let _ = tx.try_send(Frame::Fault);
             })?;
         let mut engine = Self { child, _profile_lock: profile_lock, #[cfg(windows)] job,
-            stdin, frames, reader: Some(reader), active: None, faulted: false };
+            stdin, frames, reader: Some(reader), active: None,
+            spelling_requested: paths.spelling.is_some(), spelling_ready: false, faulted: false };
         engine.write(&json!({"type":"desktop_status","request":1}))?;
         let reply = engine.frames.recv_timeout(Duration::from_secs(30))
             .map_err(|_| io::ErrorKind::TimedOut)?;
@@ -109,11 +117,15 @@ impl WindowsEngine {
         let value = &reply["value"];
         if reply["type"] != "info" || value["desktop_protocol"] != 1 ||
             value["request"] != 1 || value["session_busy"] != false ||
+            !matches!(value["spelling_status"].as_str(), Some("ready" | "unavailable" | "disabled")) ||
             !value["capabilities"].as_array().is_some_and(|a| a.contains(&json!("session_events")) && a.contains(&json!("suspend"))) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "incompatible Nano child"));
         }
+        engine.spelling_ready = engine.spelling_requested && value["spelling_status"] == "ready";
         Ok(engine)
     }
+
+    pub fn spelling_ready(&self) -> bool { self.spelling_ready && !self.faulted }
 
     fn write(&mut self, value: &Value) -> io::Result<()> {
         serde_json::to_writer(&mut self.stdin, value)?;

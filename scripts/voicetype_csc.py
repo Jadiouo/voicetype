@@ -198,6 +198,62 @@ class Engine:
         return edits, "applied" if edits else "unchanged"
 
 
+def handle_request(engine, request):
+    """Same validated request/age budget for socket and owned-pipe transports."""
+    text, terms = request["text"], request.get("terms", [])
+    if (type(request.get("v")) is not int or request["v"] != 1
+            or type(request.get("id")) is not int
+            or not 0 <= request["id"] < 2**64
+            or not isinstance(text, str) or len(text) > 4096
+            or not isinstance(terms, list) or len(terms) > 256
+            or any(not isinstance(t, str) or not 0 < len(t) <= 64 for t in terms)
+            or type(request.get("sent_at_ms")) is not int):
+        raise ValueError("invalid request")
+    age = max(0, time.time()*1000-request["sent_at_ms"])
+    budget = min(80, 95-age)
+    if budget <= 0:
+        edits, status, calls = [], "deadline", 0
+    else:
+        edits, status = engine.predict(text, terms, budget_ms=budget)
+        calls = engine.last_calls
+    reply = dict(v=1, id=request["id"], status=status, edits=edits, model_calls=calls)
+    return reply
+
+
+def serve_stdio(engine):
+    """Private parent-owned pipe. EOF exits; malformed frames fail closed.
+
+    stdout is protocol-only UTF-8 bytes on every platform, including Windows.
+    There is no listening port, inherited socket, per-request process or log of
+    transcript content. The owner must stop waiting at its unchanged deadline.
+    """
+    import json
+    import sys
+    output = sys.stdout.buffer
+
+    def send(reply):
+        output.write(json.dumps(reply, ensure_ascii=False).encode("utf-8") + b"\n")
+        output.flush()
+
+    send(dict(v=1, status="ready", provider="CPUExecutionProvider"))
+    while True:
+        line = sys.stdin.buffer.readline(65537)
+        if not line:
+            return
+        try:
+            if len(line) > 65536 or not line.endswith(b"\n"):
+                raise ValueError("invalid request length")
+            request = json.loads(line)
+            send(handle_request(engine, request))
+        except BrokenPipeError:
+            return
+        except Exception:
+            # A corrupt frame cannot be safely associated with a caller's id.
+            # The parent observes EOF and retains its original text.
+            print("spelling pipe request failed", file=sys.stderr, flush=True)
+            raise SystemExit(2) from None
+
+
 def serve(engine, socket_path):
     """One bounded request per local connection. No text is logged or retained."""
     import json
@@ -246,23 +302,8 @@ def serve(engine, socket_path):
                             raise ValueError("invalid request length")
                         data.extend(chunk)
                     request = json.loads(data.split(b"\n", 1)[0])
-                    text, terms = request["text"], request.get("terms", [])
-                    if (type(request.get("v")) is not int or request["v"] != 1
-                            or type(request.get("id")) is not int
-                            or not 0 <= request["id"] < 2**64
-                            or not isinstance(text, str) or len(text) > 4096
-                            or not isinstance(terms, list) or len(terms) > 256
-                            or any(not isinstance(t, str) or not 0 < len(t) <= 64 for t in terms)
-                            or type(request.get("sent_at_ms")) is not int):
-                        raise ValueError("invalid request")
-                    age = max(0, time.time()*1000-request["sent_at_ms"])
-                    budget = min(80, 95-age)
-                    if budget <= 0:
-                        edits, status, calls = [], "deadline", 0
-                    else:
-                        edits, status = engine.predict(text, terms, budget_ms=budget)
-                        calls = engine.last_calls
-                    reply = dict(v=1, id=request["id"], status=status, edits=edits, model_calls=calls)
+                    reply = handle_request(engine, request)
+                    status, edits, calls = reply["status"], reply["edits"], reply["model_calls"]
                     connection.sendall(json.dumps(reply,ensure_ascii=False).encode()+b"\n")
                     print(json.dumps({"status":status, "edits":len(edits), "model_calls":calls,
                                       "elapsed_ms":round((time.monotonic()-started)*1000,3)}),flush=True)
@@ -287,7 +328,9 @@ def main():
     ap.add_argument("--tokenizer", required=True, type=Path)
     ap.add_argument("--model-sha256", required=True)
     ap.add_argument("--tokenizer-sha256", required=True)
-    ap.add_argument("--socket", required=True, type=Path)
+    transport = ap.add_mutually_exclusive_group(required=True)
+    transport.add_argument("--socket", type=Path)
+    transport.add_argument("--stdio", action="store_true", help="Use private parent-owned JSONL pipes")
     ap.add_argument("--threads", type=int, default=4, choices=[1,2,4,8])
     args = ap.parse_args()
     for path, expected in [(args.model,args.model_sha256),(args.tokenizer,args.tokenizer_sha256)]:
@@ -296,7 +339,10 @@ def main():
                 raise SystemExit("Model/tokenizer hash mismatch")
     engine = Engine(args.model,args.tokenizer,args.threads)
     engine.predict("今天心情很好。",budget_ms=1000)
-    serve(engine,args.socket)
+    if args.stdio:
+        serve_stdio(engine)
+    else:
+        serve(engine,args.socket)
 
 
 if __name__ == "__main__":

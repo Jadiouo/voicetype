@@ -3,9 +3,9 @@
 This branch starts the Linux/Windows application described in
 [SDD](../docs/app/SDD.md) and [TDD](../docs/app/TDD.md).
 
-**Linux now has an explicit Fcitx-to-app local dictation path. Google and Windows
-speech integration, automatic spelling correction and live acceptance remain
-unfinished.** Keep the existing installation available during preview testing.
+**Linux now has an explicit Fcitx-to-app local dictation path and an optional
+app-owned CPU spelling worker. Google and Windows speech integration and live
+acceptance remain unfinished.** Keep the existing installation available during preview testing.
 
 Model download/check/cancel is available in the UI. Linux installers now carry a
 source-built Nano CPU runtime: "載入本機引擎" verifies installed models and packaged
@@ -28,7 +28,7 @@ withdraws the private lease and returns to the original service. A crashed or
 unresponsive app also falls back; a clean account without a legacy daemon simply
 has no dictation until the app is enabled again. Input setup is explicit on each
 app run. App vocabulary and sampled review use their shared settings described
-below. The legacy spelling service is not yet connected to this profile.
+below. The app-owned spelling worker is separate from the legacy service.
 
 "Check services" sends a read-only ping to an existing Linux local engine and
 distinguishes response, missing service, timeout and incompatible reply. It does
@@ -57,6 +57,23 @@ python3 scripts/build-desktop-native.py --cache private/native-source-cache --ou
 bash scripts/build-desktop-runtime.sh private/release-native desktop/target/runtime --source-built
 python3 scripts/build-desktop-input.py desktop/target/input
 ```
+
+For optional CPU spelling, use an isolated Python 3.12 environment with
+`config/csc-build-requirements.txt`, then build a fresh bundle on each target OS:
+
+```sh
+python scripts/build-desktop-spelling.py desktop/target/spelling --cache private/csc-release-cache
+```
+
+The builder checks the author's fixed model revision and source hashes, prepares
+an INT8 CPU model, freezes the private pipe worker and records every packaged
+file hash. The installed app verifies that catalog before loading the local
+engine. The **自動修正中文錯字（CPU）** setting persists across restarts; unload the
+engine before changing it. A failed engine can be explicitly unloaded before
+retrying. Correction is bounded to 100 ms and keeps the original text on timeout,
+invalid edits or worker failure. Linux native dependency notices are inventoried;
+Windows MSVC/runtime notices still require review of its actual CI bundle. See
+[asset provenance](../docs/app/ASSETS.md).
 
 The module build additionally needs `extra-cmake-modules`, `libfcitx5core-dev`,
 `libfcitx5utils-dev`, `libfcitx5config-dev`, `fcitx5-modules-dev`, `libxcb-xkb-dev`

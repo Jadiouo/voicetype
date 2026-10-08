@@ -6,10 +6,6 @@
 mod asr;
 mod assistant;
 mod audio;
-#[cfg(unix)]
-mod csc;
-#[cfg(windows)]
-#[path = "csc_windows.rs"]
 mod csc;
 #[cfg(unix)]
 mod ipc;
