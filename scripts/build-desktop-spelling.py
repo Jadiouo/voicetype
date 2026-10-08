@@ -75,6 +75,24 @@ def notices(destination):
     return versions
 
 
+def python_runtime_source(binary, prefix=None):
+    """Match a copied libpython against this interpreter, not the OS default."""
+    runtime_names = {sysconfig.get_config_var("LDLIBRARY"),
+                     sysconfig.get_config_var("INSTSONAME")}
+    if binary.name not in runtime_names:
+        return None
+    base = Path(prefix) if prefix is not None else Path(sys.base_prefix)
+    candidates = [base / "lib" / binary.name, base / "lib64" / binary.name]
+    if prefix is None:
+        libdir = sysconfig.get_config_var("LIBDIR")
+        if libdir:
+            candidates.append(Path(libdir) / binary.name)
+    for source in candidates:
+        if source.is_file() and digest(source) == digest(binary):
+            return source
+    return None
+
+
 def binary_origins(bundle):
     """Account for frozen native libraries; fail Linux builds on unknown copies."""
     internal = bundle / "_internal"
@@ -103,6 +121,11 @@ def binary_origins(bundle):
                 if digest(binary) != digest(source):
                     raise RuntimeError("NumPy wheel library copy changed: " + relative)
                 records.append(dict(path=relative, origin="numpy wheel", notice=notice_for("numpy")))
+                continue
+            python_source = python_runtime_source(binary)
+            if python_source is not None:
+                records.append(dict(path=relative, origin="Python", version=platform.python_version(),
+                                    notice=notice_for("Python"), source=str(python_source.resolve())))
                 continue
             source = system.get(binary.name)
             if source is None or digest(binary) != digest(source):

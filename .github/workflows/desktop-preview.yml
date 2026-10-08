@@ -68,6 +68,7 @@ jobs:
       - name: Build pinned CPU spelling bundle and notices
         run: |
           python -m pip install -r ../config/csc-build-requirements.txt
+          python tests/spelling_build_test.py
           python ../scripts/build-desktop-spelling.py target/spelling --cache target/csc-build-cache
           cargo +stable test -p voicetype-app-core --test spelling_bundle --locked -- --ignored
       - name: Public application command tests
