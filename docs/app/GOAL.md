@@ -1,6 +1,7 @@
 # Goal: complete VoiceType for Linux and Windows
 
-Status: active. A settings preview is not completion.
+Status: paused at the user's request on 2026-10-08. Resume only when requested.
+The full application remains incomplete; a settings preview is not completion.
 
 Deliver installable Linux `.deb` and Windows `.exe` applications with selectable
 Local Nano CPU and Google official Antigravity CLI dictation. Both share
