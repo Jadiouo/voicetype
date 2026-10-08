@@ -6,6 +6,7 @@ from pathlib import Path
 
 root = Path("target/release/bundle")
 spelling_origins = Path("target/spelling/provenance/binary-origins.json")
+rust_notices = Path("target/rust-notices/manifest.json")
 files = sorted(root.glob("deb/*.deb")) + sorted(root.glob("nsis/*-setup.exe"))
 if not files:
     raise SystemExit("No installer was produced")
@@ -16,6 +17,7 @@ report = {
     "linux_cpu_runtime_bundled": Path("target/runtime/manifest.json").is_file(),
     "cpu_spelling_bundled": Path("target/spelling/manifest.json").is_file(),
     "cpu_spelling_native_notices_complete": json.loads(spelling_origins.read_text())["complete"] if spelling_origins.is_file() else False,
+    "rust_target_notices_complete": json.loads(rust_notices.read_text())["complete"] if rust_notices.is_file() else False,
     "fcitx_input_bundled": Path("target/input/manifest.json").is_file(),
     "end_to_end_dictation_verified": False,
     "artifacts": [

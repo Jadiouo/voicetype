@@ -8,7 +8,8 @@
       "../target/opencc/data/": "opencc/",
       "../target/opencc/licenses/": "licenses/opencc/",
       "../target/opencc/manifest.json": "opencc-manifest.json"
-      ,"../target/spelling": "spelling"
+      ,"../target/spelling": "spelling",
+      "../target/rust-notices": "licenses/rust"
     }
   }
 }

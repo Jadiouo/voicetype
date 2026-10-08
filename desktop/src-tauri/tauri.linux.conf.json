@@ -1,6 +1,6 @@
 {
   "bundle": {
-    "resources": { "../target/runtime": "runtime", "../target/input": "input", "../target/spelling": "spelling" },
+    "resources": { "../target/runtime": "runtime", "../target/input": "input", "../target/spelling": "spelling", "../target/rust-notices": "licenses/rust" },
     "linux": {
       "deb": { "depends": ["libasound2t64", "libopencc1.1", "libopencc-data", "libstdc++6", "fcitx5", "libxcb-xkb1"] }
     }

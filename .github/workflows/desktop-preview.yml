@@ -83,6 +83,15 @@ jobs:
           cmake -S ../voicetype-fcitx5 -B target/input-tests -DFCITX_INSTALL_USE_FCITX_SYS_PATHS=ON
           cmake --build target/input-tests --target test_app_frontend -j 2
           VOICETYPE_TEST_FCITX="$PWD/target/input-tests/tests/test_app_frontend" VOICETYPE_TEST_INPUT_BUNDLE="$PWD/target/input" cargo test -p voicetype-app-core --test local_runtime installed_fcitx --locked -- --ignored
+      - name: Catalog locked Rust graph and native notices
+        shell: bash
+        run: |
+          python tests/rust_notices_test.py
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-unknown-linux-gnu --component runtime=target/runtime --component input=target/input --component spelling=target/spelling
+          else
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-pc-windows-msvc --component opencc=target/opencc --component spelling=target/spelling
+          fi
       - name: Build preview installer
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
       - name: Inspect and install preview (Linux)
@@ -96,6 +105,7 @@ jobs:
           python3 tests/installed_runtime.py target/inspection target/runtime/manifest.json
           python3 tests/installed_input.py target/inspection target/input/manifest.json
           python3 tests/installed_spelling.py target/inspection target/spelling/manifest.json
+          python3 tests/installed_rust_notices.py target/inspection target/rust-notices/manifest.json
           sudo dpkg --install target/release/bundle/deb/*.deb
           dpkg --search /usr/bin/voicetype-desktop
       - name: Inspect and install preview (Windows)
@@ -112,6 +122,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed OpenCC verification failed' }
           python tests/installed_spelling.py "$destination" target/spelling/manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed spelling verification failed' }
+          python tests/installed_rust_notices.py "$destination" target/rust-notices/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Rust notice verification failed' }
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
         run: python tests/artifact_manifest.py
@@ -152,3 +164,5 @@ jobs:
             desktop/target/runtime/build-provenance.json
             desktop/target/opencc/manifest.json
             desktop/target/spelling/manifest.json
+            desktop/target/spelling/provenance/binary-origins.json
+            desktop/target/rust-notices/

@@ -75,6 +75,26 @@ invalid edits or worker failure. Linux native dependency notices are inventoried
 Windows MSVC/runtime notices still require review of its actual CI bundle. See
 [asset provenance](../docs/app/ASSETS.md).
 
+Before packaging, catalog the locked Rust dependencies actually reachable from
+the target App (and Linux's bundled daemon), together with the native catalogs.
+The script copies each crate's license/notice text into the installer and fails
+if an included crate has no verified text:
+
+```sh
+# Linux, after runtime/input/spelling preparation
+python scripts/build-desktop-rust-notices.py desktop/target/rust-notices \
+  --target x86_64-unknown-linux-gnu \
+  --component runtime=desktop/target/runtime --component input=desktop/target/input \
+  --component spelling=desktop/target/spelling
+# Windows, after OpenCC/spelling preparation
+python scripts/build-desktop-rust-notices.py desktop/target/rust-notices \
+  --target x86_64-pc-windows-msvc \
+  --component opencc=desktop/target/opencc --component spelling=desktop/target/spelling
+```
+
+Use only the command for the platform being packaged. The output directory must
+be fresh; installed tests compare every notice byte and native catalog hash.
+
 The module build additionally needs `extra-cmake-modules`, `libfcitx5core-dev`,
 `libfcitx5utils-dev`, `libfcitx5config-dev`, `fcitx5-modules-dev`, `libxcb-xkb-dev`
 and `libxcb-ewmh-dev`. Release builds refuse a module missing X11 Caps restoration.
