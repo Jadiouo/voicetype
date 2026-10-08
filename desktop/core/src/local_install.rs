@@ -95,6 +95,7 @@ impl LocalInstaller {
             vocabulary: self.root.join("vocab.toml"),
             review_config: self.root.join("review.json"),
             review_root: self.root.join("review"),
+            spelling: None,
         })
     }
 }

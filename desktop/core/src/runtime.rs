@@ -25,6 +25,7 @@ pub struct LocalRuntimePaths {
     pub vocabulary: PathBuf,
     pub review_config: PathBuf,
     pub review_root: PathBuf,
+    pub spelling: Option<voicetype_text::spelling::SpellingPaths>,
 }
 
 pub struct OwnedLocal {
@@ -67,7 +68,11 @@ impl OwnedLocal {
                 "local runtime or models are missing",
             ));
         }
-        let until = Instant::now() + budget.min(Duration::from_secs(30));
+        // The owned CSC may use its own 30 s readiness budget after ASR warmup.
+        // Keep the outer daemon handshake alive long enough to observe its
+        // fail-open status instead of killing an otherwise usable ASR process.
+        let limit = if paths.spelling.is_some() { 90 } else { 30 };
+        let until = Instant::now() + budget.min(Duration::from_secs(limit));
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -95,7 +100,7 @@ impl OwnedLocal {
         // tempfile creates this exclusive directory with mode 0700.
         let endpoint_dir = tempfile::Builder::new()
             .prefix("voicetype-app-")
-            .tempdir_in("/tmp")?;
+            .tempdir_in(std::env::temp_dir())?;
         let endpoint = endpoint_dir.path().join("engine.sock");
         let mut command = Command::new(&paths.executable);
         command
@@ -130,6 +135,10 @@ impl OwnedLocal {
             }
         }
         let owner_pid = std::process::id() as libc::pid_t;
+        if let Some(spelling) = &paths.spelling {
+            spelling.validate()?;
+            command.env("VOICETYPE_CSC_PROCESS", serde_json::to_string(spelling)?);
+        }
         // SAFETY: the child-side closure uses only async-signal-safe syscalls and
         // primitive values between fork and exec. SIGKILL also closes capture if
         // the owning application exits without running Rust destructors.
@@ -200,6 +209,35 @@ impl OwnedLocal {
         self.child.as_ref().map(Child::id)
     }
 
+    pub fn spelling_ready(&self) -> bool {
+        self.connection
+            .as_ref()
+            .and_then(LocalConnection::spelling_ready)
+            == Some(true)
+    }
+
+    /// A separate, bounded authenticated connection keeps health traffic off
+    /// both the dictation stream and the single native command worker.
+    pub(crate) fn spawn_spelling_probe(
+        &self,
+        budget: Duration,
+    ) -> io::Result<thread::JoinHandle<io::Result<bool>>> {
+        let child = self.child.as_ref().ok_or(io::ErrorKind::NotConnected)?;
+        let endpoint = self
+            .endpoint_dir
+            .as_ref()
+            .ok_or(io::ErrorKind::NotConnected)?;
+        let path = endpoint.path().join("engine.sock");
+        let pid = child.id();
+        thread::Builder::new()
+            .name("voicetype-csc-health".into())
+            .spawn(move || {
+                LocalConnection::connect_to_process(&path, pid, budget)?
+                    .spelling_ready()
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid CSC status"))
+            })
+    }
+
     /// Observe the actual child, including idle crashes. A stored PID alone is
     /// not evidence of health; keep the handle until shutdown finishes cleanup.
     pub fn is_running(&mut self) -> io::Result<bool> {
@@ -223,7 +261,12 @@ impl OwnedLocal {
         if let Some(directory) = self.endpoint_dir.take() {
             directory.close()?;
         }
-        self.profile_lock.take();
+        // Another test/process may fork while we hold this flock. Closing only
+        // our descriptor can leave a forked copy holding it until exec/exit.
+        // Release the lock explicitly after the owned engine is reaped.
+        if let Some(lock) = self.profile_lock.take() {
+            lock.unlock()?;
+        }
         Ok(())
     }
 }
@@ -243,6 +286,12 @@ pub struct OwnedLocalSession {
 }
 
 impl OwnedLocalSession {
+    pub(crate) fn spawn_spelling_probe(
+        &self,
+        budget: Duration,
+    ) -> io::Result<thread::JoinHandle<io::Result<bool>>> {
+        self.runtime.spawn_spelling_probe(budget)
+    }
     pub fn cancel(&mut self, app: &mut Application) {
         self.dispatcher.cancel(app);
     }

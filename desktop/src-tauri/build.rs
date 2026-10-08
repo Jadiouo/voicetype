@@ -6,9 +6,9 @@ fn main() {
     if target == "linux" || target == "windows" {
         use sha2::{Digest, Sha256};
         let bundles: &[&str] = if target == "linux" {
-            &["runtime", "input"]
+            &["runtime", "input", "spelling"]
         } else {
-            &["opencc"]
+            &["opencc", "spelling"]
         };
         for name in bundles {
             let root = std::path::PathBuf::from("../target").join(name);

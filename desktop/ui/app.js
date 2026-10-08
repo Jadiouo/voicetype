@@ -18,18 +18,29 @@ const dismissRecovery = document.querySelector('#dismiss-recovery');
 const loadRuntime = document.querySelector('#load-local-runtime');
 const unloadRuntime = document.querySelector('#unload-local-runtime');
 const enableInput = document.querySelector('#enable-local-input');
+const spellingEnabled = document.querySelector('#spelling-enabled');
+spellingEnabled.addEventListener('change', () => command('set_spelling_enabled', { enabled: spellingEnabled.checked }));
 let moduleBusy = false;
 const installModule = document.querySelector('#install-input-module');
 const restoreModule = document.querySelector('#restore-input-module');
 
 function runtimeControls(view) {
+  spellingEnabled.disabled = commandBusy || !view || view.local_runtime !== 'inactive' || view.settings.dictation.busy;
+  if (view) spellingEnabled.checked = view.settings.spelling_enabled;
+  const spellingNotes = {
+    inactive: view?.settings.spelling_enabled ? '校正已選取；載入引擎時會核對。' : '校正已關閉。',
+    disabled: '本次引擎未啟用校正。',
+    ready: 'CPU 校正器已就緒。',
+    unavailable: 'CPU 校正器本次不可用；仍可使用本機語音辨識，送字時保留原文。請卸載後檢查安裝包再載入。',
+  };
+  document.querySelector('#spelling-runtime-note').textContent = spellingNotes[view?.spelling_runtime] || '校正器會在載入引擎時檢查。';
   document.querySelector('#input-module-setup').hidden = !view?.local_runtime_bundled;
   installModule.disabled = restoreModule.disabled = moduleBusy || commandBusy
     || !view?.local_runtime_bundled || view.input_requested || view.settings.dictation.busy;
   const loaded = ['waiting_for_input', 'ready'].includes(view?.local_runtime);
   loadRuntime.disabled = commandBusy || !view?.local_runtime_bundled || loaded
     || view.settings.dictation.busy || view.settings.selected_provider !== 'local';
-  unloadRuntime.hidden = !loaded;
+  unloadRuntime.hidden = !loaded && view?.local_runtime !== 'failed';
   unloadRuntime.disabled = commandBusy || !!view?.settings.dictation.busy;
   enableInput.disabled = commandBusy || !view?.local_runtime_bundled || !loaded
     || view?.input_requested || !!view?.settings.dictation.busy;
@@ -112,7 +123,9 @@ async function command(name, args = {}) {
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
     status.textContent = name === 'select_provider'
       ? '偏好已儲存。請確認所選方式的就緒狀態。'
-      : name === 'load_local_runtime' ? '引擎已載入，可啟用本機聽寫。尚未開始錄音。'
+      : name === 'load_local_runtime' ? (view.spelling_runtime === 'unavailable'
+        ? '本機辨識引擎已載入；CPU 校正器本次不可用。仍可啟用本機聽寫。'
+        : '引擎已載入，可啟用本機聽寫。尚未開始錄音。')
       : name === 'enable_local_input' ? '已要求接管，請等待顯示「本機引擎與輸入法已連接」。'
       : name === 'unload_local_runtime' ? '本機引擎已卸載。'
       : name === 'cancel_dictation' ? '已要求取消，正在等待引擎停止。'
@@ -123,7 +136,9 @@ async function command(name, args = {}) {
     error.textContent = String(reason);
     error.hidden = false;
     status.textContent = '尚未套用變更。請處理上方問題後重新載入。';
-    lastView = undefined;
+    if (!(name === 'reload_settings' && String(reason).includes('請先停用並卸載引擎'))) {
+      lastView = undefined;
+    }
   } finally {
     commandBusy = false;
     runtimeControls(lastView);

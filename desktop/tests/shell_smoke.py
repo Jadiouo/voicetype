@@ -97,6 +97,12 @@ def main():
                 session = open_app()
                 eventually(ready)
                 assert js("return document.querySelector('#provider-local').checked")
+                assert js("return document.querySelector('#spelling-enabled').checked")
+                assert not js("return document.querySelector('#spelling-enabled').disabled")
+                click("#spelling-enabled")
+                spelling_config = Path(profile) / "desktop.json"
+                eventually(lambda: spelling_config.exists() and json.loads(spelling_config.read_text())["spelling_enabled"] is False)
+                assert not js("return document.querySelector('#spelling-enabled').checked")
                 assert js("return document.querySelector('#recovery-note').textContent.includes('沒有待處理')")
                 assert js("return document.querySelector('#recovery-content').hidden")
                 eventually(lambda: js("return document.querySelector('#prepare-models').disabled === false"))
@@ -269,6 +275,10 @@ def main():
                 session = open_app()
                 eventually(ready)
                 assert js("return document.querySelector('#provider-google').checked"), "Choice did not survive restart"
+                assert not js("return document.querySelector('#spelling-enabled').checked"), "CSC choice did not survive restart"
+                click("#spelling-enabled")
+                eventually(lambda: json.loads(spelling_config.read_text())["spelling_enabled"] is True)
+                assert js("return document.querySelector('#spelling-enabled').checked")
 
                 eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))
 
@@ -288,11 +298,13 @@ def main():
                 click("#reload")
                 eventually(lambda: js("return !document.querySelector('#error').hidden"))
                 assert js("return document.querySelector('#providers').disabled")
+                assert js("return document.querySelector('#spelling-enabled').disabled")
                 assert config.read_text(encoding="utf-8") == "{invalid"
                 config.write_bytes(original)
                 click("#reload")
                 eventually(ready)
                 assert js("return document.querySelector('#provider-google').checked")
+                assert js("return document.querySelector('#spelling-enabled').checked")
                 (output / "result.json").write_text(json.dumps({
                     "passed": ["installed-window", "default-local", "choose-google",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
@@ -303,6 +315,7 @@ def main():
                                "review-explicit-opt-in", "review-expiry", "review-wav-playback-ready",
                                "review-confirm-correct-promote", "review-conflict-preserves-edit",
                                "review-restart-delete-disable"],
+                    "spelling_toggle_restart_and_corrupt_settings": True,
                     "speech_adapters_tested": False,
                     "fcitx_install_restore_tested": sys.platform == "linux",
                 }, indent=2) + "\n", encoding="utf-8")

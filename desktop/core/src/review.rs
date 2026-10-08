@@ -310,6 +310,15 @@ impl ReviewStore {
         let dir = self.config.parent().ok_or("校對設定位置無效")?;
         fs::create_dir_all(dir).map_err(io_error)?;
         let _lock = lock_file(&self.config.with_extension("json.lock"))?;
+        // The collector takes config then store in this same order and keeps
+        // both until publication. A successful disable therefore cannot be
+        // followed by a commit based on previously-read consent. Enabling
+        // still does not create a samples directory or a fake recording.
+        let _store_lock = if !enabled && self.root.exists() {
+            Some(self.lock()?)
+        } else {
+            None
+        };
         let data = read_optional(&self.config, 4096)?;
         let current = settings(&data)?;
         if current.revision != expected {

@@ -744,3 +744,52 @@ Linux／Windows 各通過 22 項已安裝 UI 檢查；新增六項涵蓋明確 o
 - **下次接續：** 有失敗樣本時再定位句尾漏字；完成 CSC 套件與 App 接線驗證，再處理 Google／Windows 語音、完整授權與真人跨平台驗收。今天沒有新增速度或辨識品質的通過結論。
 
 本次收尾只更新文件，保留未提交程式；不繼續開發或要求追加錄音。
+
+
+## 2026-10-08：使用者要求今日續作剩餘功能
+
+已解除上一筆暫停安排，沿用既有四個 TDD 邊界。從尚未提交的 CSC stdio 工作續接，先完成 CPU 校正器的程序生命週期、打包與實際模型驗證，再接 Google／Windows 語音與發行驗收；偶發句尾漏字仍需失敗證據，不能以單次成功結案。原日常安裝繼續保留。
+
+
+## 2026-10-08：依使用者指示改採 commander-mode
+
+主線負責規劃、審查與整合，實作分為 CSC 校正器、Windows 本機語音與 Google 官方 CLI 三項。CSC 接續既有工作樹；另兩項使用獨立工作樹，共用介面依序整合。已採納白方建議：Windows 必須驗證原輸入欄位與部分送字，不能將視窗檢查後的 SendInput 當成原子焦點保護；Google 保留完整排空、一次停止及兩次擷取流程。尚未取得的新平台語音證據持續明列待驗收，日常安裝不遷移。
+
+
+## 2026-10-08：worktree 搬入 repo，工作產物限專案內
+
+依使用者新 AGENTS.md 與「把你的work tree搬到自己的repo下面」要求，七個 worktree 已移至主 repo 的 `.claude/worktrees/`：`adaptive-core`、`desktop-app`、`fast-autocorrect`、`fast-autocorrect-public`、`google-app-integration`、`google-key-coexistence`、`windows-dictation`。使用 `git worktree move`；搬前後的 HEAD、branch、git status/diff 與非忽略未追蹤檔案雜湊一致。開發用 third_party symlink 已改相對路徑並核對目標。只在 `.git/info/exclude` 加排除規則，未修改 `.gitignore`，沒有重啟日常服務。
+
+目前權威 App checkout 是 `.claude/worktrees/desktop-app`（branch `feat/desktop-app`）；Windows 與 Google 分別在同層命名 worktree 持續實作。往後 worktree 文件用相對位置或 branch；所有工作 log、cache、venv、暫存及報告留在主 repo 內，測試 temp root 設於 `.scratch/`。GPU 規則維持 `gpujob` 排隊。這次是搬移與規範更新，沒有取消完整版 App 目標，使用者也已確認 Windows 11 候選版準備好後可測試。
+
+
+## 2026-10-08：CSC 本地驗證完成，進入獨立審查
+
+CSC 程式、安裝介面與開關已形成候選差異，尚未提交。實際安裝的 Linux CPU 校正器可載入模型、在原有時間限制內修字並清理子程序；本地 99 項 core／共用文字、9 項 Python CSC、4 項 daemon CSC、2 項 native build contract 通過。另修復 fork 繼承檔案鎖造成卸載後重啟失敗，測試已重現修正前失敗與修正後通過。
+
+打包目錄有 207 項檔案，Linux 實際原生依賴來源／授權清單已補齊；Windows 的實際依賴與授權仍待 CI 產物核對。雙平台 CI、安裝 UI 測試已接線但尚未執行，新版 Linux／Windows 安裝包與真人語音尚未驗收。現交獨立紅方審查，不以本地通過宣稱完整 App 完成。
+
+
+## 2026-10-08：補齊工作樹搬移
+
+使用者指出 repo 外仍留有工作樹，確認是 GoogleVoiceInput 的 `pcm-catchup` 與 `rust-pcm-relay`。取得指定目的地授權後，已用 `git worktree move` 搬至該 repo 的 `.claude/worktrees/`。搬前後的 HEAD、分支、Git 狀態、已暫存／未暫存 diff 雜湊、非忽略未追蹤檔案與 symlink 清單一致。root 再核對 `git worktree list` 新位置與兩個舊外置父目錄均已不存在；日常服務未重啟。VoiceType 的七個工作樹此前已搬入本 repo 的 `.claude/worktrees/`，往後持續遵守 repo 內工作樹與專案內暫存規則。
+
+這次沒有更改語音功能。CSC 兩項審查修正已完成本地驗證，正在短審；Windows 與 Google App 整合仍在進行。
+
+
+## 2026-10-08：CPU 校正候選、抽樣競態修正與 Windows 原生證據
+
+CPU 校正器候選保留原有 100ms 改字上限與 CPU 執行。準備／啟動失敗時本機 ASR 可繼續，介面顯示校正器不可用並保留偏好；ready 後 child 死亡或壞 frame 會動態更新狀態，正常的單次晚回覆不會被永久判為故障。外部設定 reload 在引擎載入時先拒絕，卸載後才能套用，避免介面與實際設定不同。健康查詢已移至有界背景工作，未完成的查詢不阻塞 App 命令；外層啟動預算也用超過30秒的失敗 fixture 核對過。
+
+完整回歸揭露抽樣校對的儲存競態：UI 輪詢持鎖時，背景 collector 的 nonblocking flock 回 EAGAIN，導致樣本未保存。新增可控制鎖競爭測試先重現失敗，再只在背景對 StoreBusy 最多重試500ms、每次重讀設定與 session；ASR 提交仍非阻塞。修正後 daemon 全套162/162通過、desktop core66項通過（4項 opt-in/helper ignored）；實際 Linux CPU bundle probe 與30秒邊界 probe 已另行通過。最後兩項修正正在獨立短審，候選尚未宣稱安裝包或真人語音驗收完成。
+
+Windows TSF 隔離試驗提交至 `feat/windows-dictation-work`，最新 commit `9281ae9`。首輪 MSVC 發現 ABI／link 問題後修正，[原生 CI run 37803699841](https://github.com/Jadiouo/voicetype/actions/runs/37803699841) 已通過 MSVC 建置與3/3 CTest：真 Msctf／ACP 一次完整 UTF-16 寫入、broker protocol、registrar唯讀檢查。實際 x64 DLL為20,480 bytes，SHA-256 `e62de9ec046ba3090c897add1110546652717b16252ad60496bee7c744c534af`。這是最小原生試驗，仍未證明跨應用 speech profile／快捷鍵、標準使用者安裝、真正麥克風或完整 Windows App。
+
+Google adapter 的獨立審查發現立即取消被重設、cleanup 失敗丟失 owner、reader stall 後 pacing 突發三項問題；作者已補測修正於本地 `feat/google-app-integration-work`，尚待短審與正式 App wiring。官方 CLI 真實語音與 Windows capture 完整性仍待驗證。Windows 依賴 notice／完整 App Rust notices 也仍待補齊，PR維持草稿，沒有替換日常安裝。
+
+
+## 2026-10-09：CSC 最後審查修正完成，準備雙平台候選 CI
+
+最後短審又補上兩項回歸：collector 與 UI 停用抽樣現在按相同 config→store 順序持鎖至音訊發布，持鎖後重讀同意狀態；barrier 測試核對停用成功後不會發布先前待存樣本。pending WAV 期間 session 已失效時不消耗每日 quota，rename 失敗會回復本次預留。健康狀態只接受明確的 ready／unavailable／disabled；缺漏或未知值視為無效回覆，不把已就緒誤降成失敗。
+
+root 抽查鎖定順序、狀態解析與實際 log：daemon 全套164/164通過（沒有略過抽樣測試），desktop core66項通過（4項opt-in/helper ignored）。既有實際 CPU bundle 與長啟動邊界 probe 證據保留。程式與開發日誌進入既有 App 草稿分支的提交／雙平台 CI；尚未以此宣稱新版安裝 UI、Windows 校正器、完整 Google／Windows 語音或全部依賴 notice 驗收完成。

@@ -29,6 +29,8 @@ struct DesktopState {
     config_dir: PathBuf,
     legacy_vocabulary: PathBuf,
     review_monitor: std::sync::Mutex<Option<review::Monitor>>,
+    spelling_installer: voicetype_app_core::spelling_install::SpellingInstaller,
+    spelling_resources: PathBuf,
 }
 
 // These commands run independently of the resident dictation queue. File
@@ -166,7 +168,7 @@ async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
             let state = app.state::<DesktopState>();
             // Hash/copy work stays off the resident dictation thread. No paths,
             // URLs, manifests or command lines are accepted from the webview.
-            let paths = state
+            let mut paths = state
                 .local_installer
                 .prepare(&state.runtime_resources, |_, _| true)
                 .map_err(|error| match error.kind() {
@@ -175,6 +177,14 @@ async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
                     }
                     _ => "無法核對本機引擎或模型，請重新檢查模型與安裝包。".to_string(),
                 })?;
+            if worker.settings()?.settings.spelling_enabled {
+                // Correction is optional. The worker exposes unavailable when
+                // package verification fails while preserving the preference.
+                paths.spelling = state
+                    .spelling_installer
+                    .prepare(&state.spelling_resources)
+                    .ok();
+            }
             worker.activate_local(paths)
         })
         .await
@@ -249,6 +259,11 @@ async fn get_settings(app: tauri::AppHandle) -> Result<View, String> {
 #[tauri::command]
 async fn select_provider(provider: Provider, app: tauri::AppHandle) -> Result<View, String> {
     with_desktop(app, move |worker| worker.select_provider(provider)).await
+}
+
+#[tauri::command]
+async fn set_spelling_enabled(enabled: bool, app: tauri::AppHandle) -> Result<View, String> {
+    with_desktop(app, move |worker| worker.set_spelling_enabled(enabled)).await
 }
 
 #[tauri::command]
@@ -357,6 +372,14 @@ fn main() {
             };
             let model_root = config_dir.join("model-assets");
             app.manage(DesktopState {
+                spelling_installer: voicetype_app_core::spelling_install::SpellingInstaller::new(
+                    config_dir.clone(),
+                    serde_json::from_str(include_str!(concat!(
+                        env!("OUT_DIR"),
+                        "/spelling-catalog.json"
+                    )))?,
+                )?,
+                spelling_resources: app.path().resource_dir()?.join("spelling"),
                 #[cfg(target_os = "linux")]
                 local_installer: voicetype_app_core::local_install::LocalInstaller::bundled(
                     config_dir.clone(),
@@ -409,6 +432,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            set_spelling_enabled,
             get_settings,
             select_provider,
             reload_settings,

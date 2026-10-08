@@ -131,9 +131,12 @@ def build(args):
     inputs = [(entry, fetch(entry, args.cache, args.offline)) for entry in recipe["inputs"]]
     output.parent.mkdir(parents=True, exist_ok=True)
     # Upstream CMake's version-script linker option is not quoted. Keep its
-    # entire source/build tree in a private, space-free Linux scratch directory;
-    # the caller's cache and output paths may still contain spaces.
-    with tempfile.TemporaryDirectory(prefix="voicetype-native-build-", dir="/tmp") as tmp:
+    # source/build tree in a private, space-free scratch directory chosen by
+    # TMPDIR or the caller's explicit cache; never silently write to /tmp.
+    scratch = Path(os.environ.get("TMPDIR", args.cache)).resolve()
+    require(" " not in str(scratch), "Native build scratch path must not contain spaces")
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="voicetype-native-build-", dir=scratch) as tmp:
         work = Path(tmp)
         payload = work / "payload"
         sources = work / "sources"
@@ -211,7 +214,7 @@ def build(args):
                       for p in sorted(payload.rglob("*")) if p.is_file()},
         }
         (payload / "build-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
-        # Stage on the destination filesystem before publishing. /tmp may be a
+        # Stage on the destination filesystem before publishing. Scratch may be a
         # different volume, so moving directly from scratch could expose a
         # partially copied output. Never replace even an empty existing output.
         with tempfile.TemporaryDirectory(prefix=".native-stage-", dir=output.parent) as staged:

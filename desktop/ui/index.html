@@ -40,6 +40,9 @@
       </fieldset>
       <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="cancel-dictation" type="button" hidden>取消聽寫</button><button id="check-providers" type="button" disabled>檢查服務</button><button id="reload" type="button">重新載入</button></div>
       <section class="model-setup" aria-labelledby="model-setup-title">
+        <label><input id="spelling-enabled" type="checkbox" disabled> 自動修正中文錯字（CPU）</label>
+        <p>保留英文、名字與數字；校正逾時就送出原文。需先卸載引擎才能變更，下次載入時套用。</p>
+        <p id="spelling-runtime-note" role="status" aria-live="polite">校正器會在載入引擎時檢查。</p>
         <h2 id="model-setup-title">本機模型</h2>
         <p>下載約 844 MB，首次準備建議保留 4 GB 可用空間。已安裝的模型通過檢查後會直接沿用。</p>
         <p id="model-status" role="status" aria-live="polite">正在讀取模型準備狀態…</p>

@@ -2,7 +2,7 @@ name: Local engine protocol contract
 on:
   push:
     branches: [main, feat/desktop-app]
-    paths: ["voicetyped/**", "desktop/core/**", "desktop/text/**", "voicetype-fcitx5/**", ".github/workflows/engine-contract.yml"]
+    paths: ["voicetyped/**", "desktop/core/**", "desktop/text/**", "voicetype-fcitx5/**", "scripts/voicetype_csc.py", "eval/test_csc_*.py", ".github/workflows/engine-contract.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -38,6 +38,9 @@ jobs:
           cargo +stable test --locked protocol::tests
           cargo +stable test --locked ipc::tests
           cargo +stable test --locked audio::capture::tests
+          cargo +stable test --locked csc::tests
+          python3 ../eval/test_csc_stdio.py
+          python3 ../eval/test_csc_server.py
 
   fcitx-delivery:
     runs-on: ubuntu-24.04

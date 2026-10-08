@@ -184,3 +184,33 @@ notice are included; provenance records their sources. The DLL is loaded only
 from beside the application executable, with its absolute dictionary path.
 See [upstream build options](https://github.com/BYVoid/OpenCC/blob/556ed22496d650bd0b13b6c163be9814637970ae/CMakeLists.txt).
 This supplies text conversion, not the still-incomplete Windows speech runtime.
+
+### App-owned CPU spelling bundle
+
+`scripts/build-desktop-spelling.py` runs in an isolated Python 3.12 environment
+from `config/csc-build-requirements.txt`. It verifies the author's MacBERT ONNX
+revision `615e6e09ef9a69ec487bc7c641ec3a311e2c11b9`, its source model and
+tokenizer SHA-256 values in `scripts/prepare_csc.py`, and produces a CPU-only
+INT8 ONNX model. PyInstaller freezes the private stdio worker separately on Linux
+and Windows. The build catalog pins each resulting file's bytes and SHA-256; the
+Tauri build embeds the catalog and checks the resource bytes. Explicit engine load
+installs the reviewed package through `SpellingInstaller`, then the daemon owns a
+single child through private pipes. It accepts positional Chinese-character edits
+only within the original 100 ms correction budget, retaining the input on timeout,
+crash, malformed response or protected text. No GPU inference or microphone is
+part of the packaging/model probe.
+
+The Linux bundle's `provenance/binary-origins.json` inventories every native
+extension, PyInstaller bootloader and copied shared library. The builder matches
+system library bytes to the builder's installed Debian packages, records their
+versions and includes package copyright texts, including the GCC runtime library
+exception. NumPy's wheel license contains its OpenBLAS, libgfortran and libquadmath
+terms. Python distribution notices, the MacBERT Apache-2.0 notice and model card
+are included. Unknown Linux native binaries fail the build. The local candidate
+has 207 catalog members and 59 accounted native binaries.
+
+Windows builds emit the exact native DLL/PYD inventory with `complete=false`.
+MSVC runtime origin, redistribution permission and notices must be reviewed from
+the actual Windows CI artifact before a release claim. Complete application Rust
+dependency notices and Windows speech acceptance also remain open release work;
+the preview CI artifact is not a production release.
