@@ -6,6 +6,10 @@
 // not use this interface; no desktop package loads this experimental DLL.
 struct __declspec(uuid("BD13FFCF-13E8-44B7-BB65-1B355D3F9DD1")) IVoiceTypeTsfProbe
     : IUnknown {
+  // Direct A-only fixture activation: edit-session plumbing without key sink.
+  // Production/OS activation never calls this private method.
+  virtual HRESULT STDMETHODCALLTYPE ActivateAOnly(ITfThreadMgr *manager,
+                                                   TfClientId client) = 0;
   virtual HRESULT STDMETHODCALLTYPE Commit(ITfContext *context,
                                            const WCHAR *text,
                                            LONG length) = 0;

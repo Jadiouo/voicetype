@@ -15,8 +15,9 @@ cmake --build .scratch/tsf-native/build --config Release --parallel 2
 ctest --test-dir .scratch/tsf-native/build -C Release --output-on-failure
 ```
 
-`tsf_native_acp_once` loads the DLL directly, creates its COM factory, activates
-the service manually on a real `Msctf.dll` thread manager, creates an
+`tsf_native_acp_once` loads the DLL directly, creates its COM factory, uses the
+private `ActivateAOnly` method to test edit-session plumbing without a key
+sink, and creates an
 `ITextStoreACP` context, and requests one asynchronous edit session. It checks
 the exact UTF-16 text, one text mutation, deactivation, sink release, and
 `DllCanUnloadNow`. It also checks canonical `IUnknown` identity and balanced
@@ -31,10 +32,16 @@ delivery ACK yet. `tsf_registrar_status_readonly` only reads TSF state and the
 probe's own HKCU COM key. `tsf_registrar_rollback_policy` injects residual
 profile/category/active states and failed observations into the same deletion
 gate used by the registrar; it does not mutate the registry. The real-Msctf
-`tsf_preserved_key_fixture` simulates a preserved key in the fixture's current
-context and checks that deactivation removes the callback. It asserts the
-sink is non-foreground and never eats ordinary keys. CI never registers a
-profile, so these tests are not evidence of OS profile discovery.
+`tsf_framework_activation_fixture` creates only this probe's fresh HKCU COM
+CLSID, uses public TSF API to register a process-local speech profile, then
+calls `ActivateProfile(FORPROCESS | ENABLEPROFILE)`. It never invokes the TIP's
+`Activate` method itself. It requires an actual DLL `ACTIVATE`/`HELLO`, a
+preserved-key callback in the current ACP context, `pfEaten=FALSE`, explicit
+`DeactivateProfile(FORPROCESS | DISABLEPROFILE)`, and removal of its own
+profile/category/COM key. The CI runner's account is disposable, but is not
+proof of standard-user per-user registration, cross-process discovery, or
+physical Ctrl+CapsLock in a desktop app. Any failure remains a red B gate;
+the separate A-only test cannot make this one pass.
 
 After A passes on MSVC, gate B must run under a real **non-elevated standard
 user** in a disposable Windows 11 account. `voicetype_tsf_registrar` has

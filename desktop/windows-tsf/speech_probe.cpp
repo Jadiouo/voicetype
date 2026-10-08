@@ -72,6 +72,13 @@ class SpeechProbe final : public ITfTextInputProcessorEx,
   }
   STDMETHODIMP ActivateEx(ITfThreadMgr *manager, TfClientId client,
                           DWORD) override {
+    return activate(manager, client, true);
+  }
+  STDMETHODIMP ActivateAOnly(ITfThreadMgr *manager, TfClientId client) override {
+    return activate(manager, client, false);
+  }
+ private:
+  HRESULT activate(ITfThreadMgr *manager, TfClientId client, bool register_keys) {
     if (!manager || manager_) return E_INVALIDARG;
     manager_ = manager; manager_->AddRef(); client_ = client;
     trace("ACTIVATE", S_OK, FALSE);
@@ -84,17 +91,17 @@ class SpeechProbe final : public ITfTextInputProcessorEx,
                              static_cast<ITfThreadMgrEventSink *>(this), &cookie_);
       source->Release();
     }
-    if (hr == S_OK) {
+    if (hr == S_OK && register_keys) {
       stage = "keystroke-manager";
       hr = manager_->QueryInterface(IID_ITfKeystrokeMgr,
                                     reinterpret_cast<void **>(&keys_));
     }
-    if (hr == S_OK) {
+    if (hr == S_OK && register_keys) {
       stage = "advise-nonforeground-key-sink";
       hr = keys_->AdviseKeyEventSink(client_, static_cast<ITfKeyEventSink *>(this), FALSE);
       key_advised_ = hr == S_OK;
     }
-    if (hr == S_OK) {
+    if (hr == S_OK && register_keys) {
       stage = "preserve-ctrl-caps";
       hr = keys_->PreserveKey(client_, GUID_VoiceTypeCtrlCapsProbe,
                               &ctrl_caps, nullptr, 0);
@@ -107,10 +114,11 @@ class SpeechProbe final : public ITfTextInputProcessorEx,
       Deactivate();
       return hr;
     }
-    key_ready_ = true;
-    trace("HELLO", S_OK, FALSE);
+    key_ready_ = register_keys;
+    trace(register_keys ? "HELLO" : "HELLO_A_ONLY", S_OK, FALSE);
     return hr;
   }
+ public:
   STDMETHODIMP Deactivate() override {
     ++epoch_; // All pending edit sessions become invalid permanently.
     key_ready_ = false;

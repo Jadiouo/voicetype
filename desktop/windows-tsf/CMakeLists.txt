@@ -17,6 +17,11 @@ add_executable(voicetype_tsf_native_fixture native_fixture.cpp text_store_fixtur
 target_compile_definitions(voicetype_tsf_native_fixture PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
 target_link_libraries(voicetype_tsf_native_fixture PRIVATE ole32 uuid user32)
 
+add_executable(voicetype_tsf_framework_activation_fixture
+  framework_activation_fixture.cpp text_store_fixture.cpp)
+target_compile_definitions(voicetype_tsf_framework_activation_fixture PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
+target_link_libraries(voicetype_tsf_framework_activation_fixture PRIVATE ole32 uuid user32 advapi32)
+
 add_executable(voicetype_tsf_registrar registrar.cpp)
 target_compile_definitions(voicetype_tsf_registrar PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
 target_link_libraries(voicetype_tsf_registrar PRIVATE ole32 uuid advapi32)
@@ -33,8 +38,8 @@ target_compile_definitions(voicetype_tsf_broker_probe PRIVATE UNICODE _UNICODE W
 enable_testing()
 add_test(NAME tsf_native_acp_once
   COMMAND voicetype_tsf_native_fixture $<TARGET_FILE:voicetype_tsf_probe>)
-add_test(NAME tsf_preserved_key_fixture
-  COMMAND voicetype_tsf_native_fixture $<TARGET_FILE:voicetype_tsf_probe> --preserved)
+add_test(NAME tsf_framework_activation_fixture
+  COMMAND voicetype_tsf_framework_activation_fixture $<TARGET_FILE:voicetype_tsf_probe>)
 add_test(NAME tsf_broker_protocol
   COMMAND voicetype_tsf_broker_probe)
 add_test(NAME tsf_registrar_status_readonly

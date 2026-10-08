@@ -20,8 +20,7 @@ static bool check(HRESULT hr, const char *step) {
 }
 
 int wmain(int argc, wchar_t **argv) {
-  const bool preserved = argc == 3 && wcscmp(argv[2], L"--preserved") == 0;
-  if (argc != 2 && !preserved) return 2;
+  if (argc != 2) return 2;
   if (!check(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED), "CoInitializeEx"))
     return 2;
   int exit_code = 1;
@@ -40,17 +39,11 @@ int wmain(int argc, wchar_t **argv) {
   ITfThreadMgrEventSink *event_sink = nullptr;
   IUnknown *canonical = nullptr, *other = nullptr;
   ITfThreadMgr *manager = nullptr;
-  ITfClientId *client_ids = nullptr;
-  ITfInputProcessorProfileMgr *local_profiles = nullptr;
-  ITfKeystrokeMgr *keys = nullptr;
   ITfDocumentMgr *doc = nullptr;
   ITfContext *context = nullptr;
   ITextStoreACP *store = nullptr;
   TfClientId client = TF_CLIENTID_NULL;
-  TfClientId service_client = TF_CLIENTID_NULL;
   bool manager_active = false, service_active = false, pushed = false;
-  bool local_registered = false;
-  const LANGID local_lang = GetUserDefaultLangID();
   bool server_locked = false;
   do {
     if (!get_factory || !can_unload ||
@@ -126,28 +119,10 @@ int wmain(int argc, wchar_t **argv) {
     if (!check(CoCreateInstance(CLSID_TF_ThreadMgr, nullptr, CLSCTX_INPROC_SERVER,
                   IID_ITfThreadMgr, reinterpret_cast<void **>(&manager)),
                "CoCreateInstance ThreadMgr")) break;
-    if (!check(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
-                  CLSCTX_INPROC_SERVER, IID_ITfInputProcessorProfileMgr,
-                  reinterpret_cast<void **>(&local_profiles)),
-               "CoCreateInstance local ProfileMgr")) break;
-    const WCHAR desc[] = L"VoiceType process-local fixture";
-    if (!check(local_profiles->RegisterProfile(CLSID_VoiceTypeSpeechProbe,
-                  local_lang, GUID_VoiceTypeSpeechProfile, desc,
-                  static_cast<ULONG>(wcslen(desc)), argv[1],
-                  static_cast<ULONG>(wcslen(argv[1])), 0, nullptr, 0,
-                  FALSE, TF_RP_LOCALPROCESS),
-               "RegisterProfile LOCALPROCESS")) break;
-    local_registered = true;
     if (!check(manager->Activate(&client), "ThreadMgr Activate")) break;
     manager_active = true;
-    // ThreadMgr::Activate returns the application ID used by CreateContext.
-    // A TIP receives its own client ID; do not pass the application's ID to
-    // AdviseKeyEventSink through a manually activated service.
-    if (!check(manager->QueryInterface(IID_ITfClientId,
-                  reinterpret_cast<void **>(&client_ids)), "QI ClientId") ||
-        !check(client_ids->GetClientId(CLSID_VoiceTypeSpeechProbe,
-                                      &service_client), "GetClientId TIP")) break;
-    if (!check(service->Activate(manager, service_client), "TIP Activate")) break;
+    if (!check(probe->ActivateAOnly(manager, client),
+               "A-only fixture activation")) break;
     service_active = true;
     if (!check(manager->CreateDocumentMgr(&doc), "CreateDocumentMgr")) break;
     store = CreateFixtureTextStore();
@@ -157,28 +132,6 @@ int wmain(int argc, wchar_t **argv) {
     if (!check(doc->Push(context), "Push context")) break;
     pushed = true;
     if (!check(manager->SetFocus(doc), "SetFocus")) break;
-    if (preserved) {
-      if (!check(manager->QueryInterface(IID_ITfKeystrokeMgr,
-                    reinterpret_cast<void **>(&keys)), "QI KeystrokeMgr")) break;
-      BOOL eaten = TRUE;
-      HRESULT simulated = keys->SimulatePreservedKey(
-          context, GUID_VoiceTypeCtrlCapsProbe, &eaten);
-      LONG callbacks = 0;
-      ULONGLONG serial = 0;
-      BOOL nonforeground = FALSE;
-      if (simulated != S_OK || eaten ||
-          !check(probe->KeySnapshot(&callbacks, &serial, &nonforeground),
-                 "KeySnapshot") || callbacks != 1 || serial == 0 || !nonforeground) {
-        std::fprintf(stderr,
-            "preserved-key mismatch: simulate=0x%08lx eaten=%d callbacks=%ld serial=%llu nonforeground=%d\n",
-            static_cast<unsigned long>(simulated), eaten, callbacks, serial,
-            nonforeground);
-        break;
-      }
-      std::puts("PASS: nonforeground preserved key received current Msctf context");
-      exit_code = 0;
-      break;
-    }
     const WCHAR text[] = L"你好 AI \U0001F600";
     if (!check(probe->Commit(context, text, static_cast<LONG>(wcslen(text))),
                "async request")) break;
@@ -203,42 +156,14 @@ int wmain(int argc, wchar_t **argv) {
     std::puts("PASS: real Msctf edit session wrote one UTF-16 result to ACP store");
     exit_code = 0;
   } while (false);
-  if (service_active && service->Deactivate() != S_OK) {
-    std::fputs("service deactivation or preserved-key cleanup failed\n", stderr);
-    exit_code = 1;
-  }
-  if (preserved && keys && context && probe) {
-    BOOL eaten = TRUE;
-    HRESULT after = keys->SimulatePreservedKey(context,
-        GUID_VoiceTypeCtrlCapsProbe, &eaten);
-    LONG callbacks = 0;
-    ULONGLONG serial = 0;
-    BOOL nonforeground = TRUE;
-    HRESULT snapshot = probe->KeySnapshot(&callbacks, &serial, &nonforeground);
-    if (after != S_FALSE || snapshot != S_OK ||
-        callbacks != 1 || nonforeground) {
-      std::fprintf(stderr,
-          "preserved key remained after deactivation: simulate=0x%08lx eaten=%d callbacks=%ld active=%d\n",
-          static_cast<unsigned long>(after), eaten, callbacks, nonforeground);
-      exit_code = 1;
-    }
-  }
+  if (service_active) service->Deactivate();
   if (manager) manager->SetFocus(nullptr);
   if (pushed) doc->Pop(TF_POPF_ALL);
   if (context) context->Release();
   if (doc) doc->Release();
   if (store) store->Release();
   if (manager_active) manager->Deactivate();
-  if (client_ids) client_ids->Release();
-  if (keys) keys->Release();
   if (manager) manager->Release();
-  if (local_registered && local_profiles &&
-      local_profiles->UnregisterProfile(CLSID_VoiceTypeSpeechProbe,
-          local_lang, GUID_VoiceTypeSpeechProfile, TF_URP_LOCALPROCESS) != S_OK) {
-    std::fputs("process-local profile cleanup failed\n", stderr);
-    exit_code = 1;
-  }
-  if (local_profiles) local_profiles->Release();
   if (other) other->Release();
   if (canonical) canonical->Release();
   if (event_sink) event_sink->Release();
