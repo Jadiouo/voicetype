@@ -35,6 +35,20 @@ speech quality or live CLI compatibility. A no-microphone check of official
 TUI session did not reach the editor callback. The already used Linux 1.2.12
 flow is the compatibility baseline. Neither binary is changed by this branch.
 
+The resident `GoogleProvider` has bounded request and event queues. Dropping it
+signals shutdown independently of a full request queue; a full event queue
+cannot prevent the worker from beginning cleanup once its receiver is closing.
+While the provider is alive, queued `Final` and `Released` events wait for the
+consumer and are not silently skipped. `Released` is emitted only after
+verified cleanup. A cleanup failure leaves the worker and actual recorder
+owner alive for retry, even after the provider's bounded Drop returns.
+**App integration must move its `InputLease` into that resident owner before
+capture and retain it through child reap; the caller must not infer microphone
+release from Drop or free a separate lease while a detached worker remains.**
+The App should surface unresolved cleanup as busy/failed rather than starting
+another microphone provider. The current adapter slice does not yet hold an
+App `InputLease`; this is a hard wiring requirement for the next stage.
+
 The Windows process owner attaches the ConPTY child to a kill-on-close Job
 Object before ready; CI has a synthetic ConPTY/editor fixture. Windows CLI
 microphone PCM drain and its native stop behavior have not been verified, so

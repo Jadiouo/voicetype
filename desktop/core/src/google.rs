@@ -116,6 +116,10 @@ impl GoogleText {
 
 /// External CLI/audio boundary. A production implementation must own both the
 /// CLI and recorder until `cleanup` confirms that neither can use the microphone.
+/// The later App integration must transfer its `InputLease` into this resident
+/// owner before capture. Dropping `GoogleProvider` can detach a cleanup worker;
+/// the caller must not release the microphone lease merely because Drop returns.
+/// Keep that lease with the boundary until confirmed cleanup and child reap.
 /// `stop_capture_and_drain` includes recorder stdout EOF and complete relay
 /// consumption. `capture_editor` reads an owned draft, never terminal output.
 pub trait GoogleBoundary {
@@ -210,17 +214,41 @@ enum Request {
     Start(SessionKey),
     Stop(SessionKey),
     Cancel(SessionKey),
-    Shutdown,
+}
+
+fn emit_event(
+    output: &mpsc::SyncSender<(SessionKey, ProviderEvent)>,
+    shutdown: &AtomicBool,
+    mut event: (SessionKey, ProviderEvent),
+) -> bool {
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            // The provider/receiver is going away. Do not invent Released or
+            // hold up cleanup on a result nobody can accept anymore.
+            return false;
+        }
+        match output.try_send(event) {
+            Ok(()) => return true,
+            Err(mpsc::TrySendError::Full(pending)) => {
+                event = pending;
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => return false,
+        }
+    }
 }
 
 /// Resident owner for one official CLI and microphone. It maps the bounded
 /// external operation to the shared coordinator events. The OS boundary owns
 /// actual recorder/PTY process handles; `Released` follows verified cleanup.
+/// Drop is bounded, but a failed cleanup can outlive it on the worker thread;
+/// a future App input lease must therefore be owned by that worker/boundary.
 pub struct GoogleProvider {
     requests: mpsc::SyncSender<Request>,
     events: mpsc::Receiver<(SessionKey, ProviderEvent)>,
     active: Option<SessionKey>,
     cancelled: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -238,11 +266,28 @@ impl GoogleProvider {
         let cancelled = Arc::new(AtomicBool::new(false));
         boundary.set_cancellation(cancelled.clone());
         let worker_cancelled = cancelled.clone();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
         let thread = thread::Builder::new()
             .name("voicetype-google".into())
             .spawn(move || {
                 let mut attempt: Option<GoogleAttempt> = None;
-                while let Ok(request) = input.recv() {
+                loop {
+                    if worker_shutdown.load(Ordering::Acquire) {
+                        if let Some(mut started) = attempt.take() {
+                            let _ = started.cancel(&mut boundary);
+                        }
+                        // Keep this owner alive until cleanup verifies release.
+                        while boundary.cleanup().is_err() {
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                        break;
+                    }
+                    let request = match input.recv_timeout(Duration::from_millis(25)) {
+                        Ok(request) => request,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
                     match request {
                         Request::Start(key) => {
                             if attempt.is_some() {
@@ -250,12 +295,20 @@ impl GoogleProvider {
                             }
                             if worker_cancelled.load(Ordering::Acquire) {
                                 if boundary.cleanup().is_ok() {
-                                    let _ = output.send((key, ProviderEvent::Released));
+                                    let _ = emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (key, ProviderEvent::Released),
+                                    );
                                 } else {
-                                    let _ = output.send((
-                                        key,
-                                        ProviderEvent::Failed(SessionFailure::ProviderFailed),
-                                    ));
+                                    let _ = emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (
+                                            key,
+                                            ProviderEvent::Failed(SessionFailure::ProviderFailed),
+                                        ),
+                                    );
                                     attempt = Some(GoogleAttempt { finished: true });
                                 }
                                 continue;
@@ -263,22 +316,38 @@ impl GoogleProvider {
                             match GoogleAttempt::start(&mut boundary) {
                                 Ok(started) if !worker_cancelled.load(Ordering::Acquire) => {
                                     attempt = Some(started);
-                                    let _ = output.send((key, ProviderEvent::Recording));
+                                    let _ = emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (key, ProviderEvent::Recording),
+                                    );
                                 }
                                 Ok(mut started) => {
                                     if started.cancel(&mut boundary).is_ok() {
-                                        let _ = output.send((key, ProviderEvent::Released));
+                                        let _ = emit_event(
+                                            &output,
+                                            &worker_shutdown,
+                                            (key, ProviderEvent::Released),
+                                        );
                                     } else {
                                         attempt = Some(started);
                                     }
                                 }
                                 Err(_) => {
-                                    let _ = output.send((
-                                        key,
-                                        ProviderEvent::Failed(SessionFailure::ProviderFailed),
-                                    ));
+                                    let _ = emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (
+                                            key,
+                                            ProviderEvent::Failed(SessionFailure::ProviderFailed),
+                                        ),
+                                    );
                                     if boundary.cleanup().is_ok() {
-                                        let _ = output.send((key, ProviderEvent::Released));
+                                        let _ = emit_event(
+                                            &output,
+                                            &worker_shutdown,
+                                            (key, ProviderEvent::Released),
+                                        );
                                     } else {
                                         attempt = Some(GoogleAttempt { finished: true });
                                     }
@@ -292,18 +361,32 @@ impl GoogleProvider {
                                     .and_then(&format)
                                 {
                                     Ok(text) => {
-                                        let _ = output.send((key, ProviderEvent::Final(text)));
+                                        let _ = emit_event(
+                                            &output,
+                                            &worker_shutdown,
+                                            (key, ProviderEvent::Final(text)),
+                                        );
                                     }
                                     Err(_) if !worker_cancelled.load(Ordering::Acquire) => {
-                                        let _ = output.send((
-                                            key,
-                                            ProviderEvent::Failed(SessionFailure::ProviderFailed),
-                                        ));
+                                        let _ = emit_event(
+                                            &output,
+                                            &worker_shutdown,
+                                            (
+                                                key,
+                                                ProviderEvent::Failed(
+                                                    SessionFailure::ProviderFailed,
+                                                ),
+                                            ),
+                                        );
                                     }
                                     Err(_) => {}
                                 }
                                 if boundary.cleanup().is_ok() {
-                                    let _ = output.send((key, ProviderEvent::Released));
+                                    let _ = emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (key, ProviderEvent::Released),
+                                    );
                                 } else {
                                     attempt = Some(started);
                                 }
@@ -312,27 +395,23 @@ impl GoogleProvider {
                         Request::Cancel(key) => {
                             if let Some(mut started) = attempt.take() {
                                 if started.cancel(&mut boundary).is_ok() {
-                                    let _ = output.send((key, ProviderEvent::Released));
+                                    let _ = emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (key, ProviderEvent::Released),
+                                    );
                                 } else {
-                                    let _ = output.send((
-                                        key,
-                                        ProviderEvent::Failed(SessionFailure::ProviderFailed),
-                                    ));
+                                    let _ = emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (
+                                            key,
+                                            ProviderEvent::Failed(SessionFailure::ProviderFailed),
+                                        ),
+                                    );
                                     attempt = Some(started);
                                 }
                             }
-                        }
-                        Request::Shutdown => {
-                            if let Some(mut started) = attempt.take() {
-                                let _ = started.cancel(&mut boundary);
-                            }
-                            // A failed cleanup still owns a possible live recorder.
-                            // Keep the boundary in this worker until release is
-                            // confirmed, even if the provider has been dropped.
-                            while boundary.cleanup().is_err() {
-                                thread::sleep(Duration::from_millis(50));
-                            }
-                            break;
                         }
                     }
                 }
@@ -342,6 +421,7 @@ impl GoogleProvider {
             events,
             active: None,
             cancelled,
+            shutdown,
             thread: Some(thread),
         })
     }
@@ -396,7 +476,9 @@ impl ProviderPort for GoogleProvider {
 impl Drop for GoogleProvider {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
-        let _ = self.requests.send(Request::Shutdown);
+        // Signal independently of the bounded request queue: a stalled CLI can
+        // leave every request slot occupied while its owner is being dropped.
+        self.shutdown.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             let until = Instant::now() + Duration::from_secs(2);
             while !thread.is_finished() && Instant::now() < until {

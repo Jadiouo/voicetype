@@ -1,7 +1,8 @@
 use std::time::Duration;
 use voicetype_app_core::google::{GoogleAttempt, GoogleBoundary, GoogleProvider, GoogleText};
 use voicetype_app_core::{
-    Application, DeliveryOutcome, DeliveryPort, Provider, ProviderEvent, TargetLease,
+    Application, DeliveryOutcome, DeliveryPort, Provider, ProviderCommand, ProviderEvent,
+    ProviderPort, TargetLease,
 };
 
 #[derive(Default)]
@@ -425,4 +426,218 @@ fn shutdown_retains_a_failing_boundary_until_cleanup_can_confirm_release() {
     assert!(retried);
     assert!(!abandoned, "live recorder owner was abandoned");
     assert!(dropped.load(Ordering::Acquire));
+}
+
+#[test]
+fn dropping_owner_with_full_request_queue_returns_within_shutdown_budget() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    struct StalledStart {
+        entered: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for StalledStart {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+    impl GoogleBoundary for StalledStart {
+        fn start_capture(&mut self) -> std::io::Result<()> {
+            self.entered.store(true, Ordering::Release);
+            while !self.release.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(())
+        }
+        fn stop_capture_and_drain(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn stop_official_voice(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn wait_official_recorder(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn capture_editor(&mut self) -> std::io::Result<String> {
+            Ok(String::new())
+        }
+        fn settle(&mut self, _: Duration) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reject_known_voice_errors(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn cleanup(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let mut provider = GoogleProvider::spawn(StalledStart {
+        entered: entered.clone(),
+        release: release.clone(),
+        dropped: dropped.clone(),
+    })
+    .unwrap();
+    let profile = tempfile::tempdir().unwrap();
+    let mut app = Application::open(profile.path()).unwrap();
+    app.select_provider(Provider::Google).unwrap();
+    let key = app
+        .start_dictation(TargetLease::new("editor", 1), &mut provider)
+        .unwrap();
+    let until = std::time::Instant::now() + Duration::from_secs(1);
+    while !entered.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < until, "start was not entered");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for command in [
+        ProviderCommand::Stop { key },
+        ProviderCommand::Cancel { key },
+        ProviderCommand::Stop { key },
+        ProviderCommand::Cancel { key },
+    ] {
+        provider.send(command).unwrap();
+    }
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let dropping = std::thread::spawn(move || {
+        drop(provider);
+        done_tx.send(()).unwrap();
+    });
+    let bounded = done_rx.recv_timeout(Duration::from_millis(2300)).is_ok();
+    assert!(
+        !dropped.load(Ordering::Acquire),
+        "stalled capture owner was discarded"
+    );
+    release.store(true, Ordering::Release);
+    dropping.join().unwrap();
+    assert!(
+        bounded,
+        "Drop blocked on a full request queue before its deadline"
+    );
+    let until = std::time::Instant::now() + Duration::from_secs(1);
+    while !dropped.load(Ordering::Acquire) {
+        assert!(
+            std::time::Instant::now() < until,
+            "shutdown did not reap owner"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn dropping_owner_with_full_event_queue_keeps_capture_until_verified_cleanup() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    struct RetryCleanup {
+        allow_release: Arc<AtomicBool>,
+        cleanup_calls: Arc<AtomicUsize>,
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for RetryCleanup {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+    impl GoogleBoundary for RetryCleanup {
+        fn start_capture(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn stop_capture_and_drain(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn stop_official_voice(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn wait_official_recorder(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn capture_editor(&mut self) -> std::io::Result<String> {
+            Ok(String::new())
+        }
+        fn settle(&mut self, _: Duration) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reject_known_voice_errors(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn cleanup(&mut self) -> std::io::Result<()> {
+            self.cleanup_calls.fetch_add(1, Ordering::AcqRel);
+            if self.allow_release.load(Ordering::Acquire) {
+                Ok(())
+            } else {
+                Err(std::io::ErrorKind::TimedOut.into())
+            }
+        }
+    }
+    let allow_release = Arc::new(AtomicBool::new(false));
+    let cleanup_calls = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let mut provider = GoogleProvider::spawn(RetryCleanup {
+        allow_release: allow_release.clone(),
+        cleanup_calls: cleanup_calls.clone(),
+        dropped: dropped.clone(),
+    })
+    .unwrap();
+    let profile = tempfile::tempdir().unwrap();
+    let mut app = Application::open(profile.path()).unwrap();
+    app.select_provider(Provider::Google).unwrap();
+    let key = app
+        .start_dictation(TargetLease::new("editor", 1), &mut provider)
+        .unwrap();
+    assert!(matches!(
+        provider.recv_timeout(Duration::from_secs(1)),
+        Some((_, ProviderEvent::Recording))
+    ));
+    let until = std::time::Instant::now() + Duration::from_secs(1);
+    let mut accepted = 0;
+    while accepted < 5 {
+        if provider.send(ProviderCommand::Cancel { key }).is_ok() {
+            accepted += 1;
+        } else {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "could not fill event queue"
+        );
+    }
+    while cleanup_calls.load(Ordering::Acquire) < 5 {
+        assert!(
+            std::time::Instant::now() < until,
+            "worker did not reach full event queue"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let dropping = std::thread::spawn(move || {
+        drop(provider);
+        done_tx.send(()).unwrap();
+    });
+    let cleanup_until = std::time::Instant::now() + Duration::from_millis(250);
+    while cleanup_calls.load(Ordering::Acquire) < 6 && std::time::Instant::now() < cleanup_until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let cleanup_started_without_receiver = cleanup_calls.load(Ordering::Acquire) >= 6;
+    let bounded = done_rx.recv_timeout(Duration::from_millis(2300)).is_ok();
+    assert!(bounded, "Drop blocked behind a full event queue");
+    dropping.join().unwrap();
+    assert!(
+        cleanup_started_without_receiver,
+        "full event queue prevented shutdown cleanup while provider receiver was alive"
+    );
+    assert!(
+        !dropped.load(Ordering::Acquire),
+        "live recorder owner was discarded"
+    );
+    allow_release.store(true, Ordering::Release);
+    let until = std::time::Instant::now() + Duration::from_secs(1);
+    while !dropped.load(Ordering::Acquire) {
+        assert!(
+            std::time::Instant::now() < until,
+            "cleanup never reaped boundary"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
