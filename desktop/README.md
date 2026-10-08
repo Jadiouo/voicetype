@@ -94,6 +94,11 @@ shell commands or access arbitrary files. Only typed Rust commands expose settin
 Core tests use temporary directories; no microphone, live dictation, GPU, account
 login or text injection is part of preview validation.
 
+The in-progress official Google CLI adapter, its exact-version gate and
+synthetic PCM/PTY tests are described in [GOOGLE-ADAPTER.md](GOOGLE-ADAPTER.md).
+The settings window does not activate this adapter yet; selecting Google is
+still a saved preference, not evidence of account login or live speech.
+
 The CI UI check runs the installer payload with a real platform WebDriver, chooses
 Google, reopens the app, and checks error/reload behavior. To use a disposable
 profile, set `VOICETYPE_PREVIEW_CONFIG_DIR` to an absolute temporary directory.
