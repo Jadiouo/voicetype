@@ -38,3 +38,11 @@ jobs:
           if ($bytes.Length -lt 4096 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
             throw 'TSF DLL is not a nonempty PE image'
           }
+          $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
+          if ($peOffset -lt 0x40 -or $peOffset + 6 -gt $bytes.Length -or
+              [System.BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x00004550 -or
+              [System.BitConverter]::ToUInt16($bytes, $peOffset + 4) -ne 0x8664) {
+            throw 'TSF DLL is not an x64 PE image'
+          }
+          $digest = (Get-FileHash -Path $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Validated x64 TSF DLL: bytes=$($bytes.Length) sha256=$digest"
