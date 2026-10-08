@@ -28,11 +28,17 @@ Windows will discover the speech profile in another application.
 `tsf_broker_protocol` is an in-process fixed-width frame and state-transition
 probe. It proves no named-pipe ACL, identity binding, cross-process CAS, or
 delivery ACK yet. `tsf_registrar_status_readonly` only reads TSF state and the
-probe's own HKCU COM key; CI never registers a profile.
+probe's own HKCU COM key. `tsf_registrar_rollback_policy` injects residual
+profile/category/active states and failed observations into the same deletion
+gate used by the registrar; it does not mutate the registry. The real-Msctf
+`tsf_preserved_key_fixture` simulates a preserved key in the fixture's current
+context and checks that deactivation removes the callback. It asserts the
+sink is non-foreground and never eats ordinary keys. CI never registers a
+profile, so these tests are not evidence of OS profile discovery.
 
 After A passes on MSVC, gate B must run under a real **non-elevated standard
 user** in a disposable Windows 11 account. `voicetype_tsf_registrar` has
-explicit `register`, `activate`, `status`, and `unregister` actions; the
+explicit `register`, `activate`, `deactivate`, `status`, and `unregister` actions; the
 mutating actions refuse an elevated token. The DLL path must be absolute, and
 the language is `0404` or `0409`. Capture command exit codes and printed
 HRESULTs, actual service activation from a newly launched x64 target, preserved
@@ -42,10 +48,36 @@ Mutating actions require a successful original keyboard-profile query;
 `ActivateProfile` returning `S_FALSE` is failure. HKCU COM registration rolls
 back a newly created own key on write failure, and unregister refuses to
 delete the key when it contains values or subkeys beyond this probe's schema.
-Run `unregister` in a `finally`/cleanup step. Stop the experiment if standard
-user registration fails or the existing keyboard/IME profile changes.
+After an activation attempt, explicitly request `DeactivateProfile` for the
+desktop session. `unregister` observes its own profile, speech category,
+active state and exact HKCU COM schema; it removes the COM key only after
+confirmed TSF cleanup. Failed API calls or unknown state leave the key for
+inspection and retry with a nonzero result. Stop if registration, cleanup,
+or the original keyboard/IME check fails.
 
-Current limits: the DLL has no preserved-key sink, full focus/edit epochs,
+The bounded new-process B experiment is prepared as
+`desktop/windows-tsf/Invoke-TsfBProbe.ps1 -Language 0409` (or `0404` for the
+existing active language), after the build above. Run it only in a disposable,
+interactive Windows 11 **standard-user** account. It registers and activates
+the speech profile through public TSF APIs, launches a new x64 ACP target that
+never loads the DLL directly, waits for diagnostic `ACTIVATE`/`HELLO`, simulates
+the preserved key into that target's Msctf context, then deactivates and
+unregisters in `finally`, verifies its own profile/category/COM state and a
+fresh no-load target, and compares the keyboard identity. Metadata stays under
+`.scratch/tsf-b/`: event, PID/TID, service instance, opaque context serial,
+focus epoch and HRESULT, with no transcript, key text or pointer value. The
+DLL uses `pfEaten=FALSE` in this diagnostic experiment; it neither records
+audio nor changes the existing keyboard or IME. A failed registration, missing
+new-process HELLO, missing callback, changed keyboard, or failed cleanup stops
+B and requires inspection of the recorded HRESULT/status before any expansion.
+Physical Ctrl+CapsLock in Notepad/Edge and profile behavior after reopening
+remain separate Windows 11 manual gates; no synthetic CI result satisfies them.
+
+The B callback proves its supplied context equals the **current** Msctf
+focus/top at that instant. It does not create a lease valid across recording
+or prove safe delivery after focus away-and-back. Current limits: the
+diagnostic preserved-key sink is not connected to a broker
+or recording. The DLL has no full focus/edit epochs,
 selection-range lease, target IPC, production cancellation, password gate, or
-auto-delivery. Its private `IVoiceTypeTsfProbe` is test-only. These are the next
-features only after A and B are supported by real Windows evidence.
+auto-delivery. Its private `IVoiceTypeTsfProbe` is test-only. These are later
+features only after B is supported by real Windows evidence.

@@ -20,7 +20,8 @@ static bool check(HRESULT hr, const char *step) {
 }
 
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 2) return 2;
+  const bool preserved = argc == 3 && wcscmp(argv[2], L"--preserved") == 0;
+  if (argc != 2 && !preserved) return 2;
   if (!check(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED), "CoInitializeEx"))
     return 2;
   int exit_code = 1;
@@ -39,6 +40,7 @@ int wmain(int argc, wchar_t **argv) {
   ITfThreadMgrEventSink *event_sink = nullptr;
   IUnknown *canonical = nullptr, *other = nullptr;
   ITfThreadMgr *manager = nullptr;
+  ITfKeystrokeMgr *keys = nullptr;
   ITfDocumentMgr *doc = nullptr;
   ITfContext *context = nullptr;
   ITextStoreACP *store = nullptr;
@@ -131,6 +133,28 @@ int wmain(int argc, wchar_t **argv) {
     if (!check(doc->Push(context), "Push context")) break;
     pushed = true;
     if (!check(manager->SetFocus(doc), "SetFocus")) break;
+    if (preserved) {
+      if (!check(manager->QueryInterface(IID_ITfKeystrokeMgr,
+                    reinterpret_cast<void **>(&keys)), "QI KeystrokeMgr")) break;
+      BOOL eaten = TRUE;
+      HRESULT simulated = keys->SimulatePreservedKey(
+          context, GUID_VoiceTypeCtrlCapsProbe, &eaten);
+      LONG callbacks = 0;
+      ULONGLONG serial = 0;
+      BOOL nonforeground = FALSE;
+      if (simulated != S_OK || eaten ||
+          !check(probe->KeySnapshot(&callbacks, &serial, &nonforeground),
+                 "KeySnapshot") || callbacks != 1 || serial == 0 || !nonforeground) {
+        std::fprintf(stderr,
+            "preserved-key mismatch: simulate=0x%08lx eaten=%d callbacks=%ld serial=%llu nonforeground=%d\n",
+            static_cast<unsigned long>(simulated), eaten, callbacks, serial,
+            nonforeground);
+        break;
+      }
+      std::puts("PASS: nonforeground preserved key received current Msctf context");
+      exit_code = 0;
+      break;
+    }
     const WCHAR text[] = L"你好 AI \U0001F600";
     if (!check(probe->Commit(context, text, static_cast<LONG>(wcslen(text))),
                "async request")) break;
@@ -155,13 +179,33 @@ int wmain(int argc, wchar_t **argv) {
     std::puts("PASS: real Msctf edit session wrote one UTF-16 result to ACP store");
     exit_code = 0;
   } while (false);
-  if (service_active) service->Deactivate();
+  if (service_active && service->Deactivate() != S_OK) {
+    std::fputs("service deactivation or preserved-key cleanup failed\n", stderr);
+    exit_code = 1;
+  }
+  if (preserved && keys && context && probe) {
+    BOOL eaten = TRUE;
+    HRESULT after = keys->SimulatePreservedKey(context,
+        GUID_VoiceTypeCtrlCapsProbe, &eaten);
+    LONG callbacks = 0;
+    ULONGLONG serial = 0;
+    BOOL nonforeground = TRUE;
+    HRESULT snapshot = probe->KeySnapshot(&callbacks, &serial, &nonforeground);
+    if (after != S_FALSE || snapshot != S_OK ||
+        callbacks != 1 || nonforeground) {
+      std::fprintf(stderr,
+          "preserved key remained after deactivation: simulate=0x%08lx eaten=%d callbacks=%ld active=%d\n",
+          static_cast<unsigned long>(after), eaten, callbacks, nonforeground);
+      exit_code = 1;
+    }
+  }
   if (manager) manager->SetFocus(nullptr);
   if (pushed) doc->Pop(TF_POPF_ALL);
   if (context) context->Release();
   if (doc) doc->Release();
   if (store) store->Release();
   if (manager_active) manager->Deactivate();
+  if (keys) keys->Release();
   if (manager) manager->Release();
   if (other) other->Release();
   if (canonical) canonical->Release();
