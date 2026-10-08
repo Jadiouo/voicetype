@@ -315,7 +315,7 @@ pub(crate) fn portable_path(value: &str) -> io::Result<()> {
         || value.len() > 240
         || !value
             .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"/_-.".contains(&c))
+            .all(|c| c.is_ascii_alphanumeric() || b"/_-.+".contains(&c))
     {
         return Err(invalid("invalid asset path"));
     }

@@ -6,7 +6,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -117,9 +117,15 @@ impl Collector {
                     worker_gate.available.store(available, Ordering::Relaxed);
                     match rx.recv_timeout(Duration::from_secs(1)) {
                         Ok(sample) => {
-                            // Re-read after dequeue: disabling sampling takes precedence.
-                            let config = read_config(&config_path);
-                            if let Err(error) = persist(&root, &config, sample, now()) {
+                            // Only a short UI lock collision is retryable. This
+                            // work stays on the collector thread; ASR submit is
+                            // always a nonblocking, bounded-channel send.
+                            if let Err(error) = persist_with_busy_retry(
+                                &root,
+                                &config_path,
+                                &sample,
+                                Duration::from_millis(500),
+                            ) {
                                 tracing::warn!("review sample storage failed: {error}");
                             }
                         }
@@ -184,6 +190,14 @@ fn day(timestamp: u64) -> Result<String> {
 }
 
 struct StoreLock(File);
+#[derive(Debug)]
+struct StoreBusy;
+impl std::fmt::Display for StoreBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("review store busy")
+    }
+}
+impl std::error::Error for StoreBusy {}
 impl StoreLock {
     fn acquire(root: &Path) -> Result<Self> {
         fs::create_dir_all(root)?;
@@ -192,6 +206,14 @@ impl StoreLock {
             "review directory is a link"
         );
         fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+        Self::acquire_path(&root.join(".lock"))
+    }
+
+    fn acquire_config(config_path: &Path) -> Result<Self> {
+        Self::acquire_path(&config_path.with_extension("json.lock"))
+    }
+
+    fn acquire_path(path: &Path) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -199,12 +221,15 @@ impl StoreLock {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(root.join(".lock"))?;
+            .open(path)?;
         // Never block the worker indefinitely behind an editor.
-        ensure!(
-            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "review store busy"
-        );
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                return Err(StoreBusy.into());
+            }
+            return Err(error.into());
+        }
         Ok(Self(file))
     }
 }
@@ -371,7 +396,68 @@ fn wav(file: File, audio: &[f32]) -> Result<()> {
     Ok(())
 }
 
-fn persist(root: &Path, config: &Config, sample: Sample, timestamp: u64) -> Result<bool> {
+fn persist_with_busy_retry(
+    root: &Path,
+    config_path: &Path,
+    sample: &Sample,
+    budget: Duration,
+) -> Result<bool> {
+    let until = Instant::now() + budget;
+    loop {
+        // This early read can avoid a lock for an already-disabled sample. The
+        // authoritative consent check follows the shared config lock below.
+        let config = read_config(config_path);
+        if !config.enabled || sample.latest.load(Ordering::SeqCst) != sample.session {
+            return Ok(false);
+        }
+        #[cfg(test)]
+        pause_before_consent_lock(root);
+        let result = (|| {
+            // UI disable takes this lock first, then the review store lock.
+            // Holding it through the final rename makes successful disable
+            // and sample publication linearizable in the same order.
+            let _consent = StoreLock::acquire_config(config_path)?;
+            let current = read_config(config_path);
+            persist(root, &current, sample, now())
+        })();
+        match result {
+            Err(error) if error.is::<StoreBusy>() && Instant::now() < until => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
+
+#[cfg(test)]
+type ConsentPause = (PathBuf, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>);
+#[cfg(test)]
+static CONSENT_PAUSE: std::sync::Mutex<Option<ConsentPause>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+fn pause_before_consent_lock(root: &Path) {
+    pause_at(root, &CONSENT_PAUSE);
+}
+#[cfg(test)]
+static PUBLISH_PAUSE: std::sync::Mutex<Option<ConsentPause>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+fn pause_before_publish(root: &Path) {
+    pause_at(root, &PUBLISH_PAUSE);
+}
+#[cfg(test)]
+fn pause_at(root: &Path, hook: &std::sync::Mutex<Option<ConsentPause>>) {
+    let pause = hook
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|(path, _, _)| path == root)
+        .cloned();
+    if let Some((_, arrived, resume)) = pause {
+        arrived.wait();
+        resume.wait();
+    }
+}
+
+fn persist(root: &Path, config: &Config, sample: &Sample, timestamp: u64) -> Result<bool> {
     if !config.enabled
         || !(1..=5).contains(&config.daily_limit)
         || sample.latest.load(Ordering::SeqCst) != sample.session
@@ -389,9 +475,6 @@ fn persist(root: &Path, config: &Config, sample: Sample, timestamp: u64) -> Resu
     if quota.count >= config.daily_limit || item_paths(root)?.len() >= MAX_ITEMS {
         return Ok(false);
     }
-    // Reserve first so failures/restarts cannot exceed the daily cap.
-    quota.count += 1;
-    atomic_json(&root.join(".daily.json"), &quota)?;
     let id = format!(
         "r-{timestamp}-{}-{}",
         std::process::id(),
@@ -407,8 +490,8 @@ fn persist(root: &Path, config: &Config, sample: Sample, timestamp: u64) -> Resu
             created_at: timestamp,
             duration_ms: sample.audio.len() * 1000 / SAMPLE_RATE,
             sample_rate: SAMPLE_RATE,
-            asr_text: sample.asr_text,
-            output_text: sample.output_text,
+            asr_text: sample.asr_text.clone(),
+            output_text: sample.output_text.clone(),
             status: "pending".into(),
             corrected_text: None,
             reviewed_at: None,
@@ -420,10 +503,26 @@ fn persist(root: &Path, config: &Config, sample: Sample, timestamp: u64) -> Resu
             .open(temp.join("audio.wav"))?;
         wav(file, &sample.audio)?;
         atomic_json(&temp.join("record.json"), &record)?;
+        #[cfg(test)]
+        pause_before_publish(root);
         if sample.latest.load(Ordering::SeqCst) != sample.session {
             return Ok(false);
         }
-        fs::rename(&temp, root.join(&id))?;
+        // Reserve immediately before atomic publication. A cancelled sample or
+        // failed pending write has not consumed consent or the daily allowance;
+        // the reservation still precedes visibility, including after a crash.
+        quota.count += 1;
+        atomic_json(&root.join(".daily.json"), &quota)?;
+        if sample.latest.load(Ordering::SeqCst) != sample.session {
+            quota.count -= 1;
+            atomic_json(&root.join(".daily.json"), &quota)?;
+            return Ok(false);
+        }
+        if let Err(error) = fs::rename(&temp, root.join(&id)) {
+            quota.count -= 1;
+            atomic_json(&root.join(".daily.json"), &quota)?;
+            return Err(error.into());
+        }
         File::open(root)?.sync_all()?;
         tracing::info!("review sample retained locally");
         Ok(true)
@@ -527,6 +626,103 @@ mod tests {
     }
 
     #[test]
+    fn sampled_audio_survives_a_brief_ui_store_lock() {
+        use voicetype_app_core::review::ReviewStore;
+        let home = directory();
+        let config = home.join("review.json");
+        let root = home.join("review");
+        let ui = ReviewStore::open(config.clone(), root.clone()).unwrap();
+        let initial = ui.settings().unwrap();
+        ui.set_enabled(&initial.revision, true).unwrap();
+        let collector = Collector::with_paths(config, root.clone()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !collector.gate.available.load(Ordering::Relaxed) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // The UI and collector use the same OS lock. A brief UI operation must
+        // not silently discard an already selected sample.
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        collector.submit(sample());
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
+
+        let item = loop {
+            if let Ok(mut items) = ui.list(now()) {
+                if let Some(item) = items.pop() {
+                    break item;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sample lost during UI lock"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(item.duration_ms, 8000);
+        drop(collector);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn disabling_after_sample_selection_prevents_publish_and_quota_reservation() {
+        use voicetype_app_core::review::ReviewStore;
+        let home = directory();
+        let config = home.join("review.json");
+        let root = home.join("review");
+        let ui = ReviewStore::open(config.clone(), root.clone()).unwrap();
+        let initial = ui.settings().unwrap();
+        let enabled = ui.set_enabled(&initial.revision, true).unwrap();
+        let arrived = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        *CONSENT_PAUSE.lock().unwrap() = Some((root.clone(), arrived.clone(), resume.clone()));
+        let collector = Collector::with_paths(config, root.clone()).unwrap();
+        collector.submit(sample());
+        arrived.wait(); // Worker has selected and read enabled, but not published.
+        assert!(!ui.set_enabled(&enabled.revision, false).unwrap().enabled);
+        resume.wait();
+        let until = Instant::now() + Duration::from_secs(2);
+        while collector.gate.available.load(Ordering::Relaxed) {
+            assert!(Instant::now() < until, "collector did not observe disable");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ui.list(now()).unwrap().is_empty());
+        assert!(!root.join(".daily.json").exists());
+        *CONSENT_PAUSE.lock().unwrap() = None;
+        drop(collector);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn cancelled_session_during_pending_audio_does_not_consume_daily_quota() {
+        let root = directory();
+        let value = sample();
+        let latest = value.latest.clone();
+        let arrived = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        *PUBLISH_PAUSE.lock().unwrap() = Some((root.clone(), arrived.clone(), resume.clone()));
+        let worker_root = root.clone();
+        let worker = std::thread::spawn(move || persist(&worker_root, &enabled(), &value, now()));
+        arrived.wait(); // A private pending WAV exists; publication has not begun.
+        latest.store(12, Ordering::SeqCst);
+        resume.wait();
+        assert!(!worker.join().unwrap().unwrap());
+        assert!(item_paths(&root).unwrap().is_empty());
+        assert_eq!(quota(&root, now()).unwrap().count, 0);
+        *PUBLISH_PAUSE.lock().unwrap() = None;
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn wav_preserves_order_length_and_silent_pauses() {
         let root = directory();
         let mut value = sample();
@@ -534,7 +730,7 @@ mod tests {
         value.audio[1] = -0.5;
         value.audio[80_000] = 0.5;
         *value.audio.last_mut().unwrap() = 1.0;
-        assert!(persist(&root, &enabled(), value, now()).unwrap());
+        assert!(persist(&root, &enabled(), &value, now()).unwrap());
         let paths = item_paths(&root).unwrap();
         let data = fs::read(paths[0].join("audio.wav")).unwrap();
         assert_eq!(&data[..4], b"RIFF");
@@ -562,19 +758,19 @@ mod tests {
     #[test]
     fn disabled_short_empty_and_stale_samples_are_not_persisted() {
         let root = directory();
-        assert!(!persist(&root, &Config::default(), sample(), now()).unwrap());
+        assert!(!persist(&root, &Config::default(), &sample(), now()).unwrap());
         let mut value = sample();
         value.audio.truncate(SAMPLE_RATE * 7);
-        assert!(!persist(&root, &enabled(), value, now()).unwrap());
+        assert!(!persist(&root, &enabled(), &value, now()).unwrap());
         let mut value = sample();
         value.output_text.clear();
-        assert!(!persist(&root, &enabled(), value, now()).unwrap());
+        assert!(!persist(&root, &enabled(), &value, now()).unwrap());
         let value = sample();
         value.latest.store(12, Ordering::SeqCst);
-        assert!(!persist(&root, &enabled(), value, now()).unwrap());
+        assert!(!persist(&root, &enabled(), &value, now()).unwrap());
         let value = sample();
         value.latest.store(0, Ordering::SeqCst);
-        assert!(!persist(&root, &enabled(), value, now()).unwrap());
+        assert!(!persist(&root, &enabled(), &value, now()).unwrap());
         assert!(item_paths(&root).unwrap().is_empty());
         assert!(!root.join(".daily.json").exists());
         fs::remove_dir_all(root).unwrap();
@@ -585,14 +781,14 @@ mod tests {
         let root = directory();
         let timestamp = now();
         for _ in 0..5 {
-            assert!(persist(&root, &enabled(), sample(), timestamp).unwrap());
+            assert!(persist(&root, &enabled(), &sample(), timestamp).unwrap());
         }
-        assert!(!persist(&root, &enabled(), sample(), timestamp).unwrap());
+        assert!(!persist(&root, &enabled(), &sample(), timestamp).unwrap());
         for path in item_paths(&root).unwrap() {
             fs::remove_dir_all(path).unwrap();
         }
-        assert!(!persist(&root, &enabled(), sample(), timestamp).unwrap());
-        assert!(persist(&root, &enabled(), sample(), timestamp + 86_400).unwrap());
+        assert!(!persist(&root, &enabled(), &sample(), timestamp).unwrap());
+        assert!(persist(&root, &enabled(), &sample(), timestamp + 86_400).unwrap());
         assert_eq!(quota(&root, timestamp + 86_400).unwrap().count, 1);
         fs::remove_dir_all(root).unwrap();
     }
@@ -601,7 +797,7 @@ mod tests {
     fn seven_day_cleanup_includes_reviewed_records() {
         let root = directory();
         let timestamp = now() - RETENTION + 10;
-        persist(&root, &enabled(), sample(), timestamp).unwrap();
+        persist(&root, &enabled(), &sample(), timestamp).unwrap();
         let path = item_paths(&root).unwrap().pop().unwrap();
         let mut record: Record = read_json(&path.join("record.json"), 128 * 1024).unwrap();
         record.status = "correct".into();
@@ -620,10 +816,10 @@ mod tests {
             let path = root.join(format!("r-{}-1-{i}", now()));
             fs::create_dir(path).unwrap();
         }
-        assert!(!persist(&root, &enabled(), sample(), now()).unwrap());
+        assert!(!persist(&root, &enabled(), &sample(), now()).unwrap());
         assert_eq!(item_paths(&root).unwrap().len(), MAX_ITEMS);
         let lock = StoreLock::acquire(&root).unwrap();
-        assert!(persist(&root, &enabled(), sample(), now()).is_err());
+        assert!(persist(&root, &enabled(), &sample(), now()).is_err());
         drop(lock);
         fs::remove_dir_all(root).unwrap();
     }
@@ -632,7 +828,7 @@ mod tests {
     fn malformed_quota_fails_closed_and_does_not_write_audio() {
         let root = directory();
         fs::write(root.join(".daily.json"), b"broken").unwrap();
-        assert!(persist(&root, &enabled(), sample(), now()).is_err());
+        assert!(persist(&root, &enabled(), &sample(), now()).is_err());
         assert!(item_paths(&root).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }

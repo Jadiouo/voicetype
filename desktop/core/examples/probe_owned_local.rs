@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vocabulary: profile.path().join("vocab.toml"),
         review_config: profile.path().join("review.json"),
         review_root: profile.path().join("review"),
+        spelling: None,
     };
     let mut expected_libraries = args.get(3).map(PathBuf::from);
     if packaged {

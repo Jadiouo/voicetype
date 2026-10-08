@@ -122,6 +122,66 @@ async fn application_records_through_the_real_local_transport_and_delivers_the_c
 }
 
 #[tokio::test]
+async fn desktop_status_tracks_owned_csc_failure_while_asr_keeps_responding() {
+    if let Some(scenario) = std::env::var_os("VOICETYPE_TEST_CSC_IPC_CHILD") {
+        let profile = tempfile::tempdir().unwrap();
+        let socket = profile.path().join("ipc.sock");
+        let assistant = Arc::new(Assistant::load().unwrap());
+        let server = Server::bind(&socket).unwrap();
+        let manager = Arc::new(SessionManager::new(
+            Arc::new(Microphone),
+            Pipeline {
+                asr: Arc::new(NativeModel), vad: None,
+                traditional: Some(Arc::new(Traditional::load().unwrap())),
+                vocab: Arc::new(Vocab::load_or_empty(&profile.path().join("vocab.toml"))),
+                assistant: assistant.clone(), review: None,
+            },
+        ));
+        let task = tokio::spawn(server.run(manager));
+        let mut reader = BufReader::new(UnixStream::connect(&socket).await.unwrap());
+        reader.get_mut().write_all(b"{\"type\":\"desktop_status\",\"request\":1}\n").await.unwrap();
+        assert_eq!(read_event(&mut reader).await["value"]["spelling_status"], "ready");
+        let original = "今天新情很好。GitHub 2026";
+        if scenario == "exit" {
+            tokio::time::sleep(Duration::from_millis(350)).await;
+        } else {
+            assert_eq!(assistant.process(original, &Default::default(), None), original);
+        }
+        reader.get_mut().write_all(b"{\"type\":\"desktop_status\",\"request\":2}\n").await.unwrap();
+        assert_eq!(read_event(&mut reader).await["value"]["spelling_status"], "unavailable");
+        reader.get_mut().write_all(b"{\"type\":\"start\",\"session\":17,\"session_events\":true}\n").await.unwrap();
+        assert_eq!(read_event(&mut reader).await["value"], "recording");
+        reader.get_mut().write_all(b"{\"type\":\"stop\",\"session\":17}\n").await.unwrap();
+        assert_eq!(read_event(&mut reader).await["text"], "請檢查 GitHub。");
+        task.abort();
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let profile = tempfile::tempdir().unwrap();
+    for (scenario, body) in [
+        ("exit", "import time; time.sleep(.25)"),
+        ("bad", "import sys; sys.stdin.readline(); print('{bad json}',flush=True)"),
+    ] {
+        let executable = profile.path().join(format!("csc-ipc-{scenario}"));
+        std::fs::write(&executable, format!("#!/usr/bin/python3\nimport json\nprint(json.dumps(dict(v=1,status='ready',provider='CPUExecutionProvider')),flush=True)\n{body}\n")).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = serde_json::json!({
+            "executable": executable, "model": profile.path().join("model.onnx"),
+            "tokenizer": profile.path().join("tokenizer.json"),
+            "model_sha256": "a".repeat(64), "tokenizer_sha256": "b".repeat(64), "threads": 4,
+        });
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("desktop_ipc_tests::desktop_status_tracks_owned_csc_failure_while_asr_keeps_responding")
+            .env("VOICETYPE_TEST_CSC_IPC_CHILD", scenario)
+            .env("VOICETYPE_CSC_PROCESS", config.to_string())
+            .env("VOICETYPE_LEARNING_FILE", profile.path().join("learning.json"))
+            .status().unwrap();
+        assert!(result.success(), "{scenario} CSC failure blocked daemon IPC/ASR");
+    }
+}
+
+#[tokio::test]
 async fn application_receives_capture_failure_and_can_release_without_inserting_text() {
     use voicetype_app_core::{
         Application, DeliveryOutcome, DeliveryPort, ProviderEvent, TargetLease,
@@ -400,7 +460,7 @@ async fn microphone_handoff_refuses_a_busy_session_and_acknowledges_actual_close
     assert_eq!(
         read_event(&mut reader).await,
         serde_json::json!({"type":"info","value":{
-            "desktop_protocol":1,"request":9,"capabilities":["session_events","suspend"],"session_busy":false
+            "desktop_protocol":1,"request":9,"capabilities":["session_events","suspend"],"session_busy":false,"spelling_status":"disabled"
         }})
     );
     assert!(

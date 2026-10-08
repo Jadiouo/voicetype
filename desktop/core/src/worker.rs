@@ -10,7 +10,7 @@ use std::{
         mpsc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -22,10 +22,20 @@ pub enum LocalRuntimeStatus {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpellingRuntimeStatus {
+    Inactive,
+    Disabled,
+    Ready,
+    Unavailable,
+}
+
 #[derive(Serialize)]
 pub struct DesktopSnapshot {
     pub settings: Snapshot,
     pub local_runtime: LocalRuntimeStatus,
+    pub spelling_runtime: SpellingRuntimeStatus,
     pub input_requested: bool,
 }
 
@@ -62,6 +72,7 @@ impl DesktopWorker {
                     app: Application::open(&config_dir),
                     config_dir,
                     local_status: LocalRuntimeStatus::Inactive,
+                    spelling_status: SpellingRuntimeStatus::Inactive,
                     #[cfg(target_os = "linux")]
                     local: None,
                 };
@@ -150,8 +161,29 @@ impl DesktopWorker {
         })
     }
 
+    pub fn set_spelling_enabled(&self, enabled: bool) -> Result<DesktopSnapshot, String> {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            // The owned worker's configuration is frozen for its lifetime.
+            // Keep a loaded/input-routed engine running until explicit unload.
+            if desktop.local_status != LocalRuntimeStatus::Inactive {
+                return Err("請先停用並卸載引擎，再變更校正設定".into());
+            }
+            desktop
+                .app_mut()?
+                .set_spelling_enabled(enabled)
+                .map_err(|e| e.to_string())?;
+            desktop.snapshot()
+        })
+    }
+
     pub fn reload(&self) -> Result<DesktopSnapshot, String> {
         self.call(|desktop| {
+            if desktop.local_status != LocalRuntimeStatus::Inactive {
+                return Err("請先停用並卸載引擎，再重新載入設定".into());
+            }
             match desktop.app.as_mut() {
                 Ok(app) => {
                     app.reload().map_err(|e| e.to_string())?;
@@ -185,7 +217,7 @@ impl DesktopWorker {
     #[cfg(target_os = "linux")]
     pub fn activate_local(
         &self,
-        paths: crate::runtime::LocalRuntimePaths,
+        mut paths: crate::runtime::LocalRuntimePaths,
     ) -> Result<DesktopSnapshot, String> {
         self.call(move |desktop| {
             if desktop.app()?.snapshot().dictation.busy {
@@ -195,13 +227,30 @@ impl DesktopWorker {
                 return Err("請先選擇本機離線辨識".into());
             }
             if desktop.local.is_none() {
+                let spelling_enabled = desktop.app()?.snapshot().spelling_enabled;
+                if !spelling_enabled {
+                    paths.spelling = None;
+                }
+                let spelling_requested = spelling_enabled && paths.spelling.is_some();
                 match LocalHost::start(paths) {
                     Ok(local) => {
+                        desktop.spelling_status = if !spelling_enabled {
+                            SpellingRuntimeStatus::Disabled
+                        } else if spelling_requested && local.spelling_ready {
+                            SpellingRuntimeStatus::Ready
+                        } else {
+                            SpellingRuntimeStatus::Unavailable
+                        };
                         desktop.local = Some(local);
                         desktop.local_status = LocalRuntimeStatus::WaitingForInput;
                     }
                     Err(_) => {
                         desktop.local_status = LocalRuntimeStatus::Failed;
+                        desktop.spelling_status = if spelling_enabled {
+                            SpellingRuntimeStatus::Unavailable
+                        } else {
+                            SpellingRuntimeStatus::Disabled
+                        };
                         return Err("無法準備本機引擎，請檢查執行環境與模型安裝".into());
                     }
                 }
@@ -328,6 +377,7 @@ struct Desktop {
     config_dir: PathBuf,
     app: Result<Application, AppError>,
     local_status: LocalRuntimeStatus,
+    spelling_status: SpellingRuntimeStatus,
     #[cfg(target_os = "linux")]
     local: Option<LocalHost>,
 }
@@ -343,6 +393,7 @@ impl Desktop {
         Ok(DesktopSnapshot {
             settings: self.app()?.snapshot(),
             local_runtime: self.local_status,
+            spelling_runtime: self.spelling_status,
             input_requested: {
                 #[cfg(target_os = "linux")]
                 {
@@ -367,15 +418,27 @@ impl Desktop {
             self.local = None;
         }
         self.local_status = LocalRuntimeStatus::Inactive;
+        self.spelling_status = SpellingRuntimeStatus::Inactive;
         Ok(())
     }
     fn poll(&mut self) {
         #[cfg(target_os = "linux")]
         if let (Some(local), Ok(app)) = (&mut self.local, &mut self.app) {
             match local.poll(app) {
-                Ok(status) => self.local_status = status,
+                Ok(status) => {
+                    self.local_status = status;
+                    if self.spelling_status == SpellingRuntimeStatus::Ready {
+                        local.refresh_spelling(app);
+                        if !local.spelling_ready {
+                            self.spelling_status = SpellingRuntimeStatus::Unavailable;
+                        }
+                    }
+                }
                 Err(_) => {
                     self.local_status = LocalRuntimeStatus::Failed;
+                    if self.spelling_status == SpellingRuntimeStatus::Ready {
+                        self.spelling_status = SpellingRuntimeStatus::Unavailable;
+                    }
                     if local.shutdown(app).is_ok() {
                         self.local = None;
                     }
@@ -397,6 +460,9 @@ struct LocalHost {
     owner: Option<EngineOwner>,
     listener: std::os::unix::net::UnixListener,
     endpoint: tempfile::TempDir,
+    spelling_ready: bool,
+    next_spelling_probe: Instant,
+    spelling_probe: Option<JoinHandle<io::Result<bool>>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -404,17 +470,55 @@ impl LocalHost {
     fn start(paths: crate::runtime::LocalRuntimePaths) -> io::Result<Self> {
         let endpoint = tempfile::Builder::new()
             .prefix("voicetype-input-")
-            .tempdir_in("/tmp")?;
+            .tempdir_in(std::env::temp_dir())?;
         let listener =
             std::os::unix::net::UnixListener::bind(endpoint.path().join("frontend.sock"))?;
         listener.set_nonblocking(true)?;
-        let runtime = crate::runtime::OwnedLocal::start(&paths, Duration::from_secs(30))?;
+        let startup_budget = if paths.spelling.is_some() { 90 } else { 30 };
+        let runtime =
+            crate::runtime::OwnedLocal::start(&paths, Duration::from_secs(startup_budget))?;
+        let spelling_ready = runtime.spelling_ready();
         Ok(Self {
             input: None,
             owner: Some(EngineOwner::Waiting(runtime)),
             listener,
             endpoint,
+            spelling_ready,
+            next_spelling_probe: Instant::now() + Duration::from_millis(250),
+            spelling_probe: None,
         })
+    }
+
+    fn refresh_spelling(&mut self, app: &Application) {
+        if self
+            .spelling_probe
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished)
+        {
+            let result = self.spelling_probe.take().unwrap().join();
+            // A transient timeout or background panic cannot prove CSC died.
+            if let Ok(Ok(ready)) = result {
+                self.spelling_ready = ready;
+            }
+        }
+        if !self.spelling_ready
+            || app.snapshot().dictation.busy
+            || Instant::now() < self.next_spelling_probe
+            || self.spelling_probe.is_some()
+        {
+            return;
+        }
+        self.next_spelling_probe = Instant::now() + Duration::from_millis(500);
+        let result = match self.owner.as_ref() {
+            Some(EngineOwner::Waiting(runtime)) => {
+                runtime.spawn_spelling_probe(Duration::from_millis(50))
+            }
+            Some(EngineOwner::Connected(session)) => {
+                session.spawn_spelling_probe(Duration::from_millis(50))
+            }
+            None => return,
+        };
+        self.spelling_probe = result.ok();
     }
 
     fn poll(&mut self, app: &mut Application) -> io::Result<LocalRuntimeStatus> {
@@ -447,6 +551,9 @@ impl LocalHost {
 
     fn shutdown(&mut self, app: &mut Application) -> io::Result<()> {
         self.input = None;
+        if let Some(probe) = self.spelling_probe.take() {
+            let _ = probe.join();
+        }
         if let Some(owner) = self.owner.as_mut() {
             match owner {
                 EngineOwner::Waiting(runtime) => runtime.shutdown()?,
@@ -455,5 +562,14 @@ impl LocalHost {
         }
         self.owner = None;
         Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LocalHost {
+    fn drop(&mut self) {
+        if let Some(probe) = self.spelling_probe.take() {
+            let _ = probe.join();
+        }
     }
 }

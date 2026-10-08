@@ -78,5 +78,9 @@ impl Drop for InputLease {
         // Still holding the lock: a new owner cannot publish before this removal.
         // If removal fails, socket closure still makes the addon fall back.
         let _ = fs::remove_file(&self.record);
+        // An unrelated fork may have inherited the same open file description.
+        // Closing our descriptor alone then leaves the lock active past this
+        // owner's withdrawal. Explicitly unlock only after removing the route.
+        unsafe { libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN) };
     }
 }

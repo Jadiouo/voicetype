@@ -1,4 +1,6 @@
 //! Shared deterministic text policy for the daemon and desktop vocabulary commands.
+pub mod spelling;
+pub mod spelling_policy;
 pub mod traditional;
 pub mod vocab;
 pub use traditional::Traditional;

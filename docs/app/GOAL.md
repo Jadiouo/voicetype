@@ -1,6 +1,6 @@
 # Goal: complete VoiceType for Linux and Windows
 
-Status: paused at the user's request on 2026-10-08. Resume only when requested.
+Status: active. The user explicitly resumed implementation on 2026-10-08.
 The full application remains incomplete; a settings preview is not completion.
 
 Deliver installable Linux `.deb` and Windows `.exe` applications with selectable

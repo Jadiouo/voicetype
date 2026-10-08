@@ -127,10 +127,12 @@ pub struct SessionManager {
     /// 最新的 session id。ASR 完成時用來判斷結果是否已過期。
     latest: Arc<AtomicU64>,
     work: Arc<AtomicUsize>,
+    desktop_assistant: Arc<Assistant>,
 }
 
 impl SessionManager {
     pub fn new(audio: Arc<dyn CaptureSource>, pipeline: Pipeline) -> Self {
+        let desktop_assistant = pipeline.assistant.clone();
         let (tx, rx) = mpsc::unbounded_channel();
         let latest = Arc::new(AtomicU64::new(0));
         let work = Arc::new(AtomicUsize::new(0));
@@ -144,7 +146,7 @@ impl SessionManager {
             latest.clone(),
             work.clone(),
         ));
-        Self { tx, latest, work }
+        Self { tx, latest, work, desktop_assistant }
     }
 }
 
@@ -156,6 +158,7 @@ impl Handler for SessionManager {
                     "desktop_protocol": 1, "request": request,
                     "capabilities": ["session_events", "suspend"],
                     "session_busy": self.work.load(Ordering::SeqCst) != 0,
+                    "spelling_status": self.desktop_assistant.desktop_spelling_status(),
                 }) });
                 return;
             }

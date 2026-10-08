@@ -19,6 +19,7 @@ pub mod review;
 pub mod runtime;
 pub mod setup;
 mod setup_worker;
+pub mod spelling_install;
 pub mod vocabulary;
 pub mod worker;
 pub use dictation::{
@@ -60,6 +61,7 @@ pub struct ProviderStatus {
 
 #[derive(Debug, Serialize)]
 pub struct Snapshot {
+    pub spelling_enabled: bool,
     pub dictation: DictationStatus,
     pub selected_provider: Provider,
     pub providers: Vec<ProviderStatus>,
@@ -92,8 +94,14 @@ pub enum AppError {
 struct Preferences {
     schema_version: u32,
     selected_provider: Provider,
+    #[serde(default = "default_spelling")]
+    spelling_enabled: bool,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn default_spelling() -> bool {
+    true
 }
 
 impl Default for Preferences {
@@ -101,6 +109,7 @@ impl Default for Preferences {
         Self {
             schema_version: 1,
             selected_provider: Provider::Local,
+            spelling_enabled: true,
             extra: Default::default(),
         }
     }
@@ -151,6 +160,7 @@ impl Application {
 
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
+            spelling_enabled: self.preferences.spelling_enabled,
             dictation: self.dictation.status(),
             selected_provider: self.preferences.selected_provider,
             providers: [Provider::Local, Provider::Google]
@@ -210,6 +220,19 @@ impl Application {
         }
         let mut next = self.preferences.clone();
         next.selected_provider = provider;
+        self.save_preferences(next)
+    }
+
+    pub fn set_spelling_enabled(&mut self, enabled: bool) -> Result<Snapshot, AppError> {
+        if self.dictation.busy() {
+            return Err(AppError::DictationBusy);
+        }
+        let mut next = self.preferences.clone();
+        next.spelling_enabled = enabled;
+        self.save_preferences(next)
+    }
+
+    fn save_preferences(&mut self, next: Preferences) -> Result<Snapshot, AppError> {
         let data = serde_json::to_vec_pretty(&next)?;
         let dir = self.path.parent().expect("config file has a parent");
         fs::create_dir_all(dir)?;
