@@ -1,0 +1,38 @@
+name: Windows TSF native probe
+
+on:
+  push:
+    branches: [main, feat/desktop-app, feat/windows-dictation-work]
+    paths: ["desktop/windows-tsf/**", ".github/workflows/windows-tsf-probe.yml"]
+  pull_request:
+    paths: ["desktop/windows-tsf/**", ".github/workflows/windows-tsf-probe.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  msctf:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build and exercise isolated Msctf probe
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/tsf-native'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          $env:TEMP = $scratch
+          $env:TMP = $scratch
+          cmake -S desktop/windows-tsf -B "$scratch/build" -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'TSF CMake configure failed' }
+          cmake --build "$scratch/build" --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'TSF MSVC build failed' }
+          ctest --test-dir "$scratch/build" -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'TSF native probe failed' }
+          $dll = Join-Path $scratch 'build/Release/voicetype_tsf_probe.dll'
+          if (-not (Test-Path $dll)) { throw 'TSF DLL missing after build' }
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          if ($bytes.Length -lt 4096 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw 'TSF DLL is not a nonempty PE image'
+          }
