@@ -278,6 +278,17 @@ int wmain(int argc, wchar_t **argv) {
         TF_IPPMF_FORPROCESS | TF_IPPMF_DISABLEPROFILE);
     report("DeactivateProfile FORPROCESS+DISABLEPROFILE", hr);
     if (hr != S_OK) code = 1;
+    ITfInputProcessorProfiles *languages = nullptr;
+    HRESULT query = profiles->QueryInterface(IID_ITfInputProcessorProfiles,
+        reinterpret_cast<void **>(&languages));
+    LANGID active_lang = 0;
+    GUID active_guid{};
+    if (query == S_OK)
+      query = languages->GetActiveLanguageProfile(CLSID_VoiceTypeSpeechProbe,
+                                                  &active_lang, &active_guid);
+    report("GetActiveLanguageProfile after deactivation (expect S_FALSE)", query);
+    if (query != S_FALSE) code = 1;
+    release(languages);
   }
   if (manager) manager->SetFocus(nullptr);
   if (context_pushed && doc) doc->Pop(TF_POPF_ALL);
@@ -289,20 +300,26 @@ int wmain(int argc, wchar_t **argv) {
                                      GUID_VoiceTypeSpeechProfile,
                                      TF_URP_LOCALPROCESS);
     report("UnregisterProfile LOCALPROCESS", hr);
-    if (hr != S_OK || !profile_absent(profiles, lang)) code = 1;
+    const bool absent = profile_absent(profiles, lang);
+    std::printf("post_cleanup profile_absent=%d\n", absent);
+    if (hr != S_OK || !absent) code = 1;
   }
   if (category_owned && categories) {
     hr = categories->UnregisterCategory(CLSID_VoiceTypeSpeechProbe,
         GUID_TFCAT_TIP_SPEECH, CLSID_VoiceTypeSpeechProbe);
     report("UnregisterCategory speech", hr);
-    if (hr != S_OK || !category_absent(categories)) code = 1;
+    const bool absent = category_absent(categories);
+    std::printf("post_cleanup category_absent=%d\n", absent);
+    if (hr != S_OK || !absent) code = 1;
   }
   release(categories); release(profiles);
   if (com_owned && !remove_own_com(dll)) {
     std::fputs("own HKCU COM cleanup failed or key changed\n", stderr);
     code = 1;
   }
-  if (!com_absent()) code = 1;
+  const bool com_clear = com_absent();
+  std::printf("post_cleanup com_absent=%d\n", com_clear);
+  if (!com_clear) code = 1;
   if (code == 0 &&
       (!saw_event(log_path, "UNPRESERVE") ||
        !saw_event(log_path, "UNADVISE_KEY") ||
