@@ -75,6 +75,7 @@ class SpeechProbe final : public ITfTextInputProcessorEx,
     if (!manager || manager_) return E_INVALIDARG;
     manager_ = manager; manager_->AddRef(); client_ = client;
     trace("ACTIVATE", S_OK, FALSE);
+    const char *stage = "thread-source";
     ITfSource *source = nullptr;
     HRESULT hr = manager_->QueryInterface(IID_ITfSource,
                                           reinterpret_cast<void **>(&source));
@@ -84,19 +85,24 @@ class SpeechProbe final : public ITfTextInputProcessorEx,
       source->Release();
     }
     if (hr == S_OK) {
+      stage = "keystroke-manager";
       hr = manager_->QueryInterface(IID_ITfKeystrokeMgr,
                                     reinterpret_cast<void **>(&keys_));
     }
     if (hr == S_OK) {
+      stage = "advise-nonforeground-key-sink";
       hr = keys_->AdviseKeyEventSink(client_, static_cast<ITfKeyEventSink *>(this), FALSE);
       key_advised_ = hr == S_OK;
     }
     if (hr == S_OK) {
+      stage = "preserve-ctrl-caps";
       hr = keys_->PreserveKey(client_, GUID_VoiceTypeCtrlCapsProbe,
                               &ctrl_caps, nullptr, 0);
       key_preserved_ = hr == S_OK;
     }
     if (hr != S_OK) {
+      std::fprintf(stderr, "TSF activation stage %s failed: 0x%08lx\n",
+                   stage, static_cast<unsigned long>(hr));
       trace(hr == TF_E_ALREADY_EXISTS ? "KEY_CONFLICT" : "ACTIVATE_FAIL", hr, FALSE);
       Deactivate();
       return hr;
