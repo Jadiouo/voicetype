@@ -7,12 +7,13 @@
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
   <script type="module" src="vocabulary.js"></script>
+  <script type="module" src="review.js"></script>
 </head>
 <body>
   <div class="app">
     <aside>
       <div class="brand"><span class="mark" aria-hidden="true">V</span><span>VoiceType<small>說話，成為文字。</small></span></div>
-      <nav aria-label="設定頁面"><a href="#recognition" aria-current="page">辨識方式</a><a href="#vocabulary">我的詞庫</a></nav>
+      <nav aria-label="設定頁面"><a href="#recognition" aria-current="page">辨識方式</a><a href="#vocabulary">我的詞庫</a><a href="#review">抽樣校對 <span id="review-count"></span></a></nav>
       <div class="aside-note">本機優先<br>你的詞彙，你來決定。</div>
       <span class="version" id="version">開發預覽</span>
     </aside>
@@ -99,7 +100,32 @@
         <button id="vocab-preview" type="button" disabled>預覽修正</button>
         <output id="vocab-preview-output" aria-live="polite"></output>
       </section>
-      <section class="shared"><h2>抽樣校對與自動錯字校正</h2><p>App 介面仍在整合；日常版本的設定與資料繼續保留。</p></section>
+      <section id="review" class="review" aria-labelledby="review-title">
+        <h2 id="review-title">抽樣校對</h2>
+        <p>偶爾留下一段，空閒時聽聽看。錄音與文字只存在這台電腦，7 天後清理；不會突然跳出視窗。</p>
+        <label class="review-opt-in"><input id="review-enabled" type="checkbox" disabled> 開啟本機抽樣校對</label>
+        <p id="review-policy">每天最多 5 段，從 8 秒以上的聽寫抽樣。預設關閉，不會額外開啟麥克風。</p>
+        <p>此處使用 App 的獨立校對資料；日常版本的抽樣設定繼續保留。Google 與 Windows 語音接通後才會開始採集該路線的樣本。</p>
+        <button id="review-reload" type="button">重新載入校對</button>
+        <p id="review-status" role="status" aria-live="polite">正在讀取校對…</p>
+        <div id="review-error" class="error" role="alert" hidden></div>
+        <div id="review-list"></div>
+        <div id="review-detail" hidden>
+          <h3 id="review-selected"></h3>
+          <button id="review-audio-load" type="button">載入這段音訊</button>
+          <audio id="review-audio" controls preload="none" hidden></audio>
+          <p>辨識原文</p><pre id="review-asr"></pre>
+          <p>送出的文字</p><pre id="review-output"></pre>
+          <form id="review-form">
+            <label for="review-corrected">正確的完整句子</label>
+            <textarea id="review-corrected" rows="3" maxlength="8192" required spellcheck="false"></textarea>
+            <p>直接儲存可確認原文，或修改後儲存。整句校對不會自動加入永久詞庫。</p>
+            <div class="model-actions"><button id="review-save" type="submit">儲存校對</button><button id="review-delete" type="button">刪除這段</button></div>
+          </form>
+          <p id="review-rule"></p><button id="review-promote" type="button" hidden>加入詞庫</button>
+        </div>
+      </section>
+      <section class="shared"><h2>自動錯字校正</h2><p>App 校正器仍在整合；日常版本的設定與資料繼續保留。</p></section>
       <footer id="tray-note">關閉視窗會結束預覽 App。</footer>
     </main>
   </div>

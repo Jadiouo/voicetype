@@ -20,6 +20,7 @@ assert os.environ['XDG_CONFIG_HOME'].startswith(os.environ['HOME'].rsplit('/', 1
 open(os.path.join(os.environ['HOME'], 'endpoint'), 'w').write(os.environ['VOICETYPE_SOCKET'])
 open(os.path.join(os.environ['HOME'], 'pid'), 'w').write(str(os.getpid()))
 open(os.path.join(os.environ['HOME'], 'vocab-path'), 'w').write(os.environ.get('VOICETYPE_VOCAB', ''))
+open(os.path.join(os.environ['HOME'], 'review-paths'), 'w').write(json.dumps([os.environ.get('VOICETYPE_REVIEW_CONFIG'), os.environ.get('VOICETYPE_REVIEW_ROOT')]))
 with socket.socket(socket.AF_UNIX) as listener:
     listener.bind(os.environ['VOICETYPE_SOCKET'])
     listener.listen(1)
@@ -59,6 +60,8 @@ while True: time.sleep(1)
         vad_model: vad,
         profile: root.path().join("app-data"),
         vocabulary: root.path().join("vocab.toml"),
+        review_config: root.path().join("review.json"),
+        review_root: root.path().join("review"),
     };
     (root, paths)
 }
@@ -297,6 +300,8 @@ fn runtime_parent_helper() {
             vad_model: paths[2].clone(),
             profile: paths[3].clone(),
             vocabulary: paths[3].join("vocab.toml"),
+            review_config: paths[3].join("review.json"),
+            review_root: paths[3].join("review"),
         },
         Duration::from_secs(2),
     )
@@ -705,4 +710,24 @@ fn application_exit_without_destructors_terminates_the_owned_engine() {
         .starts_with("voicetype-app-"));
     fs::remove_dir_all(directory).unwrap();
     assert!(exited, "engine outlived its application owner");
+}
+
+#[test]
+fn owned_engine_receives_the_same_review_settings_and_store_as_the_ui() {
+    let (_root, paths) = fixture();
+    let mut runtime = OwnedLocal::start(&paths, Duration::from_secs(2)).unwrap();
+    let received: Vec<String> =
+        serde_json::from_slice(&fs::read(paths.profile.join("home/review-paths")).unwrap())
+            .unwrap();
+    assert_eq!(
+        received,
+        vec![
+            paths.review_config.to_str().unwrap(),
+            paths.review_root.to_str().unwrap()
+        ]
+    );
+    assert!(!paths.review_config.exists());
+    assert!(!paths.review_root.exists());
+    assert!(!paths.profile.join("home/capture").exists());
+    runtime.shutdown().unwrap();
 }

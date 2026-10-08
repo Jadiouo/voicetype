@@ -14,6 +14,7 @@ pub mod local;
 pub mod local_install;
 #[cfg(unix)]
 mod providers;
+pub mod review;
 #[cfg(target_os = "linux")]
 pub mod runtime;
 pub mod setup;

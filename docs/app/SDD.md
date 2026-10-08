@@ -122,8 +122,12 @@ explain that the current recording must finish or be cancelled first.
 The preview now has native vocabulary commands and a shared `voicetype-text` policy
 used by its editor/preview and local daemon. The preview keeps `vocab.toml` beside
 `desktop.json`; explicit one-time import copies the legacy file without changing
-it. Local receives that exact path and reloads at each output. Review/CSC and
-Google integration remain pending. Windows packages source-built OpenCC for the
+it. Local receives that exact path and reloads at each output. Native review
+commands now use `review.json` and `review/` in that same app profile, with explicit
+opt-in, selected WAV playback, revision-bound correction/deletion and separate
+rule promotion. The app-owned Linux collector receives those exact paths;
+background work updates the tray count and prunes expired samples without
+occupying the dictation worker. CSC and Google integration remain pending. Windows packages source-built OpenCC for the
 same names policy; this does not imply Windows speech is ready.
 
 Vocabulary offers explicit wrong/right examples such as `geeho → GitHub`, while

@@ -96,3 +96,8 @@ $('#vocab-preview').addEventListener('click', () => run(async () => {
   });
 }, '已預覽儲存的詞庫替換；不包含語音辨識、繁體轉換或模型校正。'));
 reload();
+
+window.addEventListener('vocabulary-changed', () => {
+  // Preserve any in-progress form; explicit reload obtains the new revision.
+  $('#vocab-status').textContent = '校對已更新詞庫，請重新載入詞庫以查看新規則。';
+});

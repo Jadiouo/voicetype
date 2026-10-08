@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod review;
+
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
@@ -26,6 +28,7 @@ struct DesktopState {
     runtime_resources: PathBuf,
     config_dir: PathBuf,
     legacy_vocabulary: PathBuf,
+    review_monitor: std::sync::Mutex<Option<review::Monitor>>,
 }
 
 // These commands run independently of the resident dictation queue. File
@@ -364,6 +367,7 @@ fn main() {
                 )?,
                 #[cfg(target_os = "linux")]
                 runtime_resources: app.path().resource_dir()?.join("runtime"),
+                review_monitor: std::sync::Mutex::new(None),
                 config_dir: config_dir.clone(),
                 legacy_vocabulary: std::env::var_os("VOICETYPE_VOCAB")
                     .map(PathBuf::from)
@@ -374,12 +378,19 @@ fn main() {
             });
             let show = MenuItem::with_id(app, "show", "開啟 VoiceType", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "結束預覽 App", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let reviews = MenuItem::with_id(app, "review", "抽樣校對", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &reviews, &quit])?;
             let mut tray = TrayIconBuilder::with_id("main-tray")
                 .tooltip("VoiceType Preview · 設定")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_settings(app),
+                    "review" => {
+                        show_settings(app);
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.eval("window.dispatchEvent(new Event('review-open'))");
+                        }
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 });
@@ -393,6 +404,8 @@ fn main() {
                     .store(true, Ordering::Relaxed),
                 Err(error) => eprintln!("Tray unavailable: {error}"),
             }
+            *app.state::<DesktopState>().review_monitor.lock().unwrap() =
+                Some(review::monitor(app.handle().clone(), reviews)?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -412,12 +425,21 @@ fn main() {
             configure_input_module,
             get_vocabulary,
             edit_vocabulary,
-            preview_vocabulary
+            preview_vocabulary,
+            review::get_review,
+            review::set_review_enabled,
+            review::edit_review,
+            review::get_review_audio
         ])
         .build(tauri::generate_context!())
         .expect("VoiceType could not start")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<DesktopState>()
+                    .review_monitor
+                    .lock()
+                    .unwrap()
+                    .take();
                 // Final exit event: let the resident owner reap before the
                 // process ends. Parent-death cleanup also covers abrupt exits.
                 if app.state::<DesktopState>().worker.shutdown().is_err() {

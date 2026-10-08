@@ -93,6 +93,8 @@ impl LocalInstaller {
             vad_model: installed_models[1].join("silero-v5.0.onnx"),
             profile: self.root.join("local-profile"),
             vocabulary: self.root.join("vocab.toml"),
+            review_config: self.root.join("review.json"),
+            review_root: self.root.join("review"),
         })
     }
 }

@@ -32,6 +32,7 @@ jobs:
         # OS microphone/native model are fixtures. No microphone, model download,
         # account login, GPU inference or production data participates.
         run: |
+          cargo +stable test --locked review::tests
           cargo +stable test --locked output::tests
           cargo +stable test --locked desktop_ipc_tests
           cargo +stable test --locked protocol::tests

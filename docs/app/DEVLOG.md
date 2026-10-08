@@ -688,3 +688,30 @@ microphone/login/target-app acceptance. M2–M4 remain open in SDD.
 - 本機引擎明確接收 App 的 `vocab.toml` 路徑，保留每句自動更新機制；編輯操作不占用聽寫 worker。以實際 output 邊界驗證 `GEEHO → GitHub` 與完整片語 `把修改 coming → 把修改 commit`，並保留正常 `coming soon`；還原同樣不需重啟引擎。
 - TDD RED→GREEN 已記錄：缺少詞庫公開介面、缺少刪除／名字／匯入介面、引擎缺少明確共用詞庫路徑。初步 core、共用文字規則、實際 output 測試通過；Windows DLL 建置、兩平台安裝後 GUI 與最終打包證據仍待本輪 CI 核對。
 - 這仍不是完整 App 驗收：抽樣校對與 CSC 尚未接入新 GUI，Google／Windows 語音介面與真人錄音、品質及延遲驗收仍待完成。日常安裝未切換，未讀取私人錄音、未執行 GPU 工作。
+
+
+## 2026-10-08：詞庫打包驗證完成，接續抽樣校對
+
+詞庫程式來源 `c5cd28f` 的 [Desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37757950569)
+與 [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37757950563) 均成功。
+兩平台各有 16 項已安裝 UI 檢查；Windows 安裝到含中文字的路徑，實際載入
+OpenCC、讀取 s2tw 字典並保留中英與名字。此輪發現並修正 Windows 檔案 stamp
+比較的移動錯誤，以及 OpenCC 窄字元入口不能正確處理中文路徑的問題，改走官方寬字元入口。
+
+下載包已核對來源、大小及 SHA-256，並查看 Windows 詞庫截圖；Linux 解包後
+再檢查 CPU runtime、Fcitx 模組、授權與 catalog bytes。這份證據只對應 `c5cd28f`，
+不涵蓋後續校對修改。
+
+| `c5cd28f` 安裝包 | bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux `.deb` | 18861322 | `45f8f215e363e42c0f17e98ae179b85a51fcbcc4fefd7ba72130490f4cb31a15` |
+| Windows NSIS `.exe` | 4313255 | `e2260bb0c319c4a185206765c121adc54e81ccba760e5791805a375dcdd4168e` |
+
+接續同一個已確認的 C/B 邊界實作抽樣校對：
+
+- 新增 App 校對頁：明確開啟／關閉、待校對數、選取音訊、確認或修正整句、刪除及獨立的「加入詞庫」。資料只放在 App profile，不讀取日常安裝的私人樣本；不會自行彈窗。
+- 本機引擎明確取得 UI 的 review config/root，仍沿用送出結果後的非阻塞抽樣佇列、每天最多 5 段、8–61 秒、7 天保留與取消檢查。UI 操作不占用聽寫 worker；背景只更新待校對數與清理期限。
+- 校對保存 revision、跨程序鎖與未知欄位。播放只接受指定記錄的未到期 16 kHz mono PCM WAV，不接受 WebView 任意路徑。新增損壞／未完成錄音的到期清理。
+- 整句修正不自動學成永久規則。短詞建議保守判斷單一差異，正常英文需要上下文；不得改動其他已確認的用法。加入詞庫先保存可重試意圖，失敗不丟校對結果，重試不重複新增規則。
+- 本機離線驗證：59 個 core 測試、28 個共用文字測試、9 個 collector 測試通過；包含實際 collector thread 與 App 儲存／播放命令的合成音訊互通。Clippy 只有既有 worker enum 大小警告。TDD 缺少公開 API／明確路徑與損壞樣本未清理的 RED→GREEN 記於 TDD 文件。
+- 校對頁的 Linux／Windows 已安裝 GUI 與新版包驗證仍待 CI；未做真人錄音、品質或延遲比較，不宣稱縮短推論時間。CSC、Google／Windows 語音及完整驗收繼續列為未完成，PR #2 保持 draft。

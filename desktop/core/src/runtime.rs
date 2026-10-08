@@ -23,6 +23,8 @@ pub struct LocalRuntimePaths {
     pub profile: PathBuf,
     /// Shared with the UI and future providers; never inherited from ambient env.
     pub vocabulary: PathBuf,
+    pub review_config: PathBuf,
+    pub review_root: PathBuf,
 }
 
 pub struct OwnedLocal {
@@ -48,6 +50,8 @@ impl OwnedLocal {
             &paths.vad_model,
             &paths.profile,
             &paths.vocabulary,
+            &paths.review_config,
+            &paths.review_root,
         ]
         .iter()
         .any(|path| !path.is_absolute())
@@ -107,6 +111,8 @@ impl OwnedLocal {
             .env("VOICETYPE_NANO_VAD_MODEL", &paths.vad_model)
             .env("VOICETYPE_SOCKET", &endpoint)
             .env("VOICETYPE_VOCAB", &paths.vocabulary)
+            .env("VOICETYPE_REVIEW_CONFIG", &paths.review_config)
+            .env("VOICETYPE_REVIEW_ROOT", &paths.review_root)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

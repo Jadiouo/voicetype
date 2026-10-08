@@ -72,6 +72,17 @@ impl Collector {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/share"))
             .join("voicetype/review");
+        // The desktop owner provides shared, absolute locations. Legacy
+        // service defaults remain unchanged when no explicit path is supplied.
+        let config_path = std::env::var_os("VOICETYPE_REVIEW_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or(config_path);
+        let root = std::env::var_os("VOICETYPE_REVIEW_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or(root);
+        if !config_path.is_absolute() || !root.is_absolute() {
+            return None;
+        }
         Self::with_paths(config_path, root)
     }
 
@@ -449,6 +460,70 @@ mod tests {
             enabled: true,
             daily_limit: 5,
         }
+    }
+
+    #[test]
+    fn app_settings_collector_playback_correction_and_disable_share_one_store() {
+        use voicetype_app_core::review::ReviewStore;
+        let home = directory();
+        let config = home.join("review.json");
+        let root = home.join("review");
+        let ui = ReviewStore::open(config.clone(), root.clone()).unwrap();
+        let initial = ui.settings().unwrap();
+        assert!(!initial.enabled);
+        let enabled = ui.set_enabled(&initial.revision, true).unwrap();
+        let collector = Collector::with_paths(config, root.clone()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while !collector.gate.available.load(Ordering::Relaxed) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "collector ignored UI setting"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut value = sample();
+        value.output_text = "請 push 到 geeho。".into();
+        collector.submit(value);
+        let item = loop {
+            if let Ok(mut items) = ui.list(now()) {
+                if let Some(item) = items.pop() {
+                    break item;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sample not available to UI"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(item.duration_ms, 8000);
+        assert_eq!(
+            ui.audio(&item.id, &item.revision, now()).unwrap().len(),
+            44 + 8000 * 32
+        );
+        let corrected = ui
+            .review(
+                &item.id,
+                &item.revision,
+                "請 push 到 GitHub。".into(),
+                now(),
+            )
+            .unwrap();
+        assert_eq!(corrected.status, "corrected");
+        ui.set_enabled(&enabled.revision, false).unwrap();
+        collector.submit(sample());
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while collector.gate.available.load(Ordering::Relaxed) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "collector ignored disabling"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Existing reviewed audio remains available until explicit deletion/expiry.
+        assert_eq!(ui.list(now()).unwrap().len(), 1);
+        drop(collector);
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

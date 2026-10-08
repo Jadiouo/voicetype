@@ -17,6 +17,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import wave
 
 
 def main():
@@ -200,6 +201,64 @@ def main():
                 eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))
                 js("document.querySelector('#vocabulary').scrollIntoView()")
                 (output / "vocabulary.png").write_bytes(base64.b64decode(request("GET", f"/session/{session}/screenshot")))
+                # Synthetic review data exercises the actual native commands,
+                # WAV decoder and shared vocabulary. No microphone is opened.
+                eventually(lambda: js("return !document.querySelector('#review-enabled').disabled"))
+                assert not js("return document.querySelector('#review-enabled').checked")
+                review_config = Path(profile) / "review.json"
+                review_root = Path(profile) / "review"
+                assert not review_config.exists() and not review_root.exists()
+                click("#review-enabled")
+                eventually(lambda: review_config.exists() and json.loads(review_config.read_text())["enabled"])
+                assert json.loads(review_config.read_text())["daily_limit"] == 5
+                timestamp = int(time.time())
+                review_id = f"r-{timestamp}-1-1"
+                record = {"version": 1, "id": review_id, "created_at": timestamp,
+                          "duration_ms": 9000, "sample_rate": 16000, "status": "pending",
+                          "asr_text": "請用 RUSTT 編譯，保留 GitHub。",
+                          "output_text": "請用 RUSTT 編譯，保留 GitHub。", "corrected_text": None,
+                          "future": "preserved"}
+                sample_dir = review_root / review_id
+                sample_dir.mkdir(parents=True)
+                record_path = sample_dir / "record.json"
+                record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                with wave.open(str(sample_dir / "audio.wav"), "wb") as wav:
+                    wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(16000)
+                    wav.writeframes(b"\0\0" * 144000)
+                expired = review_root / "r-1-1-1"
+                expired.mkdir()
+                (expired / "record.json").write_text(json.dumps({**record, "id": "r-1-1-1", "created_at": timestamp - 7 * 86400}), encoding="utf-8")
+                click("#review-reload")
+                eventually(lambda: js("return document.querySelector('#review-count').textContent === '(1)'"))
+                assert not expired.exists()
+                click("#review-list button")
+                click("#review-audio-load")
+                eventually(lambda: js("return document.querySelector('#review-audio').readyState >= 1"))
+                assert js("return document.querySelector('#review-audio').duration") == 9
+                assert js("return document.querySelector('#review-audio').paused"), "Audio started without Play"
+                click("#review-save")
+                eventually(lambda: json.loads(record_path.read_text(encoding="utf-8"))["status"] == "correct")
+                eventually(lambda: js("return !document.querySelector('#review-save').disabled"))
+                js("document.querySelector('#review-corrected').value = '請用 Rust 編譯，保留 GitHub。'; document.querySelector('#review-corrected').dispatchEvent(new Event('input'))")
+                click("#review-save")
+                eventually(lambda: js("return !document.querySelector('#review-promote').hidden"))
+                assert "RUSTT" not in (Path(profile) / "vocab.toml").read_text(encoding="utf-8")
+                click("#review-promote")
+                eventually(lambda: js("return document.querySelector('#review-status').textContent.includes('規則已加入詞庫')"))
+                assert "RUSTT" in (Path(profile) / "vocab.toml").read_text(encoding="utf-8")
+                saved_review = json.loads(record_path.read_text(encoding="utf-8"))
+                assert saved_review["future"] == "preserved" and saved_review["promotion"]["state"] == "applied"
+                saved_review["future"] = "external edit"
+                record_path.write_text(json.dumps(saved_review), encoding="utf-8")
+                js("document.querySelector('#review-corrected').value = 'unsaved change'; document.querySelector('#review-corrected').dispatchEvent(new Event('input'))")
+                click("#review-save")
+                eventually(lambda: js("return !document.querySelector('#review-error').hidden"))
+                assert js("return document.querySelector('#review-corrected').value") == "unsaved change"
+                assert json.loads(record_path.read_text(encoding="utf-8"))["corrected_text"] == "請用 Rust 編譯，保留 GitHub。"
+                click("#review-reload")
+                eventually(lambda: js("return document.querySelector('#review-status').textContent === '校對資料已載入。'"))
+                js("document.querySelector('#review').scrollIntoView()")
+                (output / "review.png").write_bytes(base64.b64decode(request("GET", f"/session/{session}/screenshot")))
                 click("#provider-google")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('偏好已儲存')"))
                 assert js("return document.querySelector('#provider-google').checked")
@@ -212,6 +271,14 @@ def main():
                 assert js("return document.querySelector('#provider-google').checked"), "Choice did not survive restart"
 
                 eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))
+
+                eventually(lambda: js("return document.querySelector('#review-enabled').checked"))
+                click("#review-list button")
+                assert js("return document.querySelector('#review-corrected').value") == "請用 Rust 編譯，保留 GitHub。"
+                click("#review-delete")
+                eventually(lambda: not sample_dir.exists())
+                click("#review-enabled")
+                eventually(lambda: json.loads(review_config.read_text())["enabled"] is False)
 
                 # Corruption is a public persisted-config input. The UI must show
                 # an error and disable writes instead of silently resetting it.
@@ -232,7 +299,10 @@ def main():
                                "provider-status-without-recording", "recovery-empty-state",
                                "model-setup-explicit-only", "runtime-setup-requires-models", "input-requires-runtime", "vocabulary-explicit-import",
                                "vocabulary-save-preview", "vocabulary-conflict-preserves-edit",
-                               "vocabulary-restore-restart", "vocabulary-protected-names"],
+                               "vocabulary-restore-restart", "vocabulary-protected-names",
+                               "review-explicit-opt-in", "review-expiry", "review-wav-playback-ready",
+                               "review-confirm-correct-promote", "review-conflict-preserves-edit",
+                               "review-restart-delete-disable"],
                     "speech_adapters_tested": False,
                     "fcitx_install_restore_tested": sys.platform == "linux",
                 }, indent=2) + "\n", encoding="utf-8")

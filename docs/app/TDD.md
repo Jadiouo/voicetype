@@ -83,3 +83,18 @@ Windows or packaged-app performance results.
 - Development preview clearly states which adapters are not connected.
 - Production release stays blocked until every required platform row has evidence;
   an unavailable Windows desktop is recorded as missing evidence, never as a pass.
+
+## Shared review continuation (2026-10-08)
+
+C/B RED evidence: missing ReviewStore/settings/record/audio/promote interfaces,
+missing explicit review paths at the owned engine boundary, and a damaged expired
+record surviving cleanup. GREEN: public commands preserve revisions/unknown
+fields, playback validates the selected bounded WAV, standalone confirmation does
+not add a rule, interrupted promotion is retryable/idempotent, ambiguous English
+retains context, and another confirmed usage prevents broad replacement.
+A real collector thread reads settings written by the app, produces a synthetic
+WAV consumed by the app command, and observes disabling before the next write.
+Existing quota/restart/cancellation/queue tests remain in the same CI command.
+Installed UI checks exercise opt-in, WAV metadata decoding, expiry, correction,
+explicit promotion, stale edits, restart, delete and disable on each platform.
+These fixture checks do not replace live speech acceptance.

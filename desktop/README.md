@@ -4,7 +4,7 @@ This branch starts the Linux/Windows application described in
 [SDD](../docs/app/SDD.md) and [TDD](../docs/app/TDD.md).
 
 **Linux now has an explicit Fcitx-to-app local dictation path. Google and Windows
-speech integration, shared vocabulary/review/CSC and live acceptance remain
+speech integration, automatic spelling correction and live acceptance remain
 unfinished.** Keep the existing installation available during preview testing.
 
 Model download/check/cancel is available in the UI. Linux installers now carry a
@@ -27,8 +27,8 @@ pending result ends; no second hotkey owner is created. Closing/unloading the ap
 withdraws the private lease and returns to the original service. A crashed or
 unresponsive app also falls back; a clean account without a legacy daemon simply
 has no dictation until the app is enabled again. Input setup is explicit on each
-app run. This currently uses an isolated app data profile, so existing vocabulary
-and spelling settings are not yet shared with app dictation.
+app run. App vocabulary and sampled review use their shared settings described
+below. The legacy spelling service is not yet connected to this profile.
 
 "Check services" sends a read-only ping to an existing Linux local engine and
 distinguishes response, missing service, timeout and incompatible reply. It does
@@ -38,8 +38,8 @@ delivery. Native Fcitx/worker integration runs against a fixture capture/model;
 these checks do not establish live recognition quality or end-user latency.
 
 The preview has its own application ID and settings directory:
-`io.github.jadiouo.voicetype.preview`. It never imports or changes the existing
-`voicetype` vocabulary/learning settings. Only the explicit module installer changes
+`io.github.jadiouo.voicetype.preview`. It never changes the existing
+`voicetype` vocabulary/learning settings; vocabulary import requires an explicit action. Only the explicit module installer changes
 the Fcitx addon registration, with rollback. Closing its window exits the preview; a desktop tray entry
 also opens settings where the desktop supports it. No autostart is installed.
 
@@ -118,9 +118,31 @@ silently overwriting another editor; saves keep one `.bak` version. TOML comment
 and unknown fields are preserved. Use a complete phrase for ambiguous English
 such as `coming`; never assume every occurrence means `commit`.
 
-Windows builds first run `python ../scripts/build-desktop-opencc.py target/opencc
---stage-tests target/debug/deps` from `desktop/`. This builds the pinned native
+Windows builds first run `python ../scripts/build-desktop-opencc.py target/opencc --stage-tests target/debug/deps` from `desktop/`. This builds the pinned native
 converter and dictionaries, stages the actual Rust test dependency, and supplies
 installer resources. It does not install or start an input service. Linux uses
 its declared system OpenCC dependency. Missing native conversion is an error,
 not permission to discard protected names.
+
+### Sampled review
+
+Open **抽樣校對** and enable sampling explicitly. App-owned local dictation uses
+`review.json` and `review/` beside `desktop.json`, separate from the daily install.
+Default: off, at most five samples per local day, only 8–61 second recordings,
+seven-day retention. Sampling never opens the microphone independently; the
+existing collector queues a selected sample only after queuing its final result.
+Disabling is rechecked before disk writes. The tray shows the pending count and
+opens this page; it never opens a review popup on its own.
+
+Select a sample, load its WAV, then play it with the audio controls. Confirm or
+correct the full sentence and save. **加入詞庫** is a separate explicit action:
+only a conservative single short replacement is offered, ambiguous words keep
+context, and rules affecting another confirmed use are rejected. Failed promotion
+keeps a retryable intent; repeated retries do not duplicate rules. Concurrent
+changes require reload and preserve unsaved edits. Delete removes both text and
+audio. Expiry also cleans damaged/abandoned recordings; the app must be running
+(or subsequently reopened) for cleanup to execute.
+
+Google and Windows speech collection remains unavailable until those adapters
+are connected. The shared review commands/editor work on both platforms; fixture
+WAV tests are not evidence of live microphone or recognition quality.
