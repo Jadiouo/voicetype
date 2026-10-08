@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "downloads": [
+    {
+      "manifest": "nano-models.json",
+      "format": "tar.bz2",
+      "strip_prefix": "sherpa-onnx-funasr-nano-int8-2025-12-30",
+      "bytes": 841730611,
+      "sha256": "eb43d7ccc2e86b243f6a03b7df361033dda66db9523d1a92bf6aca2b50c9476b"
+    },
+    {
+      "manifest": "silero-vad.json",
+      "format": "file",
+      "bytes": 2313101,
+      "sha256": "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
+    }
+  ]
+}

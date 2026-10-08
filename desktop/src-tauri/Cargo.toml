@@ -1,0 +1,21 @@
+[package]
+name = "voicetype-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "VoiceType desktop development preview"
+authors = ["VoiceType contributors"]
+homepage = "https://github.com/Jadiouo/voicetype"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+serde_json.workspace = true
+sha2 = "0.10.9"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+voicetype-app-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true

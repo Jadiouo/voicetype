@@ -14,13 +14,29 @@ if(TARGET Fcitx5::Module::Notifications)
 endif()
 add_test(NAME lifecycle COMMAND test_lifecycle)
 
+add_executable(test_input_handoff test_input_handoff.cpp ../src/voicetype.cpp)
+target_link_libraries(test_input_handoff PRIVATE voicetype-ipc voicetype-capslock Fcitx5::Core)
+if(TARGET Fcitx5::Module::Notifications)
+    target_link_libraries(test_input_handoff PRIVATE Fcitx5::Module::Notifications)
+    target_compile_definitions(test_input_handoff PRIVATE VOICETYPE_HAVE_NOTIFICATIONS=1)
+endif()
+add_test(NAME input_handoff COMMAND test_input_handoff)
+set_tests_properties(input_handoff PROPERTIES TIMEOUT 10)
+add_test(NAME input_handshake_timeout COMMAND test_input_handoff handshake_timeout)
+set_tests_properties(input_handshake_timeout PROPERTIES TIMEOUT 10)
+add_test(NAME input_pid_mismatch COMMAND test_input_handoff pid_mismatch)
+set_tests_properties(input_pid_mismatch PROPERTIES TIMEOUT 10)
+
+add_executable(test_app_frontend test_app_frontend.cpp)
+target_link_libraries(test_app_frontend PRIVATE Fcitx5::Core Fcitx5::Utils)
+
 add_executable(test_delivery test_delivery.cpp ../src/voicetype.cpp)
 target_link_libraries(test_delivery PRIVATE voicetype-ipc voicetype-capslock Fcitx5::Core)
 if(TARGET Fcitx5::Module::Notifications)
     target_link_libraries(test_delivery PRIVATE Fcitx5::Module::Notifications)
     target_compile_definitions(test_delivery PRIVATE VOICETYPE_HAVE_NOTIFICATIONS=1)
 endif()
-foreach(scenario same_context duplicate old_session unfocused_start focus_out focus_return focus_recording
+foreach(scenario app_ack app_preedit_focus_return app_wrong_context app_focus_return app_groupless_destroy_result same_context duplicate old_session unfocused_start focus_out focus_return focus_recording
                  reset reset_recording sensitive_return sensitive_recording password_return
                  cancel_processing cancel_recording cancel_destroy disconnect_processing
                  disconnect_recording disconnect_destroy error_result error_destroy_result

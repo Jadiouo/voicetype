@@ -1,0 +1,59 @@
+name: Local engine protocol contract
+on:
+  push:
+    branches: [main, feat/desktop-app]
+    paths: ["voicetyped/**", "desktop/core/**", "desktop/text/**", "voicetype-fcitx5/**", "scripts/voicetype_csc.py", "eval/test_csc_*.py", ".github/workflows/engine-contract.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: engine-contract-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: voicetyped
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: CPU build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libopencc-dev opencc
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          workspaces: voicetyped
+      - name: Public IPC lifecycle and affected transport/capture contracts
+        env:
+          # Learning may request an OS notice; never reach a real desktop bus.
+          DBUS_SESSION_BUS_ADDRESS: unix:path=/nonexistent-voicetype-test-bus
+        # OS microphone/native model are fixtures. No microphone, model download,
+        # account login, GPU inference or production data participates.
+        run: |
+          cargo +stable test --locked review::tests
+          cargo +stable test --locked output::tests
+          cargo +stable test --locked desktop_ipc_tests
+          cargo +stable test --locked protocol::tests
+          cargo +stable test --locked ipc::tests
+          cargo +stable test --locked audio::capture::tests
+          cargo +stable test --locked csc::tests
+          python3 ../eval/test_csc_stdio.py
+          python3 ../eval/test_csc_server.py
+
+  fcitx-delivery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Fcitx development prerequisites
+        run: sudo apt-get update && sudo apt-get install -y extra-cmake-modules libfcitx5core-dev libfcitx5utils-dev
+      - name: Build isolated input-context harness
+        # This job tests delivery, not X11 Caps Lock restoration. Nothing is
+        # installed or connected to a live user's display, bus or microphone.
+        run: |
+          cmake -S voicetype-fcitx5 -B build-fcitx-contract -DFCITX_INSTALL_USE_FCITX_SYS_PATHS=ON -DVOICETYPE_X11_CAPS_RESTORE=OFF
+          cmake --build build-fcitx-contract --target test_delivery test_input_handoff -j 2
+      - name: Target-bound and acknowledged delivery
+        run: ctest --test-dir build-fcitx-contract -R '^(delivery_|input_)' --output-on-failure -j 2

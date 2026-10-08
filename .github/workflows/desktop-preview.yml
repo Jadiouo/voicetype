@@ -1,0 +1,168 @@
+name: Desktop preview
+
+on:
+  push:
+    branches: [main, feat/desktop-app]
+    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "scripts/build-desktop-*", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".github/workflows/desktop-preview.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundle: deb
+          - os: windows-2022
+            bundle: nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      CARGO_BUILD_JOBS: 2
+      TMPDIR: ${{ github.workspace }}/desktop/target/scratch
+      TMP: ${{ github.workspace }}/desktop/target/scratch
+      TEMP: ${{ github.workspace }}/desktop/target/scratch
+      PIP_CACHE_DIR: ${{ github.workspace }}/desktop/target/pip-cache
+      OMP_NUM_THREADS: 2
+      OPENBLAS_NUM_THREADS: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare project scratch
+        run: python -c "from pathlib import Path; Path('target/scratch').mkdir(parents=True, exist_ok=True)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Rust stable
+        run: rustup update stable --no-self-update
+      - name: Linux build and desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11 fonts-noto-cjk libasound2-dev libopencc-dev cmake ninja-build extra-cmake-modules libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev fcitx5-modules-dev libxcb-xkb-dev libxcb-ewmh-dev fcitx5
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: desktop
+      - name: Discard restored installer and UI evidence outputs
+        run: python tests/clean_build_outputs.py
+      - name: Install locked build tools
+        run: npm ci --ignore-scripts
+      - name: Build pinned Windows OpenCC and dictionaries
+        if: runner.os == 'Windows'
+        run: python ../scripts/build-desktop-opencc.py target/opencc --stage-tests target/debug/deps
+      - name: Build pinned CPU spelling bundle and notices
+        run: |
+          python -m pip install -r ../config/csc-build-requirements.txt
+          python tests/spelling_build_test.py
+          python ../scripts/build-desktop-spelling.py target/spelling --cache target/csc-build-cache
+          cargo +stable test -p voicetype-app-core --test spelling_bundle --locked -- --ignored --nocapture
+      - name: Public application command tests
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
+      - name: Build pinned Linux CPU runtime and native notices
+        if: runner.os == 'Linux'
+        run: |
+          python3 tests/native_build_test.py
+          python3 ../scripts/build-desktop-native.py --cache ../private/native-source-cache --output ../private/release-native --jobs 2
+          bash ../scripts/build-desktop-runtime.sh ../private/release-native target/runtime --source-built
+          python3 ../scripts/build-desktop-input.py target/input
+          cmake -S ../voicetype-fcitx5 -B target/input-tests -DFCITX_INSTALL_USE_FCITX_SYS_PATHS=ON
+          cmake --build target/input-tests --target test_app_frontend -j 2
+          VOICETYPE_TEST_FCITX="$PWD/target/input-tests/tests/test_app_frontend" VOICETYPE_TEST_INPUT_BUNDLE="$PWD/target/input" cargo test -p voicetype-app-core --test local_runtime installed_fcitx --locked -- --ignored
+      - name: Catalog locked Rust graph and native notices
+        shell: bash
+        run: |
+          python tests/rust_notices_test.py
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-unknown-linux-gnu --component runtime=target/runtime --component input=target/input --component spelling=target/spelling
+          else
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-pc-windows-msvc --component opencc=target/opencc --component spelling=target/spelling
+          fi
+      - name: Build preview installer
+        run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
+      - name: Inspect and install preview (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p target/inspection
+          dpkg-deb --info target/release/bundle/deb/*.deb
+          dpkg-deb --extract target/release/bundle/deb/*.deb target/inspection
+          test -s target/inspection/usr/bin/voicetype-desktop
+          test -s "target/inspection/usr/share/applications/VoiceType Preview.desktop"
+          python3 tests/installed_runtime.py target/inspection target/runtime/manifest.json
+          python3 tests/installed_input.py target/inspection target/input/manifest.json
+          python3 tests/installed_spelling.py target/inspection target/spelling/manifest.json
+          python3 tests/installed_rust_notices.py target/inspection target/rust-notices/manifest.json
+          sudo dpkg --install target/release/bundle/deb/*.deb
+          dpkg --search /usr/bin/voicetype-desktop
+      - name: Inspect and install preview (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Installer missing' }
+          $destination = Join-Path $env:RUNNER_TEMP 'voicetype-preview-install 語音'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          if (-not (Test-Path "$destination/voicetype-desktop.exe")) { throw 'Installed executable missing' }
+          python tests/installed_opencc.py "$destination" target/opencc/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed OpenCC verification failed' }
+          python tests/installed_spelling.py "$destination" target/spelling/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed spelling verification failed' }
+          python tests/installed_rust_notices.py "$destination" target/rust-notices/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Rust notice verification failed' }
+          "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
+      - name: Record artifact checksums
+        run: python tests/artifact_manifest.py
+      - name: Install native UI driver
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: Install matching Windows WebView driver
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool --rev 8c4b34f51b45f5cf08013366d703de464ab871d1 --locked
+          msedgedriver-tool
+          $PWD.Path >> $env:GITHUB_PATH
+      - name: Exercise installed UI (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum dbus-run-session -- python3 tests/shell_smoke.py /usr/bin/voicetype-desktop
+      - name: Exercise installed UI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python tests/shell_smoke.py "$env:VOICETYPE_INSTALLED_EXE"
+      - name: Upload UI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voicetype-ui-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: desktop/target/shell-evidence/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voicetype-preview-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/target/release/bundle/deb/*.deb
+            desktop/target/release/bundle/nsis/*-setup.exe
+            desktop/target/preview-manifest.json
+            desktop/target/runtime/manifest.json
+            desktop/target/runtime/build-provenance.json
+            desktop/target/opencc/manifest.json
+            desktop/target/spelling/manifest.json
+            desktop/target/spelling/provenance/binary-origins.json
+            desktop/target/rust-notices/

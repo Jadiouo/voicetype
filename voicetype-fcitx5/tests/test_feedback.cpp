@@ -36,6 +36,7 @@ int main() {
     const char *dir = mkdtemp(temporary);
     if (!dir) { return EXIT_FAILURE; }
     setenv("VOICETYPE_SOCKET", (std::string(dir) + "/missing.sock").c_str(), 1);
+    setenv("XDG_RUNTIME_DIR", dir, 1);
     setenv("FCITX_CONFIG_HOME", dir, 1);
     setenv("FCITX_DATA_HOME", dir, 1);
     {

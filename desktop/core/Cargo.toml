@@ -1,0 +1,27 @@
+[package]
+name = "voicetype-app-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Platform-independent commands for the VoiceType desktop app"
+
+[dependencies]
+voicetype-text = { path = "../text" }
+toml_edit = "0.25.15"
+toml = "1.1.4"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+sha2 = "0.10.9"
+bzip2 = "0.6"
+tar = "0.4"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["rt", "time", "macros", "net"] }
+
+[target.'cfg(unix)'.dependencies]
+socket2 = { version = "0.6", features = ["all"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

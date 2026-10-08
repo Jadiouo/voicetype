@@ -16,7 +16,7 @@
 //! 「過期結果」的來源, 兩端都要防守: daemon 送出前比對 `latest`,
 //! addon 收到後也比對自己的 sessionId。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -25,12 +25,12 @@ use tracing::{debug, info, warn};
 
 use crate::asr::Transcriber;
 use crate::assistant::{Assistant, CorrectionAttributionError};
-use crate::audio::capture::{exceeds_max_duration, RecordingMark};
-use crate::audio::{resample, AudioCapture, MAX_RECORDING_SECONDS};
+use crate::audio::capture::{exceeds_max_duration, CaptureSource, RecordingMark};
+use crate::audio::{resample, MAX_RECORDING_SECONDS};
 use crate::ipc::{Handler, Responder};
 use crate::personalization::{ContextSnapshot, LearningOutcome, LearningStatus, RejectionReason};
 use crate::postproc::{Traditional, Vocab};
-use crate::protocol::{ClientMessage, ErrorCode, ServerMessage};
+use crate::protocol::{ClientMessage, ErrorCode, ServerMessage, SessionState};
 use crate::vad::AudioPreparation;
 
 /// 從音訊到可 commit 文字的三個階段 (SDD §4.4 / §4.1 / §4.6)。
@@ -54,11 +54,13 @@ pub struct Pipeline {
 /// 內部命令。比 `ClientMessage` 多一個逾時, 少一個 ping (ping 不需要
 /// 進到序列裡)。
 enum Command {
+    Suspend { request: u64, responder: Responder },
     Start {
         session: u64,
         program: String,
         context: ContextSnapshot,
         responder: Responder,
+        lifecycle: Lifecycle,
     },
     Stop {
         session: u64,
@@ -91,18 +93,49 @@ struct Active {
     desktop: Arc<Mutex<String>>,
     mark: RecordingMark,
     started: Instant,
+    lifecycle: Lifecycle,
+}
+
+/// Follows the actual work into its asynchronous transcription task. All returns
+/// (including cancellation, processing errors and stale results) release only
+/// after that task's synchronous/native work has completed.
+struct Lifecycle {
+    session: u64,
+    responder: Option<Responder>,
+    work: Arc<AtomicUsize>,
+}
+
+impl Lifecycle {
+    fn recording(&self) {
+        if let Some(responder) = &self.responder {
+            responder.send(ServerMessage::State { session: self.session, value: SessionState::Recording });
+        }
+    }
+}
+
+impl Drop for Lifecycle {
+    fn drop(&mut self) {
+        self.work.fetch_sub(1, Ordering::SeqCst);
+        if let Some(responder) = &self.responder {
+            responder.send(ServerMessage::State { session: self.session, value: SessionState::Idle });
+        }
+    }
 }
 
 pub struct SessionManager {
     tx: mpsc::UnboundedSender<Command>,
     /// 最新的 session id。ASR 完成時用來判斷結果是否已過期。
     latest: Arc<AtomicU64>,
+    work: Arc<AtomicUsize>,
+    desktop_assistant: Arc<Assistant>,
 }
 
 impl SessionManager {
-    pub fn new(audio: Arc<AudioCapture>, pipeline: Pipeline) -> Self {
+    pub fn new(audio: Arc<dyn CaptureSource>, pipeline: Pipeline) -> Self {
+        let desktop_assistant = pipeline.assistant.clone();
         let (tx, rx) = mpsc::unbounded_channel();
         let latest = Arc::new(AtomicU64::new(0));
+        let work = Arc::new(AtomicUsize::new(0));
         // 迴圈自己也需要 sender: 錄音上限的計時器要把 Timeout 命令送回
         // 同一條序列, 才能安全地與 stop/cancel 競爭。
         tokio::spawn(run(
@@ -111,14 +144,25 @@ impl SessionManager {
             audio,
             Arc::new(pipeline),
             latest.clone(),
+            work.clone(),
         ));
-        Self { tx, latest }
+        Self { tx, latest, work, desktop_assistant }
     }
 }
 
 impl Handler for SessionManager {
     fn handle(&self, msg: ClientMessage, responder: Responder) {
         let cmd = match msg {
+            ClientMessage::DesktopStatus { request } => {
+                responder.send(ServerMessage::Info { value: serde_json::json!({
+                    "desktop_protocol": 1, "request": request,
+                    "capabilities": ["session_events", "suspend"],
+                    "session_busy": self.work.load(Ordering::SeqCst) != 0,
+                    "spelling_status": self.desktop_assistant.desktop_spelling_status(),
+                }) });
+                return;
+            }
+            ClientMessage::DesktopSuspend { request } => Command::Suspend { request, responder },
             ClientMessage::Ping => {
                 // 不進序列: ping 只是探活, 不該排在錄音後面。
                 responder.send(ServerMessage::Pong);
@@ -131,7 +175,10 @@ impl Handler for SessionManager {
                 context_id,
                 context_text,
                 selected_text,
+                session_events,
             } => {
+                self.work.fetch_add(1, Ordering::SeqCst);
+                let lifecycle = Lifecycle { session, responder: session_events.then(|| responder.clone()), work: self.work.clone() };
                 // 縱深防禦 (SDD §7)。addon 已經在密碼欄位拒絕啟動,
                 // 走到這裡代表 addon 版本不符或協定被繞過。
                 if is_password {
@@ -155,6 +202,7 @@ impl Handler for SessionManager {
                     .bounded(),
                     program,
                     responder,
+                    lifecycle,
                 }
             }
             ClientMessage::Stop { session } => Command::Stop { session, responder },
@@ -177,19 +225,35 @@ impl Handler for SessionManager {
 async fn run(
     mut rx: mpsc::UnboundedReceiver<Command>,
     self_tx: mpsc::UnboundedSender<Command>,
-    audio: Arc<AudioCapture>,
+    audio: Arc<dyn CaptureSource>,
     pipeline: Arc<Pipeline>,
     latest: Arc<AtomicU64>,
+    work: Arc<AtomicUsize>,
 ) {
     let mut active: Option<Active> = None;
 
     while let Some(cmd) = rx.recv().await {
         match cmd {
+            Command::Suspend { request, responder } => {
+                let microphone = if work.load(Ordering::SeqCst) != 0 {
+                    "busy"
+                } else {
+                    let audio = audio.clone();
+                    match tokio::task::spawn_blocking(move || audio.suspend()).await {
+                        Ok(Ok(())) => "closed",
+                        _ => "error",
+                    }
+                };
+                responder.send(ServerMessage::Info { value: serde_json::json!({
+                    "desktop_protocol": 1, "request": request, "microphone": microphone,
+                }) });
+            }
             Command::Start {
                 session,
                 program,
                 context,
                 responder,
+                lifecycle,
             } => {
                 if let Some(prev) = active.take() {
                     // 上一段錄音沒有正常結束 (例如 addon 漏送 stop)。
@@ -230,6 +294,7 @@ async fn run(
                     });
                 }
                 debug!(session, program = %program, "recording");
+                lifecycle.recording();
                 active = Some(Active {
                     session,
                     program,
@@ -237,6 +302,7 @@ async fn run(
                     desktop,
                     mark,
                     started: Instant::now(),
+                    lifecycle,
                 });
 
                 // 上限計時 (SDD §4.4): 超過上限自動停止並回 too_long,
@@ -355,12 +421,13 @@ enum Outcome {
 
 /// 取出錄音, 送去轉錄。轉錄本身不 await (見模組說明)。
 async fn finish(
-    audio: &Arc<AudioCapture>,
+    audio: &Arc<dyn CaptureSource>,
     pipeline: &Arc<Pipeline>,
     latest: &Arc<AtomicU64>,
     current: Active,
     responder: Responder,
 ) {
+    let lifecycle = current.lifecycle;
     let session = current.session;
     let mut context = current.context.clone();
     let desktop = current
@@ -424,6 +491,7 @@ async fn finish(
     let review = pipeline.review.clone();
     let latest = latest.clone();
     tokio::spawn(async move {
+        let _lifecycle = lifecycle;
         let started = Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             let mut samples = resample::to_target_rate(&recording.samples, recording.sample_rate)?;

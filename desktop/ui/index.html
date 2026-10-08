@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoiceType</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+  <script type="module" src="vocabulary.js"></script>
+  <script type="module" src="review.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand"><span class="mark" aria-hidden="true">V</span><span>VoiceType<small>說話，成為文字。</small></span></div>
+      <nav aria-label="設定頁面"><a href="#recognition" aria-current="page">辨識方式</a><a href="#vocabulary">我的詞庫</a><a href="#review">抽樣校對 <span id="review-count"></span></a></nav>
+      <div class="aside-note">本機優先<br>你的詞彙，你來決定。</div>
+      <span class="version" id="version">開發預覽</span>
+    </aside>
+    <main id="recognition">
+      <header><span class="eyebrow">語音輸入</span><h1>選擇適合你的辨識方式</h1><p>離線處理，或使用你的 Google 帳號。</p></header>
+      <div class="notice"><strong>開發預覽</strong><p>Linux 可明確啟用本機聽寫。Google 與 Windows 語音仍在整合中；開啟設定不會切換現有語音輸入。</p></div>
+      <div id="error" class="error" role="alert" hidden></div>
+      <fieldset id="providers" disabled>
+        <legend class="sr-only">辨識方式</legend>
+        <label class="provider-card" id="local-card">
+          <input type="radio" name="provider" value="local" id="provider-local">
+          <span class="card-title">本機離線<span class="tag">CPU</span></span>
+          <span class="description">在你的電腦完成辨識，適合日常中英混合輸入。</span>
+          <span class="detail">首次使用需下載模型；之後可離線使用。</span>
+          <span class="availability" id="local-availability">尚未檢查本機服務</span>
+        </label>
+        <label class="provider-card" id="google-card">
+          <input type="radio" name="provider" value="google" id="provider-google">
+          <span class="card-title">Google<span class="tag">需連線</span></span>
+          <span class="description">使用官方 Antigravity 語音辨識與你的登入帳號。</span>
+          <span class="detail">首次使用需安裝官方程式並登入。</span>
+          <span class="availability" id="google-availability">準備中 · 尚未連接辨識引擎</span>
+        </label>
+      </fieldset>
+      <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="cancel-dictation" type="button" hidden>取消聽寫</button><button id="check-providers" type="button" disabled>檢查服務</button><button id="reload" type="button">重新載入</button></div>
+      <section class="model-setup" aria-labelledby="model-setup-title">
+        <label><input id="spelling-enabled" type="checkbox" disabled> 自動修正中文錯字（CPU）</label>
+        <p>保留英文、名字與數字；校正逾時就送出原文。需先卸載引擎才能變更，下次載入時套用。</p>
+        <p id="spelling-runtime-note" role="status" aria-live="polite">校正器會在載入引擎時檢查。</p>
+        <h2 id="model-setup-title">本機模型</h2>
+        <p>下載約 844 MB，首次準備建議保留 4 GB 可用空間。已安裝的模型通過檢查後會直接沿用。</p>
+        <p id="model-status" role="status" aria-live="polite">正在讀取模型準備狀態…</p>
+        <progress id="model-progress" aria-label="模型準備進度" hidden></progress>
+        <div class="model-actions"><button id="prepare-models" type="button" disabled>下載／檢查模型</button><button id="cancel-models" type="button" hidden>取消準備</button></div>
+        <p class="model-note">模型完成後，先載入引擎，再啟用本機聽寫。Linux 需安裝本版 Fcitx 模組並重新登入桌面。</p>
+        <div class="model-actions"><button id="load-local-runtime" type="button" disabled>載入本機引擎</button><button id="enable-local-input" type="button" disabled>啟用本機聽寫</button><button id="unload-local-runtime" type="button" hidden>停用並卸載引擎</button></div>
+        <p id="runtime-note">正在讀取引擎封裝狀態…</p>
+        <div id="input-module-setup" hidden>
+          <h3>Linux 輸入法模組</h3>
+          <p>請先將桌面輸入法設為 Fcitx5。首次使用需安裝模組並重新登入；原設定會保留備份，安裝本身不會接管快捷鍵。</p>
+          <div class="model-actions"><button id="install-input-module" type="button">安裝／更新 Fcitx 模組</button><button id="restore-input-module" type="button">還原原模組設定</button></div>
+          <p id="input-module-status" role="status"></p>
+        </div>
+      </section>
+      <section class="recovery" aria-labelledby="recovery-title">
+        <h2 id="recovery-title">文字復原</h2>
+        <p id="recovery-note" role="status">目前沒有待處理的文字。</p>
+        <div id="recovery-content" hidden>
+          <label for="recovery-text" class="sr-only">保留的完整辨識文字</label>
+          <textarea id="recovery-text" readonly rows="4" spellcheck="false"></textarea>
+          <div class="recovery-actions"><button id="select-recovery" type="button">全選文字</button><button id="dismiss-recovery" type="button">清除這筆文字</button></div>
+          <p>全選後按 Ctrl+C 複製，再自行貼到需要的位置。這裡的文字只保留到 App 結束。</p>
+        </div>
+      </section>
+      <section id="vocabulary" class="vocabulary" aria-labelledby="vocabulary-title">
+        <h2 id="vocabulary-title">我的詞庫</h2>
+        <p>把常見辨識錯字改成你的用詞。儲存後，App 的本機聽寫會從下一句開始套用，不需重新載入引擎。</p>
+        <p>預覽版使用獨立詞庫。可匯入原有詞庫一次，原檔會保留；Google 接通後將使用同一份詞庫。</p>
+        <div class="model-actions"><button id="vocab-reload" type="button">重新載入詞庫</button><button id="vocab-import" type="button" disabled>匯入原有詞庫</button><button id="vocab-restore" type="button" disabled>還原上次儲存</button></div>
+        <p id="vocab-status" role="status" aria-live="polite">正在讀取詞庫…</p>
+        <div id="vocab-error" class="error" role="alert" hidden></div>
+        <div id="vocab-list"></div>
+        <form id="vocab-form">
+          <fieldset id="vocab-fields" disabled>
+            <legend id="vocab-edit-title">新增修正规則</legend>
+            <label for="vocab-wrong">辨識錯字（每行一種，可填完整片語）</label>
+            <textarea id="vocab-wrong" rows="2" maxlength="16384" required spellcheck="false" placeholder="geeho&#10;git hub"></textarea>
+            <label for="vocab-right">正確寫法</label>
+            <input id="vocab-right" maxlength="128" required placeholder="GitHub" spellcheck="false">
+            <p>coming 本身是正常英文；需要修正時，請填入能區分語境的完整片語。</p>
+            <div class="model-actions"><button id="vocab-save" type="submit">儲存規則</button><button id="vocab-new" type="button">清空／新增</button><button id="vocab-example" type="button">填入 GitHub 範例</button></div>
+          </fieldset>
+        </form>
+        <details>
+          <summary>保護名字與常用詞</summary>
+          <label for="vocab-names">保護名字（每行一個，至少兩字）</label>
+          <textarea id="vocab-names" rows="3" spellcheck="false" maxlength="32768"></textarea>
+          <button id="vocab-save-names" type="button" disabled>儲存名字</button>
+          <p id="vocab-names-note">名字依你的字形保留，例如台積電、游錫堃。</p>
+          <label for="vocab-terms">常用詞（每行一個）</label>
+          <textarea id="vocab-terms" rows="3" spellcheck="false" maxlength="32768"></textarea>
+          <button id="vocab-save-terms" type="button" disabled>儲存常用詞</button>
+          <p>常用詞供校正器參考，不會自行產生替換規則；App 校正器仍在整合中。</p>
+        </details>
+        <label for="vocab-preview-input">試一句話（僅預覽已儲存的詞庫替換）</label>
+        <textarea id="vocab-preview-input" rows="2" maxlength="4096" spellcheck="false" placeholder="先 push 到 geeho，coming soon。"></textarea>
+        <button id="vocab-preview" type="button" disabled>預覽修正</button>
+        <output id="vocab-preview-output" aria-live="polite"></output>
+      </section>
+      <section id="review" class="review" aria-labelledby="review-title">
+        <h2 id="review-title">抽樣校對</h2>
+        <p>偶爾留下一段，空閒時聽聽看。錄音與文字只存在這台電腦，7 天後清理；不會突然跳出視窗。</p>
+        <label class="review-opt-in"><input id="review-enabled" type="checkbox" disabled> 開啟本機抽樣校對</label>
+        <p id="review-policy">每天最多 5 段，從 8 秒以上的聽寫抽樣。預設關閉，不會額外開啟麥克風。</p>
+        <p>此處使用 App 的獨立校對資料；日常版本的抽樣設定繼續保留。Google 與 Windows 語音接通後才會開始採集該路線的樣本。</p>
+        <button id="review-reload" type="button">重新載入校對</button>
+        <p id="review-status" role="status" aria-live="polite">正在讀取校對…</p>
+        <div id="review-error" class="error" role="alert" hidden></div>
+        <div id="review-list"></div>
+        <div id="review-detail" hidden>
+          <h3 id="review-selected"></h3>
+          <button id="review-audio-load" type="button">載入這段音訊</button>
+          <audio id="review-audio" controls preload="none" hidden></audio>
+          <p>辨識原文</p><pre id="review-asr"></pre>
+          <p>送出的文字</p><pre id="review-output"></pre>
+          <form id="review-form">
+            <label for="review-corrected">正確的完整句子</label>
+            <textarea id="review-corrected" rows="3" maxlength="8192" required spellcheck="false"></textarea>
+            <p>直接儲存可確認原文，或修改後儲存。整句校對不會自動加入永久詞庫。</p>
+            <div class="model-actions"><button id="review-save" type="submit">儲存校對</button><button id="review-delete" type="button">刪除這段</button></div>
+          </form>
+          <p id="review-rule"></p><button id="review-promote" type="button" hidden>加入詞庫</button>
+        </div>
+      </section>
+      <section class="shared"><h2>自動錯字校正</h2><p>App 校正器仍在整合；日常版本的設定與資料繼續保留。</p></section>
+      <footer id="tray-note">關閉視窗會結束預覽 App。</footer>
+    </main>
+  </div>
+</body>
+</html>

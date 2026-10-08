@@ -17,6 +17,8 @@ mod protocol;
 mod refine;
 mod session;
 mod vad;
+#[cfg(test)]
+mod desktop_ipc_tests;
 
 use std::sync::Arc;
 

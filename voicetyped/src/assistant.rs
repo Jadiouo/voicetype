@@ -28,6 +28,7 @@ pub struct Assistant {
     manual_context: Mutex<(String, String, Instant)>,
     refiner: Option<Refiner>,
     spelling: Option<crate::csc::CscClient>,
+    owned_spelling_requested: bool,
 }
 
 impl Assistant {
@@ -43,7 +44,18 @@ impl Assistant {
             Personalization::memory()
         });
         let mut assistant = Self::new(learned, Refiner::from_env());
-        assistant.spelling = crate::csc::CscClient::from_env();
+        assistant.owned_spelling_requested = std::env::var_os("VOICETYPE_CSC_PROCESS").is_some();
+        if assistant.owned_spelling_requested {
+            // Optional CPU correction cannot prevent ASR IPC from starting.
+            match crate::csc::CscClient::from_env() {
+                Ok(Some(spelling)) => {
+                    assistant.spelling = Some(spelling);
+                }
+                Ok(None) | Err(_) => tracing::warn!("owned CPU spelling unavailable; ASR remains available"),
+            }
+        } else {
+            assistant.spelling = crate::csc::CscClient::from_env()?;
+        }
         Ok(assistant)
     }
 
@@ -54,7 +66,14 @@ impl Assistant {
             manual_context: Mutex::new((String::new(), String::new(), Instant::now())),
             refiner,
             spelling: None,
+            owned_spelling_requested: false,
         }
+    }
+
+    pub fn desktop_spelling_status(&self) -> &'static str {
+        if self.spelling.as_ref().is_some_and(crate::csc::CscClient::owned_healthy) { "ready" }
+        else if self.owned_spelling_requested { "unavailable" }
+        else { "disabled" }
     }
 
     pub fn process(&self, text: &str, scope: &ContextSnapshot, mode: Option<&str>) -> String {
@@ -99,6 +118,9 @@ impl Assistant {
         }
         if let Some(spelling) = &self.spelling {
             return spelling.correct(&text, &terms);
+        }
+        if self.owned_spelling_requested {
+            return text;
         }
         let terms = prioritized_terms(terms);
         let Some(refiner) = &self.refiner else {
@@ -324,6 +346,83 @@ fn desktop_context_with(enabled: Option<&std::ffi::OsStr>, helper: Option<&std::
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_owned_spelling_does_not_prevent_assistant_loading() {
+        // A subprocess isolates the environment from parallel daemon tests.
+        if std::env::var_os("VOICETYPE_TEST_BAD_CSC_CHILD").is_some() {
+            let assistant = super::Assistant::load().unwrap();
+            assert_eq!(assistant.desktop_spelling_status(), "unavailable");
+            let original = "今天新情很好。GitHub 2026";
+            assert_eq!(assistant.process(original, &Default::default(), None), original);
+            return;
+        }
+        let profile = tempfile::tempdir().unwrap();
+        let missing_child = serde_json::json!({
+            "executable": profile.path().join("missing-csc"),
+            "model": profile.path().join("model.onnx"),
+            "tokenizer": profile.path().join("tokenizer.json"),
+            "model_sha256": "a".repeat(64),
+            "tokenizer_sha256": "b".repeat(64),
+            "threads": 4,
+        }).to_string();
+        for config in ["{}".to_string(), missing_child] {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("assistant::tests::invalid_owned_spelling_does_not_prevent_assistant_loading")
+                .env("VOICETYPE_TEST_BAD_CSC_CHILD", "1")
+                .env("VOICETYPE_CSC_PROCESS", config)
+                .env("VOICETYPE_LEARNING_FILE", profile.path().join("learning.json"))
+                .status().unwrap();
+            assert!(result.success(), "optional CSC startup blocked the assistant");
+        }
+    }
+
+    #[test]
+    fn owned_spelling_health_changes_after_child_exit_or_bad_frame() {
+        if let Some(scenario) = std::env::var_os("VOICETYPE_TEST_CSC_SCENARIO") {
+            let assistant = super::Assistant::load().unwrap();
+            assert_eq!(assistant.desktop_spelling_status(), "ready");
+            let original = "今天新情很好。GitHub 2026";
+            if scenario == "exit" {
+                std::thread::sleep(std::time::Duration::from_millis(350));
+            } else {
+                assert_eq!(assistant.process(original, &Default::default(), None), original);
+            }
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while assistant.desktop_spelling_status() != "unavailable" {
+                assert!(std::time::Instant::now() < until, "dead CSC still reported ready");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(assistant.process(original, &Default::default(), None), original);
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let profile = tempfile::tempdir().unwrap();
+        for (scenario, body) in [
+            ("exit", "import time; time.sleep(.25)"),
+            ("bad", "import sys; sys.stdin.readline(); print('{bad json}',flush=True)"),
+        ] {
+            let executable = profile.path().join(format!("csc-{scenario}"));
+            std::fs::write(&executable, format!("#!/usr/bin/python3\nimport json\nprint(json.dumps(dict(v=1,status='ready',provider='CPUExecutionProvider')),flush=True)\n{body}\n")).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let config = serde_json::json!({
+                "executable": executable,
+                "model": profile.path().join("model.onnx"),
+                "tokenizer": profile.path().join("tokenizer.json"),
+                "model_sha256": "a".repeat(64),
+                "tokenizer_sha256": "b".repeat(64),
+                "threads": 4,
+            });
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("assistant::tests::owned_spelling_health_changes_after_child_exit_or_bad_frame")
+                .env("VOICETYPE_TEST_CSC_SCENARIO", scenario)
+                .env("VOICETYPE_CSC_PROCESS", config.to_string())
+                .env("VOICETYPE_LEARNING_FILE", profile.path().join("learning.json"))
+                .status().unwrap();
+            assert!(result.success(), "{scenario} did not become unavailable");
+        }
+    }
     use super::*;
 
     #[test]

@@ -1,0 +1,77 @@
+:root { font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; color: #25283b; background: #f8f9fc; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.app { min-height: 100vh; display: grid; grid-template-columns: 204px 1fr; }
+aside { padding: 30px 20px; border-right: 1px solid #e5e7ef; display: flex; flex-direction: column; background: #fff; }
+.brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 750; }
+.brand small { display: block; margin-top: 5px; font-size: 11px; color: #767b92; font-weight: 400; }
+.mark { display: grid; place-items: center; width: 36px; height: 40px; background: #6356cc; color: white; border-radius: 13px; }
+nav { margin-top: 44px; }
+nav a { display: block; padding: 13px 17px; border-radius: 10px; color: #5145b2; background: #f0edff; text-decoration: none; font-size: 14px; font-weight: 650; }
+.aside-note { margin-top: auto; padding-top: 50px; font-size: 12px; line-height: 1.9; color: #777d92; }
+.version { margin-top: 22px; color: #8a8fa0; font-size: 11px; }
+main { max-width: 800px; padding: 36px 36px 24px; }
+.eyebrow { font-size: 12px; color: #6356cc; letter-spacing: .15em; font-weight: 650; }
+h1 { font-size: 25px; margin: 12px 0; letter-spacing: -.02em; line-height: 1.4; }
+header p { font-size: 14px; color: #6d7388; margin: 0 0 24px; }
+.notice { background: #eeedf8; border: 1px solid #e0ddf2; border-radius: 11px; padding: 13px 16px; font-size: 12px; color: #575073; line-height: 1.7; }
+.notice strong { color: #4b4272; font-size: 12px; }
+.notice p { margin: 3px 0 0; }
+fieldset { padding: 0; border: 0; margin: 20px 0 0; display: grid; gap: 12px; }
+.provider-card { display: block; position: relative; background: #fff; padding: 18px 18px 16px 48px; border: 1px solid #dfe2ec; border-radius: 13px; cursor: pointer; }
+.provider-card:has(input:checked) { border-color: #8575df; background: #fbfaff; box-shadow: 0 0 0 1px #8575df; }
+.provider-card:has(input:focus-visible) { outline: 3px solid #b1a4f4; outline-offset: 3px; }
+.provider-card input { position: absolute; top: 19px; left: 18px; width: 17px; height: 17px; accent-color: #6356cc; }
+.card-title { display: flex; gap: 10px; align-items: center; font-size: 17px; font-weight: 700; }
+.tag { font-size: 10px; padding: 3px 7px; border-radius: 5px; background: #eeeef5; color: #6c7085; font-weight: 500; }
+.description, .detail, .availability { display: block; font-size: 12px; line-height: 1.7; }
+.description { margin-top: 9px; color: #52586f; }
+.detail { color: #787e90; }
+.availability { margin-top: 12px; font-size: 11px; color: #85704d; }
+.save-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-height: 54px; }
+.save-row p { font-size: 11px; color: #6d7388; }
+button { background: #fff; color: #5c527d; font: inherit; font-size: 11px; border: 1px solid #d9dbe6; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+button:disabled { opacity: .6; cursor: wait; }
+.shared { border-top: 1px solid #e3e5ed; padding-top: 17px; margin-top: 4px; }
+.model-setup { border-top: 1px solid #e3e5ed; margin-top: 8px; padding: 17px 0; }
+.model-setup p { color: #6d7388; font-size: 12px; line-height: 1.8; }
+.model-setup .model-note { font-size: 11px; }
+.model-setup progress { width: 100%; height: 8px; margin-bottom: 12px; accent-color: #6356cc; }
+.model-actions { display: flex; gap: 10px; }
+.recovery { border-top: 1px solid #e3e5ed; margin-top: 8px; padding: 17px 0; }
+.recovery p { color: #6d7388; font-size: 12px; line-height: 1.8; }
+.recovery textarea { width: 100%; resize: vertical; font: inherit; font-size: 14px; line-height: 1.7; padding: 12px; border: 1px solid #dfe2ec; border-radius: 8px; color: #25283b; background: #fff; }
+.recovery-actions { display: flex; gap: 10px; margin-top: 10px; }
+h2 { font-size: 13px; margin: 0 0 7px; }
+.shared p { font-size: 12px; line-height: 1.8; color: #757b8f; margin: 0; }
+footer { margin-top: 18px; color: #9095a5; font-size: 10px; }
+.error { padding: 13px; background: #fff0ef; color: #a6333b; border: 1px solid #f1c6c9; border-radius: 8px; font-size: 12px; line-height: 1.7; margin-top: 14px; overflow-wrap: anywhere; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+@media (max-width: 720px) { .app { grid-template-columns: 155px 1fr; } aside { padding: 24px 14px; } main { padding: 28px 22px; } h1 { font-size: 21px; } .brand { font-size: 16px; } }
+.vocabulary { border-top: 1px solid #e3e5ed; padding: 20px 0; margin-top: 12px; }
+.vocabulary p, .vocabulary label, .vocabulary summary { font-size: 12px; line-height: 1.8; color: #6d7388; }
+.vocabulary label { display: block; margin-top: 12px; }
+.vocabulary input, .vocabulary textarea { display: block; width: 100%; resize: vertical; font: inherit; font-size: 14px; padding: 10px; border: 1px solid #dfe2ec; border-radius: 8px; background: white; color: #25283b; }
+.vocabulary fieldset { display: block; margin: 16px 0; padding: 14px; border: 1px solid #e3e5ed; border-radius: 8px; }
+.vocabulary legend { font-size: 13px; font-weight: 650; }
+.vocabulary details { margin: 18px 0; }
+.vocabulary summary { cursor: pointer; }
+.vocabulary output { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; margin-top: 10px; }
+.vocab-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
+.vocab-row span { flex: 1; overflow-wrap: anywhere; min-width: 0; }
+#vocab-list { max-height: 300px; overflow-y: auto; }
+nav a + a { margin-top: 8px; }
+
+.review { border-top: 1px solid #e3e5ed; padding: 20px 0; }
+.review p, .review label { font-size: 12px; line-height: 1.8; color: #6d7388; }
+.review-opt-in { display: flex; gap: 6px; align-items: center; }
+.review pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; line-height: 1.7; padding: 12px; background: white; border-radius: 8px; }
+.review textarea { display: block; width: 100%; resize: vertical; font: inherit; font-size: 14px; padding: 10px; border: 1px solid #dfe2ec; border-radius: 8px; }
+.review audio { display: block; width: 100%; margin-top: 12px; }
+.review audio[hidden] { display: none; }
+#review-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; margin: 12px 0; }
+#review-list button { text-align: left; white-space: normal; }
+#review-list button[aria-pressed="true"] { background: #eae7fc; }
+#review-detail h3 { font-size: 13px; }
+.model-actions { flex-wrap: wrap; }
+aside { position: sticky; top: 0; height: 100vh; }

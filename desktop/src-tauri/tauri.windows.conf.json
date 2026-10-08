@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../../LICENSE": "LICENSE.txt",
+      "../README.md": "PREVIEW.md",
+      "../target/opencc/opencc.dll": "opencc.dll",
+      "../target/opencc/data/": "opencc/",
+      "../target/opencc/licenses/": "licenses/opencc/",
+      "../target/opencc/manifest.json": "opencc-manifest.json"
+      ,"../target/spelling": "spelling",
+      "../target/rust-notices": "licenses/rust"
+    }
+  }
+}

@@ -579,25 +579,7 @@ fn word_boundary(text: &str, start: usize, end: usize, matched: &str) -> bool {
             || !text[end..].chars().next().is_some_and(word))
 }
 
-pub(crate) fn code_at(text: &str, start: usize, end: usize) -> bool {
-    let left = text[..start].chars().next_back();
-    let right = text[end..].chars().next();
-    [left, right]
-        .into_iter()
-        .flatten()
-        .any(|c| "_/@\\=<>+*()[]{}-".contains(c))
-        || (left == Some('.')
-            && text[..start]
-                .chars()
-                .rev()
-                .nth(1)
-                .is_some_and(|c| c.is_ascii_alphanumeric()))
-        || (right == Some('.')
-            && text[end..]
-                .chars()
-                .nth(1)
-                .is_some_and(|c| c.is_ascii_alphanumeric()))
-}
+pub(crate) use voicetype_text::code_at;
 
 fn distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.to_lowercase().chars().collect();
