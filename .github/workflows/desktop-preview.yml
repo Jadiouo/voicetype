@@ -70,7 +70,7 @@ jobs:
           python -m pip install -r ../config/csc-build-requirements.txt
           python tests/spelling_build_test.py
           python ../scripts/build-desktop-spelling.py target/spelling --cache target/csc-build-cache
-          cargo +stable test -p voicetype-app-core --test spelling_bundle --locked -- --ignored
+          cargo +stable test -p voicetype-app-core --test spelling_bundle --locked -- --ignored --nocapture
       - name: Public application command tests
         run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
       - name: Build pinned Linux CPU runtime and native notices
