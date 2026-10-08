@@ -7,8 +7,9 @@ Windows worker still retains recognized text and makes no automatic insertion.
 From the repository root on a Windows 11 x64 development machine:
 
 ```powershell
-$env:TEMP = Join-Path $PWD '.scratch/tsf-native'
+$env:TEMP = Join-Path $PWD '.scratch/tsf-temp'
 $env:TMP = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 cmake -S desktop/windows-tsf -B .scratch/tsf-native/build -A x64
 cmake --build .scratch/tsf-native/build --config Release --parallel 2
 ctest --test-dir .scratch/tsf-native/build -C Release --output-on-failure

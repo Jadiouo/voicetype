@@ -26,12 +26,12 @@ class TextStore final : public ITextStoreACP {
 
   STDMETHODIMP AdviseSink(REFIID iid, IUnknown *unknown, DWORD) override {
     if (iid != IID_ITextStoreACPSink || !unknown) return E_INVALIDARG;
-    if (sink_) return CONNECT_E_ADVISELIMIT;
+    if (sink_) return E_UNEXPECTED;
     return unknown->QueryInterface(IID_ITextStoreACPSink,
                                    reinterpret_cast<void **>(&sink_));
   }
   STDMETHODIMP UnadviseSink(IUnknown *unknown) override {
-    if (!sink_ || !unknown) return CONNECT_E_NOCONNECTION;
+    if (!sink_ || !unknown) return E_UNEXPECTED;
     IUnknown *registered = nullptr;
     IUnknown *requested = nullptr;
     sink_->QueryInterface(IID_IUnknown, reinterpret_cast<void **>(&registered));
@@ -39,7 +39,7 @@ class TextStore final : public ITextStoreACP {
     bool same = registered && registered == requested;
     if (registered) registered->Release();
     if (requested) requested->Release();
-    if (!same) return CONNECT_E_NOCONNECTION;
+    if (!same) return E_UNEXPECTED;
     sink_->Release(); sink_ = nullptr; return S_OK;
   }
   STDMETHODIMP RequestLock(DWORD flags, HRESULT *result) override {

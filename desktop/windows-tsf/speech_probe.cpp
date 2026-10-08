@@ -14,8 +14,7 @@ template <class T> void release(T *&p) {
   if (p) { p->Release(); p = nullptr; }
 }
 
-class SpeechProbe final : public ITfTextInputProcessor,
-                          public ITfTextInputProcessorEx,
+class SpeechProbe final : public ITfTextInputProcessorEx,
                           public ITfThreadMgrEventSink,
                           public IVoiceTypeTsfProbe {
  public:
@@ -201,7 +200,7 @@ class Factory final : public IClassFactory {
 };
 } // namespace
 
-extern "C" __declspec(dllexport) HRESULT __stdcall DllGetClassObject(
+STDAPI DllGetClassObject(
     REFCLSID clsid, REFIID iid, void **out) {
   if (!out) return E_POINTER;
   *out = nullptr;
@@ -211,6 +210,6 @@ extern "C" __declspec(dllexport) HRESULT __stdcall DllGetClassObject(
   HRESULT hr = factory->QueryInterface(iid, out);
   factory->Release(); return hr;
 }
-extern "C" __declspec(dllexport) HRESULT __stdcall DllCanUnloadNow() {
+STDAPI DllCanUnloadNow() {
   return objects.load() == 0 && server_locks.load() == 0 ? S_OK : S_FALSE;
 }

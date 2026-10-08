@@ -22,8 +22,10 @@ jobs:
         run: |
           $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/tsf-native'
           New-Item -ItemType Directory -Force -Path $scratch | Out-Null
-          $env:TEMP = $scratch
-          $env:TMP = $scratch
+          $tempRoot = Join-Path $env:GITHUB_WORKSPACE '.scratch/tsf-temp'
+          New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+          $env:TEMP = $tempRoot
+          $env:TMP = $tempRoot
           cmake -S desktop/windows-tsf -B "$scratch/build" -A x64
           if ($LASTEXITCODE -ne 0) { throw 'TSF CMake configure failed' }
           cmake --build "$scratch/build" --config Release --parallel 2

@@ -9,17 +9,17 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(/W4 /WX /utf-8 /permissive-)
 
-add_library(voicetype_tsf_probe SHARED speech_probe.cpp)
+add_library(voicetype_tsf_probe SHARED speech_probe.cpp speech_probe.def)
 target_compile_definitions(voicetype_tsf_probe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
-target_link_libraries(voicetype_tsf_probe PRIVATE ole32 uuid msctf user32)
+target_link_libraries(voicetype_tsf_probe PRIVATE ole32 uuid user32)
 
 add_executable(voicetype_tsf_native_fixture native_fixture.cpp text_store_fixture.cpp)
 target_compile_definitions(voicetype_tsf_native_fixture PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
-target_link_libraries(voicetype_tsf_native_fixture PRIVATE ole32 uuid msctf user32)
+target_link_libraries(voicetype_tsf_native_fixture PRIVATE ole32 uuid user32)
 
 add_executable(voicetype_tsf_registrar registrar.cpp)
 target_compile_definitions(voicetype_tsf_registrar PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
-target_link_libraries(voicetype_tsf_registrar PRIVATE ole32 uuid msctf advapi32)
+target_link_libraries(voicetype_tsf_registrar PRIVATE ole32 uuid advapi32)
 
 add_executable(voicetype_tsf_broker_probe broker_probe.cpp)
 target_compile_definitions(voicetype_tsf_broker_probe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
