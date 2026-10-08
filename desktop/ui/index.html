@@ -6,12 +6,13 @@
   <title>VoiceType</title>
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
+  <script type="module" src="vocabulary.js"></script>
 </head>
 <body>
   <div class="app">
     <aside>
       <div class="brand"><span class="mark" aria-hidden="true">V</span><span>VoiceType<small>說話，成為文字。</small></span></div>
-      <nav aria-label="設定頁面"><a href="#recognition" aria-current="page">辨識方式</a></nav>
+      <nav aria-label="設定頁面"><a href="#recognition" aria-current="page">辨識方式</a><a href="#vocabulary">我的詞庫</a></nav>
       <div class="aside-note">本機優先<br>你的詞彙，你來決定。</div>
       <span class="version" id="version">開發預覽</span>
     </aside>
@@ -63,7 +64,42 @@
           <p>全選後按 Ctrl+C 複製，再自行貼到需要的位置。這裡的文字只保留到 App 結束。</p>
         </div>
       </section>
-      <section class="shared"><h2>兩種方式，共用你的習慣</h2><p>詞庫、繁體中文與抽樣校對會放在同一個介面。這些功能正在整合，現階段請繼續使用原有設定視窗。</p></section>
+      <section id="vocabulary" class="vocabulary" aria-labelledby="vocabulary-title">
+        <h2 id="vocabulary-title">我的詞庫</h2>
+        <p>把常見辨識錯字改成你的用詞。儲存後，App 的本機聽寫會從下一句開始套用，不需重新載入引擎。</p>
+        <p>預覽版使用獨立詞庫。可匯入原有詞庫一次，原檔會保留；Google 接通後將使用同一份詞庫。</p>
+        <div class="model-actions"><button id="vocab-reload" type="button">重新載入詞庫</button><button id="vocab-import" type="button" disabled>匯入原有詞庫</button><button id="vocab-restore" type="button" disabled>還原上次儲存</button></div>
+        <p id="vocab-status" role="status" aria-live="polite">正在讀取詞庫…</p>
+        <div id="vocab-error" class="error" role="alert" hidden></div>
+        <div id="vocab-list"></div>
+        <form id="vocab-form">
+          <fieldset id="vocab-fields" disabled>
+            <legend id="vocab-edit-title">新增修正规則</legend>
+            <label for="vocab-wrong">辨識錯字（每行一種，可填完整片語）</label>
+            <textarea id="vocab-wrong" rows="2" maxlength="16384" required spellcheck="false" placeholder="geeho&#10;git hub"></textarea>
+            <label for="vocab-right">正確寫法</label>
+            <input id="vocab-right" maxlength="128" required placeholder="GitHub" spellcheck="false">
+            <p>coming 本身是正常英文；需要修正時，請填入能區分語境的完整片語。</p>
+            <div class="model-actions"><button id="vocab-save" type="submit">儲存規則</button><button id="vocab-new" type="button">清空／新增</button><button id="vocab-example" type="button">填入 GitHub 範例</button></div>
+          </fieldset>
+        </form>
+        <details>
+          <summary>保護名字與常用詞</summary>
+          <label for="vocab-names">保護名字（每行一個，至少兩字）</label>
+          <textarea id="vocab-names" rows="3" spellcheck="false" maxlength="32768"></textarea>
+          <button id="vocab-save-names" type="button" disabled>儲存名字</button>
+          <p id="vocab-names-note">名字依你的字形保留，例如台積電、游錫堃。</p>
+          <label for="vocab-terms">常用詞（每行一個）</label>
+          <textarea id="vocab-terms" rows="3" spellcheck="false" maxlength="32768"></textarea>
+          <button id="vocab-save-terms" type="button" disabled>儲存常用詞</button>
+          <p>常用詞供校正器參考，不會自行產生替換規則；App 校正器仍在整合中。</p>
+        </details>
+        <label for="vocab-preview-input">試一句話（僅預覽已儲存的詞庫替換）</label>
+        <textarea id="vocab-preview-input" rows="2" maxlength="4096" spellcheck="false" placeholder="先 push 到 geeho，coming soon。"></textarea>
+        <button id="vocab-preview" type="button" disabled>預覽修正</button>
+        <output id="vocab-preview-output" aria-live="polite"></output>
+      </section>
+      <section class="shared"><h2>抽樣校對與自動錯字校正</h2><p>App 介面仍在整合；日常版本的設定與資料繼續保留。</p></section>
       <footer id="tray-note">關閉視窗會結束預覽 App。</footer>
     </main>
   </div>

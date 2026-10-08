@@ -18,6 +18,7 @@ relocatable-runtime = ["sherpa-nano"]
 cc = "1"
 
 [dependencies]
+voicetype-text = { path = "../desktop/text" }
 anyhow = "1.0.104"
 libc = "0.2"
 cpal = "0.18.1"

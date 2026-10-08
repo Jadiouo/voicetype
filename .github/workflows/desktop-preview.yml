@@ -49,8 +49,11 @@ jobs:
         run: python tests/clean_build_outputs.py
       - name: Install locked build tools
         run: npm ci --ignore-scripts
+      - name: Build pinned Windows OpenCC and dictionaries
+        if: runner.os == 'Windows'
+        run: python ../scripts/build-desktop-opencc.py target/opencc --stage-tests target/debug/deps
       - name: Public application command tests
-        run: cargo +stable test -p voicetype-app-core --locked
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
       - name: Build pinned Linux CPU runtime and native notices
         if: runner.os == 'Linux'
         run: |
@@ -81,10 +84,12 @@ jobs:
         run: |
           $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
           if (-not $installer) { throw 'Installer missing' }
-          $destination = Join-Path $env:RUNNER_TEMP 'voicetype-preview-install'
+          $destination = Join-Path $env:RUNNER_TEMP 'voicetype-preview-install 語音'
           $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
           if (-not (Test-Path "$destination/voicetype-desktop.exe")) { throw 'Installed executable missing' }
+          python tests/installed_opencc.py "$destination" target/opencc/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed OpenCC verification failed' }
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
         run: python tests/artifact_manifest.py
@@ -123,3 +128,4 @@ jobs:
             desktop/target/preview-manifest.json
             desktop/target/runtime/manifest.json
             desktop/target/runtime/build-provenance.json
+            desktop/target/opencc/manifest.json

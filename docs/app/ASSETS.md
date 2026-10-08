@@ -169,3 +169,18 @@ build-time catalog and verifies real loader paths. Windows still has no packaged
 speech runtime. Shared input integration, complete app/model/Rust dependency notice
 inventory and real speech acceptance remain release work; this preview is not a
 production dictation installer.
+
+
+### Windows vocabulary conversion
+
+`scripts/build-desktop-opencc.py` builds OpenCC 1.1.9 from commit
+`556ed22496d650bd0b13b6c163be9814637970ae`, with source archive SHA-256
+`2792fc0944359c5d099bd79e08bfffce250bf3760aa0ec306e975cc58314482a`.
+The recipe disables Darts, benchmarks and tests, uses static MSVC runtime and
+marisa, and packages only the DLL plus `s2tw.json`, STPhrases, STCharacters and
+TWVariants. Each produced file is cataloged and verified by the Tauri build.
+OpenCC's Apache-2.0 notice, marisa's BSD-2-Clause choice and the pinned RapidJSON
+notice are included; provenance records their sources. The DLL is loaded only
+from beside the application executable, with its absolute dictionary path.
+See [upstream build options](https://github.com/BYVoid/OpenCC/blob/556ed22496d650bd0b13b6c163be9814637970ae/CMakeLists.txt).
+This supplies text conversion, not the still-incomplete Windows speech runtime.

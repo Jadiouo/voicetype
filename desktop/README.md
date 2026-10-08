@@ -101,3 +101,26 @@ This overrides only the preview's configuration directory. Isolate `XDG_DATA_HOM
 as well when testing module installation; the setting is never
 used by the production dictation daemon. UI evidence is saved separately from
 installer artifacts. Neither is proof of working speech adapters.
+
+
+### Vocabulary in the preview
+
+Open **我的詞庫** to add explicit wrong/right spellings, protect names, preview
+saved rules, or restore the previous save. The preview stores `vocab.toml` beside
+`desktop.json`; both installed providers will use that file, with Local already
+connected. Rules are reloaded at each local output without restarting the engine.
+Preview checks vocabulary replacements only, not ASR, conversion or CSC.
+
+**匯入原有詞庫** explicitly copies the existing `voicetype/vocab.toml` (or the
+native `VOICETYPE_VOCAB` override) only before an App vocabulary has been created.
+The original remains unchanged. Conflicting edits request reload instead of
+silently overwriting another editor; saves keep one `.bak` version. TOML comments
+and unknown fields are preserved. Use a complete phrase for ambiguous English
+such as `coming`; never assume every occurrence means `commit`.
+
+Windows builds first run `python ../scripts/build-desktop-opencc.py target/opencc
+--stage-tests target/debug/deps` from `desktop/`. This builds the pinned native
+converter and dictionaries, stages the actual Rust test dependency, and supplies
+installer resources. It does not install or start an input service. Linux uses
+its declared system OpenCC dependency. Missing native conversion is an error,
+not permission to discard protected names.

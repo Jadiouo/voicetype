@@ -11,6 +11,7 @@ use tauri::{
 };
 use voicetype_app_core::{
     setup::{ModelSetup, SetupStatus},
+    vocabulary::{Vocabulary, VocabularyView},
     worker::{DesktopSnapshot, DesktopWorker, RecoveryText},
     Provider,
 };
@@ -23,8 +24,86 @@ struct DesktopState {
     local_installer: voicetype_app_core::local_install::LocalInstaller,
     #[cfg(target_os = "linux")]
     runtime_resources: PathBuf,
-    #[cfg(target_os = "linux")]
     config_dir: PathBuf,
+    legacy_vocabulary: PathBuf,
+}
+
+// These commands run independently of the resident dictation queue. File
+// validation/preview must never pause capture or delay a result already in flight.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum VocabularyChange {
+    Put {
+        index: Option<usize>,
+        wrong: Vec<String>,
+        right: String,
+    },
+    Delete {
+        index: usize,
+    },
+    Names {
+        names: Vec<String>,
+    },
+    Terms {
+        terms: Vec<String>,
+    },
+    Restore,
+    Import,
+}
+
+#[tauri::command]
+async fn get_vocabulary(app: tauri::AppHandle) -> Result<VocabularyView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(Vocabulary::open(app.state::<DesktopState>().config_dir.join("vocab.toml"))?.snapshot())
+    })
+    .await
+    .map_err(|_| "詞庫工作中斷".to_string())?
+}
+
+#[tauri::command]
+async fn edit_vocabulary(
+    revision: String,
+    change: VocabularyChange,
+    app: tauri::AppHandle,
+) -> Result<VocabularyView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let mut vocabulary = Vocabulary::open(state.config_dir.join("vocab.toml"))?;
+        match change {
+            VocabularyChange::Put {
+                index,
+                wrong,
+                right,
+            } => vocabulary.put(&revision, index, wrong, right),
+            VocabularyChange::Delete { index } => vocabulary.delete(&revision, index),
+            VocabularyChange::Names { names } => vocabulary.set_names(&revision, names),
+            VocabularyChange::Terms { terms } => vocabulary.set_terms(&revision, terms),
+            VocabularyChange::Restore => vocabulary.restore(&revision),
+            VocabularyChange::Import => {
+                vocabulary.import_existing(&revision, &state.legacy_vocabulary)
+            }
+        }
+    })
+    .await
+    .map_err(|_| "詞庫工作中斷".to_string())?
+}
+
+#[tauri::command]
+async fn preview_vocabulary(
+    revision: String,
+    text: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let vocabulary =
+            Vocabulary::open(app.state::<DesktopState>().config_dir.join("vocab.toml"))?;
+        if vocabulary.snapshot().revision != revision {
+            return Err("詞庫已更新，請重新載入再預覽".into());
+        }
+        vocabulary.preview(&text)
+    })
+    .await
+    .map_err(|_| "詞庫工作中斷".to_string())?
 }
 
 #[tauri::command]
@@ -285,8 +364,10 @@ fn main() {
                 )?,
                 #[cfg(target_os = "linux")]
                 runtime_resources: app.path().resource_dir()?.join("runtime"),
-                #[cfg(target_os = "linux")]
                 config_dir: config_dir.clone(),
+                legacy_vocabulary: std::env::var_os("VOICETYPE_VOCAB")
+                    .map(PathBuf::from)
+                    .unwrap_or(app.path().config_dir()?.join("voicetype/vocab.toml")),
                 worker: DesktopWorker::spawn(config_dir)?,
                 models: ModelSetup::new(model_root)?,
                 tray_available: AtomicBool::new(false),
@@ -328,7 +409,10 @@ fn main() {
             load_local_runtime,
             unload_local_runtime,
             enable_local_input,
-            configure_input_module
+            configure_input_module,
+            get_vocabulary,
+            edit_vocabulary,
+            preview_vocabulary
         ])
         .build(tauri::generate_context!())
         .expect("VoiceType could not start")

@@ -92,6 +92,7 @@ impl LocalInstaller {
             model_dir: installed_models[0].clone(),
             vad_model: installed_models[1].join("silero-v5.0.onnx"),
             profile: self.root.join("local-profile"),
+            vocabulary: self.root.join("vocab.toml"),
         })
     }
 }

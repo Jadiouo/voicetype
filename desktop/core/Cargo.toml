@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Platform-independent commands for the VoiceType desktop app"
 
 [dependencies]
+voicetype-text = { path = "../text" }
+toml_edit = "0.25.15"
+toml = "1.1.4"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

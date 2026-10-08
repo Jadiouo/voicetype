@@ -19,6 +19,7 @@ assert os.path.isfile(os.environ['VOICETYPE_NANO_VAD_MODEL'])
 assert os.environ['XDG_CONFIG_HOME'].startswith(os.environ['HOME'].rsplit('/', 1)[0])
 open(os.path.join(os.environ['HOME'], 'endpoint'), 'w').write(os.environ['VOICETYPE_SOCKET'])
 open(os.path.join(os.environ['HOME'], 'pid'), 'w').write(str(os.getpid()))
+open(os.path.join(os.environ['HOME'], 'vocab-path'), 'w').write(os.environ.get('VOICETYPE_VOCAB', ''))
 with socket.socket(socket.AF_UNIX) as listener:
     listener.bind(os.environ['VOICETYPE_SOCKET'])
     listener.listen(1)
@@ -57,8 +58,31 @@ while True: time.sleep(1)
         model_dir: models,
         vad_model: vad,
         profile: root.path().join("app-data"),
+        vocabulary: root.path().join("vocab.toml"),
     };
     (root, paths)
+}
+
+#[test]
+fn owned_engine_receives_the_app_vocabulary_without_inheriting_ambient_flags() {
+    use voicetype_app_core::vocabulary::Vocabulary;
+    let (_root, paths) = fixture();
+    let mut editor = Vocabulary::open(paths.vocabulary.clone()).unwrap();
+    editor
+        .put(
+            &editor.snapshot().revision,
+            None,
+            vec!["geeho".into()],
+            "GitHub".into(),
+        )
+        .unwrap();
+    let mut runtime = OwnedLocal::start(&paths, Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        fs::read_to_string(paths.profile.join("home/vocab-path")).unwrap(),
+        paths.vocabulary.to_str().unwrap()
+    );
+    assert!(!paths.profile.join("home/capture").exists());
+    runtime.shutdown().unwrap();
 }
 
 #[test]
@@ -272,6 +296,7 @@ fn runtime_parent_helper() {
             model_dir: paths[1].clone(),
             vad_model: paths[2].clone(),
             profile: paths[3].clone(),
+            vocabulary: paths[3].join("vocab.toml"),
         },
         Duration::from_secs(2),
     )

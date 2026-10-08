@@ -48,3 +48,16 @@ footer { margin-top: 18px; color: #9095a5; font-size: 10px; }
 .error { padding: 13px; background: #fff0ef; color: #a6333b; border: 1px solid #f1c6c9; border-radius: 8px; font-size: 12px; line-height: 1.7; margin-top: 14px; overflow-wrap: anywhere; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 @media (max-width: 720px) { .app { grid-template-columns: 155px 1fr; } aside { padding: 24px 14px; } main { padding: 28px 22px; } h1 { font-size: 21px; } .brand { font-size: 16px; } }
+.vocabulary { border-top: 1px solid #e3e5ed; padding: 20px 0; margin-top: 12px; }
+.vocabulary p, .vocabulary label, .vocabulary summary { font-size: 12px; line-height: 1.8; color: #6d7388; }
+.vocabulary label { display: block; margin-top: 12px; }
+.vocabulary input, .vocabulary textarea { display: block; width: 100%; resize: vertical; font: inherit; font-size: 14px; padding: 10px; border: 1px solid #dfe2ec; border-radius: 8px; background: white; color: #25283b; }
+.vocabulary fieldset { display: block; margin: 16px 0; padding: 14px; border: 1px solid #e3e5ed; border-radius: 8px; }
+.vocabulary legend { font-size: 13px; font-weight: 650; }
+.vocabulary details { margin: 18px 0; }
+.vocabulary summary { cursor: pointer; }
+.vocabulary output { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; margin-top: 10px; }
+.vocab-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
+.vocab-row span { flex: 1; overflow-wrap: anywhere; min-width: 0; }
+#vocab-list { max-height: 300px; overflow-y: auto; }
+nav a + a { margin-top: 8px; }

@@ -2,7 +2,7 @@ name: Local engine protocol contract
 on:
   push:
     branches: [main, feat/desktop-app]
-    paths: ["voicetyped/**", "desktop/core/**", "voicetype-fcitx5/**", ".github/workflows/engine-contract.yml"]
+    paths: ["voicetyped/**", "desktop/core/**", "desktop/text/**", "voicetype-fcitx5/**", ".github/workflows/engine-contract.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,6 +32,7 @@ jobs:
         # OS microphone/native model are fixtures. No microphone, model download,
         # account login, GPU inference or production data participates.
         run: |
+          cargo +stable test --locked output::tests
           cargo +stable test --locked desktop_ipc_tests
           cargo +stable test --locked protocol::tests
           cargo +stable test --locked ipc::tests

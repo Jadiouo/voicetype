@@ -54,6 +54,9 @@ def main():
         env = os.environ.copy()
         env["VOICETYPE_PREVIEW_CONFIG_DIR"] = profile
         env["XDG_DATA_HOME"] = str(Path(profile) / "data")
+        env["XDG_CONFIG_HOME"] = str(Path(profile) / "legacy-config")
+        env["VOICETYPE_VOCAB"] = str(Path(profile) / "legacy-vocab.toml")
+        Path(env["VOICETYPE_VOCAB"]).write_text("# legacy fixture\nfuture=23\nentry=[]\n", encoding="utf-8")
         registration = Path(profile) / "data/fcitx5/addon/voicetype.conf"
         registration.parent.mkdir(parents=True)
         previous_registration = b"[Addon]\nLibrary=/fixture/previous/libvoicetype\n"
@@ -155,6 +158,48 @@ def main():
                 else:
                     assert js("return document.querySelector('#local-availability').textContent.includes('尚未連接')")
                 assert js("return document.querySelector('#google-availability').textContent.includes('尚未連接')")
+                # Exercise the actual vocabulary commands through the installed
+                # webview. Synthetic words only; no live dictionary is accessed.
+                eventually(lambda: js("return !document.querySelector('#vocab-fields').disabled"))
+                assert not (Path(profile) / "vocab.toml").exists(), "Opening the app wrote a vocabulary"
+                click("#vocab-import")
+                eventually(lambda: js("return document.querySelector('#vocab-status').textContent.includes('已儲存')"))
+                assert (Path(profile) / "vocab.toml").read_bytes() == Path(env["VOICETYPE_VOCAB"]).read_bytes()
+                js("document.querySelector('#vocabulary details').open = true")
+                js("document.querySelector('#vocab-names').value = '台積電\\n游錫堃'")
+                assert js("return !document.querySelector('#vocab-save-names').disabled"), "OpenCC not loaded"
+                click("#vocab-save-names")
+                eventually(lambda: js("return document.querySelector('#vocab-status').textContent.includes('已儲存')"))
+                js("document.querySelector('#vocab-preview-input').value = '臺積電與游錫堃'")
+                click("#vocab-preview")
+                eventually(lambda: js("return document.querySelector('#vocab-preview-output').textContent === '台積電與游錫堃'"))
+                imported_names = (Path(profile) / "vocab.toml").read_bytes()
+                click("#vocab-example")
+                click("#vocab-save")
+                eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))
+                vocab_saved = (Path(profile) / "vocab.toml").read_bytes()
+                assert b"# legacy fixture" in vocab_saved and b"future=23" in vocab_saved
+                js("document.querySelector('#vocab-preview-input').value = '先 push 到 GEEHO，coming soon；`geeho` 保留。'")
+                click("#vocab-preview")
+                eventually(lambda: js("return document.querySelector('#vocab-preview-output').textContent === '先 push 到 GitHub，coming soon；`geeho` 保留。'"))
+                # Editing another copy invalidates the displayed revision.
+                (Path(profile) / "vocab.toml").write_bytes(vocab_saved + b"# external editor\n")
+                click("#vocab-list button")
+                js("document.querySelector('#vocab-right').value = 'Other'")
+                click("#vocab-save")
+                eventually(lambda: js("return !document.querySelector('#vocab-error').hidden"))
+                assert js("return document.querySelector('#vocab-error').textContent.includes('重新載入')")
+                assert (Path(profile) / "vocab.toml").read_bytes() == vocab_saved + b"# external editor\n"
+                assert js("return document.querySelector('#vocab-right').value === 'Other'")
+                click("#vocab-reload")
+                eventually(lambda: js("return document.querySelector('#vocab-status').textContent === '詞庫已載入。'"))
+                click("#vocab-restore")
+                eventually(lambda: js("return document.querySelector('#vocab-status').textContent.includes('已儲存')"))
+                assert (Path(profile) / "vocab.toml").read_bytes() == imported_names
+                click("#vocab-restore")
+                eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))
+                js("document.querySelector('#vocabulary').scrollIntoView()")
+                (output / "vocabulary.png").write_bytes(base64.b64decode(request("GET", f"/session/{session}/screenshot")))
                 click("#provider-google")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('偏好已儲存')"))
                 assert js("return document.querySelector('#provider-google').checked")
@@ -165,6 +210,8 @@ def main():
                 session = open_app()
                 eventually(ready)
                 assert js("return document.querySelector('#provider-google').checked"), "Choice did not survive restart"
+
+                eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))
 
                 # Corruption is a public persisted-config input. The UI must show
                 # an error and disable writes instead of silently resetting it.
@@ -183,7 +230,9 @@ def main():
                     "passed": ["installed-window", "default-local", "choose-google",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
                                "provider-status-without-recording", "recovery-empty-state",
-                               "model-setup-explicit-only", "runtime-setup-requires-models", "input-requires-runtime"],
+                               "model-setup-explicit-only", "runtime-setup-requires-models", "input-requires-runtime", "vocabulary-explicit-import",
+                               "vocabulary-save-preview", "vocabulary-conflict-preserves-edit",
+                               "vocabulary-restore-restart", "vocabulary-protected-names"],
                     "speech_adapters_tested": False,
                     "fcitx_install_restore_tested": sys.platform == "linux",
                 }, indent=2) + "\n", encoding="utf-8")

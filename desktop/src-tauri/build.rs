@@ -2,9 +2,15 @@ fn main() {
     // The runtime catalog is a build artifact from the reviewed source-build
     // pipeline. Embed its bytes; never trust a replaceable installed sidecar.
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+    let target = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target == "linux" || target == "windows" {
         use sha2::{Digest, Sha256};
-        for name in ["runtime", "input"] {
+        let bundles: &[&str] = if target == "linux" {
+            &["runtime", "input"]
+        } else {
+            &["opencc"]
+        };
+        for name in bundles {
             let root = std::path::PathBuf::from("../target").join(name);
             let manifest = root.join("manifest.json");
             println!("cargo:rerun-if-changed={}", manifest.display());

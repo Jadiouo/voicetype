@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model_dir: PathBuf::from(&args[1]).canonicalize()?,
         vad_model: PathBuf::from(&args[2]).canonicalize()?,
         profile: profile.path().to_owned(),
+        vocabulary: profile.path().join("vocab.toml"),
     };
     let mut expected_libraries = args.get(3).map(PathBuf::from);
     if packaged {

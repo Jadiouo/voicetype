@@ -119,6 +119,13 @@ pending reviews. Settings include recognition, vocabulary, review and general
 preferences. Changing provider when idle affects the next recording. When busy,
 explain that the current recording must finish or be cancelled first.
 
+The preview now has native vocabulary commands and a shared `voicetype-text` policy
+used by its editor/preview and local daemon. The preview keeps `vocab.toml` beside
+`desktop.json`; explicit one-time import copies the legacy file without changing
+it. Local receives that exact path and reloads at each output. Review/CSC and
+Google integration remain pending. Windows packages source-built OpenCC for the
+same names policy; this does not imply Windows speech is ready.
+
 Vocabulary offers explicit wrong/right examples such as `geeho → GitHub`, while
 ambiguous words such as `coming` need a full phrase. Review corrections remain
 local; promoting a short rule requires an explicit action. Daily dictation does

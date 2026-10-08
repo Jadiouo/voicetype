@@ -18,6 +18,7 @@ mod providers;
 pub mod runtime;
 pub mod setup;
 mod setup_worker;
+pub mod vocabulary;
 pub mod worker;
 pub use dictation::{
     CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationPhase,
