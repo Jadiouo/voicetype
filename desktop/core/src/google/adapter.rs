@@ -32,6 +32,7 @@ pub struct GoogleCliBoundary<A: GoogleAudio> {
     audio: A,
     budget: Duration,
     cleaned: bool,
+    cancelled: Option<Arc<AtomicBool>>,
 }
 
 impl<A: GoogleAudio> GoogleCliBoundary<A> {
@@ -51,20 +52,36 @@ impl<A: GoogleAudio> GoogleCliBoundary<A> {
             audio,
             budget,
             cleaned: false,
+            cancelled: None,
         })
     }
 }
 
 impl<A: GoogleAudio> GoogleBoundary for GoogleCliBoundary<A> {
     fn set_cancellation(&mut self, flag: Arc<AtomicBool>) {
-        self.audio.set_cancellation(flag);
+        self.audio.set_cancellation(flag.clone());
+        self.cancelled = Some(flag);
     }
 
     fn start_capture(&mut self) -> io::Result<()> {
         if self.cleaned {
             return Err(io::ErrorKind::BrokenPipe.into());
         }
+        if self
+            .cancelled
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
         self.audio.start()?;
+        if self
+            .cancelled
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
         self.terminal.control(TerminalControl::VoiceToggle)?;
         self.audio.wait_connected()
     }

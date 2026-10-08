@@ -1,5 +1,5 @@
 //! Linux PipeWire capture and one-consumer PCM relay for the official CLI.
-//! Catch-up is deliberately disabled: queued PCM is paced at 16 kHz s16 mono.
+//! Catch-up defaults off: queued PCM is paced at 16 kHz s16 mono.
 use super::adapter::GoogleAudio;
 use sha2::{Digest, Sha256};
 use std::{
@@ -41,6 +41,7 @@ pub struct LinuxPcmAudio {
     closing: Arc<AtomicBool>,
     stop_requested: Arc<AtomicBool>,
     total_sent: Arc<AtomicU64>,
+    total_produced: Arc<AtomicU64>,
     catchup: bool,
 }
 
@@ -94,6 +95,7 @@ impl LinuxPcmAudio {
             closing: Arc::new(AtomicBool::new(false)),
             stop_requested: Arc::new(AtomicBool::new(false)),
             total_sent: Arc::new(AtomicU64::new(0)),
+            total_produced: Arc::new(AtomicU64::new(0)),
             catchup: false,
         })
     }
@@ -146,6 +148,9 @@ impl GoogleAudio for LinuxPcmAudio {
     }
 
     fn start(&mut self) -> io::Result<()> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
         if self.child.is_some() || self.relay.is_some() {
             return Err(io::ErrorKind::AlreadyExists.into());
         }
@@ -157,6 +162,7 @@ impl GoogleAudio for LinuxPcmAudio {
         let closing = self.closing.clone();
         let stop_requested = self.stop_requested.clone();
         let sent = self.total_sent.clone();
+        let produced = self.total_produced.clone();
         let nonce = self.nonce.clone();
         let catchup = self.catchup;
         self.relay = Some(
@@ -173,6 +179,7 @@ impl GoogleAudio for LinuxPcmAudio {
                         closing,
                         stop_requested,
                         sent,
+                        produced.clone(),
                         catchup,
                     )
                 })?,
@@ -194,14 +201,18 @@ impl GoogleAudio for LinuxPcmAudio {
                 Ok(())
             });
         }
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
         let mut child = command.spawn()?;
         let output = child.stdout.take().ok_or(io::ErrorKind::BrokenPipe)?;
         self.child = Some(child);
         let closing = self.closing.clone();
+        let produced = self.total_produced.clone();
         self.reader = Some(
             thread::Builder::new()
                 .name("voicetype-google-pcm-read".into())
-                .spawn(move || read_pcm(output, sender, closing))?,
+                .spawn(move || read_pcm(output, sender, closing, produced))?,
         );
         Ok(())
     }
@@ -298,6 +309,33 @@ impl GoogleAudio for LinuxPcmAudio {
     }
 }
 
+impl Drop for LinuxPcmAudio {
+    fn drop(&mut self) {
+        // Last-resort child ownership for direct users and partially failed
+        // startup. The provider normally keeps this object until cleanup()
+        // succeeds; dropping Child alone would leave its process running.
+        self.closing.store(true, Ordering::Release);
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(mut child) = self.child.take() {
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                if let Ok(pid) = i32::try_from(child.id()) {
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                }
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+        }
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        if let Some(relay) = self.relay.take() {
+            let _ = relay.join();
+        }
+    }
+}
+
 fn verify_executable(path: &Path, expected: &str) -> io::Result<()> {
     if !path.is_absolute()
         || expected.len() != 64
@@ -326,6 +364,7 @@ fn read_pcm(
     mut output: impl Read,
     sender: SyncSender<Vec<u8>>,
     closing: Arc<AtomicBool>,
+    produced: Arc<AtomicU64>,
 ) -> io::Result<u64> {
     let mut total = 0u64;
     let mut held = Vec::<u8>::new();
@@ -342,6 +381,7 @@ fn read_pcm(
             if total > MAX_PCM {
                 return Err(io::ErrorKind::InvalidData.into());
             }
+            produced.store(total, Ordering::Release);
             send_frame(&sender, frame, &closing)?;
         }
     }
@@ -353,6 +393,7 @@ fn read_pcm(
         if total > MAX_PCM {
             return Err(io::ErrorKind::InvalidData.into());
         }
+        produced.store(total, Ordering::Release);
         send_frame(&sender, held, &closing)?;
     }
     Ok(total)
@@ -388,6 +429,7 @@ fn serve(
     closing: Arc<AtomicBool>,
     stop_requested: Arc<AtomicBool>,
     sent: Arc<AtomicU64>,
+    produced: Arc<AtomicU64>,
     catchup: bool,
 ) -> io::Result<()> {
     listener.set_nonblocking(true)?;
@@ -416,7 +458,7 @@ fn serve(
     }
     client.write_all(b"OK")?;
     connected.store(true, Ordering::Release);
-    let paced_from = Instant::now();
+    let mut pacer = PcmPacer::new();
     let mut byte_count = 0u64;
     loop {
         let mut request = [0u8; 4];
@@ -477,26 +519,57 @@ fn serve(
         }
         byte_count += frame.len() as u64;
         sent.store(byte_count, Ordering::Release);
-        let target = if catchup {
-            Instant::now()
-                + Duration::from_secs_f64(
-                    frame.len() as f64
-                        / 32_000.0
-                        / if stop_requested.load(Ordering::Acquire) {
-                            2.0
-                        } else {
-                            1.0
-                        },
-                )
-        } else {
-            paced_from + Duration::from_secs_f64(byte_count as f64 / 32_000.0)
-        };
+        let backlog = produced.load(Ordering::Acquire).saturating_sub(byte_count);
+        let target = pacer.after_frame(
+            Instant::now(),
+            frame.len(),
+            backlog,
+            catchup && stop_requested.load(Ordering::Acquire),
+        );
         while Instant::now() < target {
             if closing.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire) {
                 return Err(io::ErrorKind::Interrupted.into());
             }
-            thread::sleep((target - Instant::now()).min(Duration::from_millis(5)));
+            thread::sleep(
+                target
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(5)),
+            );
         }
+    }
+}
+
+struct PcmPacer {
+    deadline: Instant,
+    catching_up: bool,
+}
+
+impl PcmPacer {
+    fn new() -> Self {
+        Self {
+            deadline: Instant::now(),
+            catching_up: false,
+        }
+    }
+
+    fn after_frame(
+        &mut self,
+        now: Instant,
+        bytes: usize,
+        backlog: u64,
+        allow_catchup: bool,
+    ) -> Instant {
+        // 200 ms to enter and below 100 ms to leave; catch-up only after
+        // explicit stop, and never faster than twice the native sample rate.
+        if !allow_catchup || (self.catching_up && backlog < 3_200) {
+            self.catching_up = false;
+        } else if backlog >= 6_400 {
+            self.catching_up = true;
+        }
+        let speed = if self.catching_up { 2.0 } else { 1.0 };
+        self.deadline =
+            self.deadline.max(now) + Duration::from_secs_f64(bytes as f64 / 32_000.0 / speed);
+        self.deadline
     }
 }
 
@@ -521,4 +594,110 @@ fn read_exact_checked(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_relay_does_not_burst_queued_pcm_after_consumer_stall() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("relay.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (sender, receiver) = mpsc::sync_channel(32);
+        for _ in 0..12 {
+            sender.send(vec![1u8; 640]).unwrap();
+        }
+        drop(sender);
+        let connected = Arc::new(AtomicBool::new(false));
+        let drained = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let closing = Arc::new(AtomicBool::new(false));
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let sent = Arc::new(AtomicU64::new(0));
+        let produced = Arc::new(AtomicU64::new(12 * 640));
+        let server = thread::spawn({
+            let connected = connected.clone();
+            let drained = drained.clone();
+            let cancelled = cancelled.clone();
+            let closing = closing.clone();
+            let stop_requested = stop_requested.clone();
+            let sent = sent.clone();
+            let produced = produced.clone();
+            move || {
+                serve(
+                    listener,
+                    "a".repeat(64),
+                    receiver,
+                    connected,
+                    drained,
+                    cancelled,
+                    closing,
+                    stop_requested,
+                    sent,
+                    produced,
+                    false,
+                )
+            }
+        });
+        let mut client = UnixStream::connect(socket).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client.write_all("a".repeat(64).as_bytes()).unwrap();
+        let mut hello = [0; 2];
+        client.read_exact(&mut hello).unwrap();
+        assert_eq!(&hello, b"OK");
+        let mut pull = || {
+            client.write_all(&640u32.to_be_bytes()).unwrap();
+            let mut len = [0; 4];
+            client.read_exact(&mut len).unwrap();
+            let n = u32::from_be_bytes(len) as usize;
+            let mut frame = vec![0; n];
+            client.read_exact(&mut frame).unwrap();
+            client.write_all(&(n as u32).to_be_bytes()).unwrap();
+            n
+        };
+        assert_eq!(pull(), 640);
+        thread::sleep(Duration::from_millis(350));
+        let resumed = Instant::now();
+        for _ in 0..8 {
+            assert_eq!(pull(), 640);
+        }
+        assert!(
+            resumed.elapsed() >= Duration::from_millis(130),
+            "queued frames burst faster than the normal 1x PCM rate"
+        );
+        for _ in 0..3 {
+            assert_eq!(pull(), 640);
+        }
+        assert_eq!(pull(), 0);
+        drop(pull);
+        drop(client);
+        server.join().unwrap().unwrap();
+        assert!(drained.load(Ordering::Acquire));
+        assert_eq!(sent.load(Ordering::Acquire), 12 * 640);
+    }
+
+    #[test]
+    fn optional_catchup_uses_200ms_enter_100ms_exit_and_never_exceeds_2x() {
+        let mut pacer = PcmPacer::new();
+        let now = Instant::now();
+        let one = pacer.after_frame(now, 640, 6_400, false);
+        assert_eq!(one.duration_since(now), Duration::from_millis(20));
+        let two = pacer.after_frame(one, 640, 6_399, true);
+        assert_eq!(two.duration_since(one), Duration::from_millis(20));
+        let three = pacer.after_frame(two, 640, 6_400, true);
+        assert_eq!(three.duration_since(two), Duration::from_millis(10));
+        let four = pacer.after_frame(three, 640, 3_200, true);
+        assert_eq!(four.duration_since(three), Duration::from_millis(10));
+        let five = pacer.after_frame(four, 640, 3_199, true);
+        assert_eq!(five.duration_since(four), Duration::from_millis(20));
+        let stalled = pacer.after_frame(five + Duration::from_secs(1), 640, 20_000, true);
+        assert_eq!(
+            stalled.duration_since(five + Duration::from_secs(1)),
+            Duration::from_millis(10)
+        );
+    }
 }

@@ -276,3 +276,153 @@ fn failed_cleanup_keeps_microphone_reserved_until_retry_confirms_release() {
     assert!(!app.snapshot().dictation.busy);
     assert!(field.0.is_empty());
 }
+
+#[test]
+fn a_cancel_accepted_after_start_is_never_cleared_by_worker_start() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    struct WaitForCancel {
+        cancelled: Option<Arc<AtomicBool>>,
+        observed: Arc<AtomicBool>,
+        started: Arc<AtomicBool>,
+    }
+    impl GoogleBoundary for WaitForCancel {
+        fn set_cancellation(&mut self, flag: Arc<AtomicBool>) {
+            self.cancelled = Some(flag);
+        }
+        fn start_capture(&mut self) -> std::io::Result<()> {
+            self.started.store(true, Ordering::Release);
+            let until = std::time::Instant::now() + Duration::from_secs(1);
+            while std::time::Instant::now() < until {
+                if self.cancelled.as_ref().unwrap().load(Ordering::Acquire) {
+                    self.observed.store(true, Ordering::Release);
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+        fn stop_capture_and_drain(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn stop_official_voice(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn wait_official_recorder(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn capture_editor(&mut self) -> std::io::Result<String> {
+            Ok(String::new())
+        }
+        fn settle(&mut self, _: Duration) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reject_known_voice_errors(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn cleanup(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let observed = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicBool::new(false));
+    let mut provider = GoogleProvider::spawn(WaitForCancel {
+        cancelled: None,
+        observed: observed.clone(),
+        started: started.clone(),
+    })
+    .unwrap();
+    let profile = tempfile::tempdir().unwrap();
+    let mut app = Application::open(profile.path()).unwrap();
+    app.select_provider(Provider::Google).unwrap();
+    app.start_dictation(TargetLease::new("editor", 1), &mut provider)
+        .unwrap();
+    app.cancel_dictation(&mut provider).unwrap();
+    let _ = provider.recv_timeout(Duration::from_secs(2));
+    assert!(
+        !started.load(Ordering::Acquire) || observed.load(Ordering::Acquire),
+        "accepted cancel was cleared before start_capture"
+    );
+}
+
+#[test]
+fn shutdown_retains_a_failing_boundary_until_cleanup_can_confirm_release() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    struct Failing {
+        allow_release: Arc<AtomicBool>,
+        cleanup_calls: Arc<AtomicUsize>,
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for Failing {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+    impl GoogleBoundary for Failing {
+        fn start_capture(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn stop_capture_and_drain(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn stop_official_voice(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn wait_official_recorder(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn capture_editor(&mut self) -> std::io::Result<String> {
+            Ok(String::new())
+        }
+        fn settle(&mut self, _: Duration) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reject_known_voice_errors(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn cleanup(&mut self) -> std::io::Result<()> {
+            self.cleanup_calls.fetch_add(1, Ordering::AcqRel);
+            if self.allow_release.load(Ordering::Acquire) {
+                Ok(())
+            } else {
+                Err(std::io::ErrorKind::TimedOut.into())
+            }
+        }
+    }
+    let allow_release = Arc::new(AtomicBool::new(false));
+    let cleanup_calls = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let mut provider = GoogleProvider::spawn(Failing {
+        allow_release: allow_release.clone(),
+        cleanup_calls: cleanup_calls.clone(),
+        dropped: dropped.clone(),
+    })
+    .unwrap();
+    let profile = tempfile::tempdir().unwrap();
+    let mut app = Application::open(profile.path()).unwrap();
+    app.select_provider(Provider::Google).unwrap();
+    app.start_dictation(TargetLease::new("editor", 1), &mut provider)
+        .unwrap();
+    assert!(matches!(
+        provider.recv_timeout(Duration::from_secs(1)),
+        Some((_, ProviderEvent::Recording))
+    ));
+    app.cancel_dictation(&mut provider).unwrap();
+    assert!(matches!(
+        provider.recv_timeout(Duration::from_secs(1)),
+        Some((_, ProviderEvent::Failed(_)))
+    ));
+    let drop_thread = std::thread::spawn(move || drop(provider));
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    while cleanup_calls.load(Ordering::Acquire) < 3 && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let retried = cleanup_calls.load(Ordering::Acquire) >= 3;
+    let abandoned = dropped.load(Ordering::Acquire);
+    allow_release.store(true, Ordering::Release);
+    drop_thread.join().unwrap();
+    assert!(retried);
+    assert!(!abandoned, "live recorder owner was abandoned");
+    assert!(dropped.load(Ordering::Acquire));
+}

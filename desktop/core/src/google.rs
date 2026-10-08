@@ -19,7 +19,7 @@ use std::{
         mpsc, Arc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -248,7 +248,18 @@ impl GoogleProvider {
                             if attempt.is_some() {
                                 continue;
                             }
-                            worker_cancelled.store(false, Ordering::Release);
+                            if worker_cancelled.load(Ordering::Acquire) {
+                                if boundary.cleanup().is_ok() {
+                                    let _ = output.send((key, ProviderEvent::Released));
+                                } else {
+                                    let _ = output.send((
+                                        key,
+                                        ProviderEvent::Failed(SessionFailure::ProviderFailed),
+                                    ));
+                                    attempt = Some(GoogleAttempt { finished: true });
+                                }
+                                continue;
+                            }
                             match GoogleAttempt::start(&mut boundary) {
                                 Ok(started) if !worker_cancelled.load(Ordering::Acquire) => {
                                     attempt = Some(started);
@@ -315,6 +326,12 @@ impl GoogleProvider {
                             if let Some(mut started) = attempt.take() {
                                 let _ = started.cancel(&mut boundary);
                             }
+                            // A failed cleanup still owns a possible live recorder.
+                            // Keep the boundary in this worker until release is
+                            // confirmed, even if the provider has been dropped.
+                            while boundary.cleanup().is_err() {
+                                thread::sleep(Duration::from_millis(50));
+                            }
                             break;
                         }
                     }
@@ -353,6 +370,9 @@ impl ProviderPort for GoogleProvider {
             ProviderCommand::Start { key, .. }
                 if key.provider() == Provider::Google && self.active.is_none() =>
             {
+                // Reset before accepting this Start. A later accepted Cancel
+                // must remain visible even if the worker has not dequeued Start.
+                self.cancelled.store(false, Ordering::Release);
                 self.active = Some(key);
                 Request::Start(key)
             }
@@ -378,7 +398,16 @@ impl Drop for GoogleProvider {
         self.cancelled.store(true, Ordering::Release);
         let _ = self.requests.send(Request::Shutdown);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            let until = Instant::now() + Duration::from_secs(2);
+            while !thread.is_finished() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
+            // Otherwise dropping JoinHandle detaches the still-running worker.
+            // It retains the boundary and retries cleanup; it does not emit a
+            // false Released event or abandon a live recorder.
         }
     }
 }

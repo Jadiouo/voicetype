@@ -20,14 +20,16 @@ relayed byte and waits for the official recorder pipe to empty before one F5
 stop. It then waits for recorder exit, takes two unchanged editor snapshots
 separated by 200 ms, checks the official log for known voice errors, reaps its
 children and only then offers the second draft to the common provider and
-target coordinator. The normal relay pace is 16 kHz mono s16 real time;
-catch-up is an explicit opt-in and defaults off. The remaining worker wiring
+target coordinator. The normal relay pace is 16 kHz mono s16 real time even
+after the official recorder pauses its reads. Catch-up is an explicit opt-in,
+defaults off, and uses at most 2× rate after stop when queued audio reaches
+200 ms; it returns to 1× below 100 ms. The remaining worker wiring
 must feed its result through the existing vocabulary, Traditional Chinese
 conversion, optional CPU spelling and focus-protected delivery path.
 
 The Linux path has a synthetic recorder/CLI end-to-end test that compares PCM
 produced with bytes consumed, plus tests for cancellation, one stop, two
-captures, error rejection and cleanup ownership. These tests do not establish
+captures, error rejection, stalled-reader pacing and cleanup ownership. These tests do not establish
 speech quality or live CLI compatibility. A no-microphone check of official
 1.3.1 confirmed its version and `--log-file`; an isolated, unauthenticated
 TUI session did not reach the editor callback. The already used Linux 1.2.12

@@ -3,8 +3,12 @@
 use sha2::{Digest, Sha256};
 use std::{fs, os::unix::fs::PermissionsExt, thread, time::Duration};
 use voicetype_app_core::google::{
-    adapter::GoogleCliBoundary, linux_audio::LinuxPcmAudio, terminal::TerminalLaunch, GoogleAttempt,
+    adapter::{GoogleAudio, GoogleCliBoundary},
+    linux_audio::LinuxPcmAudio,
+    terminal::TerminalLaunch,
+    GoogleAttempt, GoogleBoundary, GoogleProvider,
 };
+use voicetype_app_core::{Application, Provider, ProviderEvent, TargetLease};
 
 #[test]
 fn synthetic_native_pcm_is_consumed_before_official_stop_and_delivery() {
@@ -120,4 +124,162 @@ fn reviewed_pipewire_symlink_is_accepted_without_starting_a_microphone() {
     }
     let audio = LinuxPcmAudio::new(root.path(), recorder, expected, shim).unwrap();
     assert!(!audio.catchup_enabled());
+}
+
+#[test]
+fn dropping_a_started_native_recorder_kills_and_reaps_the_child() {
+    let root = tempfile::tempdir().unwrap();
+    let recorder = root.path().join("fake-recorder");
+    let pid_file = root.path().join("recorder-pid");
+    fs::write(
+        &recorder,
+        format!(
+            r#"#!/usr/bin/python3 -u
+import os,time
+open({:?},'w').write(str(os.getpid()))
+while True: time.sleep(1)
+"#,
+            pid_file.display().to_string()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&recorder, fs::Permissions::from_mode(0o700)).unwrap();
+    let shim = std::path::Path::new(env!("CARGO_BIN_EXE_voicetype-google-pcm"));
+    let mut audio = LinuxPcmAudio::new(
+        root.path(),
+        &recorder,
+        &format!("{:x}", Sha256::digest(fs::read(&recorder).unwrap())),
+        shim,
+    )
+    .unwrap();
+    audio.start().unwrap();
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    while !pid_file.is_file() && std::time::Instant::now() < until {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let pid: i32 = fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    drop(audio);
+    let result = unsafe { libc::kill(pid, 0) };
+    assert_eq!(result, -1, "native recorder child outlived its owner");
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
+#[test]
+fn failed_cleanup_retains_a_real_recorder_until_retry_reaps_it() {
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
+    struct FailingAudio {
+        audio: LinuxPcmAudio,
+        allow: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+    }
+    impl GoogleBoundary for FailingAudio {
+        fn start_capture(&mut self) -> std::io::Result<()> {
+            self.audio.start()
+        }
+        fn stop_capture_and_drain(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn stop_official_voice(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn wait_official_recorder(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn capture_editor(&mut self) -> std::io::Result<String> {
+            Ok(String::new())
+        }
+        fn settle(&mut self, _: Duration) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn reject_known_voice_errors(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn cleanup(&mut self) -> std::io::Result<()> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            if self.allow.load(Ordering::Acquire) {
+                self.audio.cleanup()
+            } else {
+                Err(std::io::ErrorKind::TimedOut.into())
+            }
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let recorder = root.path().join("fake-recorder");
+    let pid_file = root.path().join("recorder-pid");
+    fs::write(
+        &recorder,
+        format!(
+            r#"#!/usr/bin/python3 -u
+import os,time
+open({:?},'w').write(str(os.getpid()))
+while True: time.sleep(1)
+"#,
+            pid_file.display().to_string()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&recorder, fs::Permissions::from_mode(0o700)).unwrap();
+    let audio = LinuxPcmAudio::new(
+        root.path(),
+        &recorder,
+        &format!("{:x}", Sha256::digest(fs::read(&recorder).unwrap())),
+        std::path::Path::new(env!("CARGO_BIN_EXE_voicetype-google-pcm")),
+    )
+    .unwrap();
+    let allow = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut provider = GoogleProvider::spawn(FailingAudio {
+        audio,
+        allow: allow.clone(),
+        calls: calls.clone(),
+    })
+    .unwrap();
+    let profile = tempfile::tempdir().unwrap();
+    let mut app = Application::open(profile.path()).unwrap();
+    app.select_provider(Provider::Google).unwrap();
+    app.start_dictation(TargetLease::new("editor", 1), &mut provider)
+        .unwrap();
+    assert!(matches!(
+        provider.recv_timeout(Duration::from_secs(1)),
+        Some((_, ProviderEvent::Recording))
+    ));
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    while !pid_file.is_file() && std::time::Instant::now() < until {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let pid: i32 = fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    app.cancel_dictation(&mut provider).unwrap();
+    assert!(matches!(
+        provider.recv_timeout(Duration::from_secs(1)),
+        Some((_, ProviderEvent::Failed(_)))
+    ));
+    let drop_thread = thread::spawn(move || drop(provider));
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    while calls.load(Ordering::Acquire) < 3 && std::time::Instant::now() < until {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let retried = calls.load(Ordering::Acquire) >= 3;
+    let alive_while_failing = unsafe { libc::kill(pid, 0) } == 0;
+    allow.store(true, Ordering::Release);
+    drop_thread.join().unwrap();
+    assert!(retried);
+    assert!(
+        alive_while_failing,
+        "failed cleanup lost the recorder process"
+    );
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "successful retry did not reap recorder"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
 }
