@@ -56,6 +56,19 @@ class RustNoticeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "differs from locked crate"):
                 BUILDER["license_sources"](package, checksum)
 
+    def test_workspace_root_gpl_notice_rejects_mit_declaration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "daemon"
+            workspace.mkdir()
+            (root / "LICENSE").write_text("GNU GENERAL PUBLIC LICENSE\nVersion 3")
+            package = {"name": "daemon", "version": "0.1.0",
+                       "manifest_path": str(workspace / "Cargo.toml"),
+                       "source": None, "license": "MIT", "license_file": None}
+            with mock.patch.dict(BUILDER["license_sources"].__globals__, ROOT=root):
+                with self.assertRaisesRegex(RuntimeError, "GPL.*MIT|MIT.*GPL"):
+                    BUILDER["license_sources"](package)
+
     def test_installed_catalog_requires_exact_member_set_and_native_catalog(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

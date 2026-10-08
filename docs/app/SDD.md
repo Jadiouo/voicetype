@@ -34,7 +34,7 @@ code has separate acceptance gates in [TDD.md](TDD.md).
 | Shell | Tauri 2, Rust commands, bundled local HTML/CSS/JS | Same |
 | Local engine | Existing Nano CPU adapter and pinned native patch | Same model/policy, Windows CPU DLLs built from the reviewed native source |
 | Google | Official CLI via existing interactive terminal adapter | Official CLI via ConPTY; voice and editor capture must pass real Windows validation |
-| Input integration | Fcitx5 owns focus and text commit | Win32 shortcut/focus and Unicode input adapter; TSF is a later option |
+| Input integration | Fcitx5 owns focus and text commit | TSF service targeting the original text context; activation and desktop acceptance remain pending |
 | IPC | Existing private Unix socket behind a platform adapter | Inherited child stdio or per-user restricted named pipe; never an unauthenticated TCP command server |
 
 Windows ARM, macOS, elevated/secure-desktop targets, arbitrary Linux distributions

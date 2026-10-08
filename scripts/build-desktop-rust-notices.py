@@ -126,7 +126,10 @@ def license_sources(package, crate_checksum=None):
     if package.get("license_file"):
         license_file = Path(package["license_file"])
         found.add(license_file if license_file.is_absolute() else folder / license_file)
-    if package["source"] is None:
+    if package["source"] is None and not found:
+        choice = selected_license(package["license"])
+        if choice != "GPL-3.0-only":
+            raise RuntimeError(f"root GPL-3.0-only LICENSE cannot satisfy {package['name']} {choice}")
         found.add(ROOT / "LICENSE")
     fallback = None
     if not found:
@@ -155,7 +158,9 @@ def license_sources(package, crate_checksum=None):
                     raise RuntimeError("Rust notice differs from locked crate: " + package["name"])
     return [(path, fallback["source_url"] if fallback else
              (f"crate:{package['name']}@{package['version']}/{path.relative_to(folder)}"
-              if package["source"] else "repository:LICENSE"),
+              if package["source"] else
+              ("repository:LICENSE" if path == ROOT / "LICENSE"
+               else f"workspace:{path.relative_to(folder)}")),
              fallback.get("note") if fallback else None)
             for path in sorted(found)]
 
