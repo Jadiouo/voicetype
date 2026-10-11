@@ -259,6 +259,17 @@ def serve_stdio(engine):
 def model_self_test(engine):
     """Numeric diagnostics for the fixed synthetic spelling fixture only."""
     from importlib.metadata import version
+    import os
+    import platform
+    from pathlib import Path
+
+    cpu_model = os.environ.get("PROCESSOR_IDENTIFIER", "")
+    if Path("/proc/cpuinfo").is_file():
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                cpu_model = line.split(":", 1)[1].strip()
+                break
+    cpu_model = cpu_model or platform.processor()
 
     text = "今天新情很好。GitHub 2026"
     simple = engine.to_simple.convert(text)
@@ -302,8 +313,11 @@ def model_self_test(engine):
             "normalized_length_same": len(simple) == len(text),
             "normalized_position_is_original": simple[original_offset] == "新",
             "onnxruntime_version": version("onnxruntime"),
+            "onnxruntime_build_sha256": hashlib.sha256(
+                getattr(engine.ort, "get_build_info", lambda: "")().encode()).hexdigest(),
             "numpy_version": version("numpy"),
             "providers": engine.session.get_providers(),
+            "cpu_model": cpu_model,
             "token_span_chars": encoded.offsets[positions[0]][1] - encoded.offsets[positions[0]][0],
             "protected_position": original_offset in protected_positions(text),
             "top_is_expected": winner == expected_id,

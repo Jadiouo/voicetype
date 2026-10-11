@@ -72,7 +72,7 @@ jobs:
           python tests/spelling_build_test.py
           python ../scripts/build-desktop-spelling.py target/spelling --cache target/csc-build-cache
           if ! cargo +stable test -p voicetype-app-core --test spelling_bundle --locked -- --ignored --nocapture; then
-            python tests/spelling_failure_diagnostic.py target/spelling
+            python tests/spelling_failure_diagnostic.py target/spelling --prepared target/csc-build-cache/prepared
             exit 1
           fi
       - name: Public application command tests
