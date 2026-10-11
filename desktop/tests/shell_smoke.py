@@ -94,11 +94,67 @@ def main():
                 def ready():
                     return js("return document.querySelector('#providers')?.disabled === false")
 
+                def shortcut_binding(provider):
+                    return json.loads((Path(profile) / "desktop.json").read_text(encoding="utf-8"))["shortcuts"][provider]
+
+                def choose_shortcut(value, provider):
+                    eventually(lambda: ready() and js("return !document.querySelector('#shortcut-choice').disabled"))
+                    # WebDriver selects the real option, exercising the UI's
+                    # change handler and public Tauri command.
+                    click(f"#shortcut-choice option[value='{value}']")
+                    eventually(lambda: (Path(profile) / "desktop.json").exists()
+                               and shortcut_binding(provider)["requested"] == value)
+                    eventually(lambda: ready() and js(
+                        f"return !document.querySelector('#shortcut-choice').disabled && "
+                        f"document.querySelector('#shortcut-choice').value === '{value}'"))
+
                 session = open_app()
                 eventually(ready)
                 assert js("return document.querySelector('#provider-local').checked")
                 assert js("return document.querySelector('#spelling-enabled').checked")
                 assert not js("return document.querySelector('#spelling-enabled').disabled")
+                eventually(lambda: js("return !document.querySelector('#shortcut-choice').disabled"))
+                assert js("return document.querySelector('#shortcut-choice').value === 'default'")
+                choose_shortcut("ctrl_shift_f9", "local")
+                assert shortcut_binding("local") == {"requested": "ctrl_shift_f9", "effective": "default"}
+                assert shortcut_binding("google") == {"requested": "default", "effective": "default"}
+                assert js("return document.querySelector('#shortcut-note').textContent.includes('已要求') && document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
+                click("#provider-google")
+                eventually(lambda: ready() and js("return document.querySelector('#provider-google').checked && document.querySelector('#shortcut-choice').value === 'default'"))
+                choose_shortcut("ctrl_shift_f9", "google")
+                assert shortcut_binding("google") == {"requested": "ctrl_shift_f9", "effective": "default"}
+                assert shortcut_binding("local") == {"requested": "ctrl_shift_f9", "effective": "default"}
+                assert js("return document.querySelector('#shortcut-note').textContent.includes('已要求') && document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
+                (output / "shortcut-requested.png").write_bytes(base64.b64decode(request("GET", f"/session/{session}/screenshot")))
+                request("DELETE", f"/session/{session}")
+                # A driver session may close its window while a native process
+                # remains alive. Change only this disposable profile on disk so
+                # the next view must reload it, not reuse the prior UI state.
+                shortcut_config = Path(profile) / "desktop.json"
+                on_disk = json.loads(shortcut_config.read_text(encoding="utf-8"))
+                assert on_disk["selected_provider"] == "google"
+                on_disk["selected_provider"] = "local"
+                shortcut_config.write_text(json.dumps(on_disk, ensure_ascii=False), encoding="utf-8")
+                session = open_app()
+                eventually(ready)
+                assert js("return document.querySelector('#provider-local').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'")
+                assert js("return document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
+                click("#provider-google")
+                eventually(lambda: ready() and js("return document.querySelector('#provider-google').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'"))
+                assert js("return document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
+                assert shortcut_binding("local")["effective"] == "default"
+                assert shortcut_binding("google")["effective"] == "default"
+                click("#provider-local")
+                eventually(lambda: ready() and js("return document.querySelector('#provider-local').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'"))
+                choose_shortcut("default", "local")
+                assert shortcut_binding("google")["requested"] == "ctrl_shift_f9", "Local selection changed Google"
+                click("#provider-google")
+                eventually(lambda: ready() and js("return document.querySelector('#provider-google').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'"))
+                choose_shortcut("default", "google")
+                assert shortcut_binding("local") == {"requested": "default", "effective": "default"}
+                assert shortcut_binding("google") == {"requested": "default", "effective": "default"}
+                click("#provider-local")
+                eventually(lambda: ready() and js("return document.querySelector('#provider-local').checked && document.querySelector('#shortcut-choice').value === 'default'"))
                 click("#spelling-enabled")
                 spelling_config = Path(profile) / "desktop.json"
                 eventually(lambda: spelling_config.exists() and json.loads(spelling_config.read_text())["spelling_enabled"] is False)
@@ -330,6 +386,7 @@ def main():
                 assert js("return document.querySelector('#spelling-enabled').checked")
                 (output / "result.json").write_text(json.dumps({
                     "passed": ["installed-window", "default-local", "choose-google",
+                               "shortcut-per-provider-request-and-restart", "shortcut-unconfirmed-effective-and-restore",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
                                "provider-status-without-recording", "recovery-empty-state",
                                "model-setup-explicit-only", "runtime-setup-requires-models", "input-requires-runtime", "vocabulary-explicit-import",
@@ -340,6 +397,7 @@ def main():
                                "review-restart-delete-disable"],
                     "spelling_toggle_restart_and_corrupt_settings": True,
                     "speech_adapters_tested": False,
+                    "shortcut_registration_tested": False,
                     "fcitx_install_restore_tested": sys.platform == "linux",
                 }, indent=2) + "\n", encoding="utf-8")
                 print("PASS: real UI selection, restart, corruption and reload")
