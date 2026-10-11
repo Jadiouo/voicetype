@@ -267,10 +267,24 @@ class InstalledApp:
                 time.sleep(0.2)
             else:
                 raise RuntimeError("native WebDriver did not become ready")
+            requested_udf = Path(self.env["WEBVIEW2_USER_DATA_FOLDER"])
             opened = self.request("POST", "/session", {"capabilities": {"alwaysMatch": {
-                "browserName": "wry", "tauri:options": {"application": str(self.executable)}
+                "browserName": "wry", "tauri:options": {
+                    "application": str(self.executable),
+                    "webviewOptions": {"userDataFolder": str(requested_udf)},
+                }
             }}}, timeout=90)
             self.session = opened["sessionId"]
+            reported_udf = opened.get("capabilities", {}).get("msedge.userDataDir")
+            actual_udf = Path(reported_udf).resolve() if reported_udf else None
+            expected_udf = requested_udf.resolve()
+            matches = (actual_udf == expected_udf and requested_udf.is_dir())
+            (self.evidence / f"{self.label}-webview-udf.json").write_text(json.dumps({
+                "requested": str(expected_udf), "reported": str(actual_udf) if actual_udf else None,
+                "requested_exists": requested_udf.is_dir(), "matches": matches,
+            }, indent=2) + "\n", encoding="utf-8")
+            if not matches:
+                raise RuntimeError("WebDriver WebView2 user data folder is outside the test workspace")
             return self
         except Exception:
             self.__exit__(None, None, None)
