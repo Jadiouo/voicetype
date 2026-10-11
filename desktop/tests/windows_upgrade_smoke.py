@@ -230,8 +230,19 @@ window.__TAURI__.core.invoke(arguments[0], arguments[1]).then(value => {
   } else done({ok:true,value});
 }, error => done({ok:false,error:String(error)}));
 """
-        result = self.request("POST", f"/session/{self.session}/execute/async",
-                              {"script": script, "args": [name, args or {}, audio]}, timeout=60)
+        route = f"/session/{self.session}/execute/async"
+        try:
+            result = self.request("POST", route,
+                                  {"script": script, "args": [name, args or {}, audio]}, timeout=60)
+        except urllib.error.HTTPError as error:
+            body = error.read(65537)
+            diagnostic = self.evidence / f"{self.label}-webdriver-http-error.json"
+            diagnostic.write_bytes(body[:65536])
+            raise RuntimeError(
+                f"WebDriver POST {route} returned HTTP {error.code}; "
+                f"response saved to {diagnostic.name} "
+                f"({min(len(body), 65536)} bytes, truncated={len(body) > 65536})"
+            ) from error
         if not result["ok"]:
             raise RuntimeError(f"public App command {name} failed: {result['error']}")
         return result["value"]
