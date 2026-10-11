@@ -115,7 +115,7 @@ def apply_edits(text, edits):
 
 
 class Engine:
-    def __init__(self, model, tokenizer, threads=4, quant_precision=False):
+    def __init__(self, model, tokenizer, threads=4, quant_precision=True):
         import numpy as np
         import onnxruntime as ort
         from opencc import OpenCC
@@ -128,8 +128,8 @@ class Engine:
         options.add_session_config_entry("session.intra_op.allow_spinning", "0")
         options.add_session_config_entry("session.inter_op.allow_spinning", "0")
         if quant_precision:
-            # Diagnostic only: compare the same QInt8 model with ORT's x64
-            # precision mode, leaving normal worker sessions unchanged.
+            # ORT's x64 U8U8 kernel avoids the QInt8 result mismatch observed
+            # on hosted x86-64 CPUs; keep the pinned model and 100 ms policy.
             options.add_session_config_entry("session.x64quantprecision", "1")
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self.session = ort.InferenceSession(str(model), sess_options=options,
@@ -421,7 +421,7 @@ def main():
     transport.add_argument("--diagnostic-self-test", action="store_true",
                            help="Print numeric results for a built-in synthetic fixture and exit")
     ap.add_argument("--diagnostic-quant-precision", action="store_true",
-                    help="Only with diagnostic self-test: use ORT x64 quant precision mode")
+                    help="Only with diagnostic self-test: compare product precision with legacy QInt8")
     ap.add_argument("--threads", type=int, default=4, choices=[1,2,4,8])
     args = ap.parse_args()
     if args.diagnostic_quant_precision and not args.diagnostic_self_test:
@@ -430,8 +430,10 @@ def main():
         with path.open("rb") as stream:
             if hashlib.file_digest(stream,"sha256").hexdigest() != expected:
                 raise SystemExit("Model/tokenizer hash mismatch")
+    # Production always uses the precision kernel. The self-test alone retains
+    # the old setting as an explicit A/B control when the flag is absent.
     engine = Engine(args.model,args.tokenizer,args.threads,
-                    quant_precision=args.diagnostic_quant_precision)
+                    quant_precision=not args.diagnostic_self_test or args.diagnostic_quant_precision)
     engine.predict("今天心情很好。",budget_ms=1000)
     if args.diagnostic_self_test:
         result = model_self_test(engine)

@@ -98,11 +98,12 @@ def main():
     try:
         model_command = command.copy()
         model_command[1] = "--diagnostic-self-test"
+        model_command.insert(2, "--diagnostic-quant-precision")
         result = subprocess.run(model_command, env=environment, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, timeout=30, check=True)
         report = json.loads(result.stdout)
         report["variant"] = "model-int8-fused.onnx"
-        report["runtime"] = "frozen_child"
+        report["runtime"] = "frozen_child_product_precision"
         print(json.dumps(report), flush=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError,
             UnicodeError, json.JSONDecodeError) as error:
@@ -127,7 +128,8 @@ def main():
                                         timeout=20, check=True)
                 report = json.loads(result.stdout)
                 report["variant"] = variant
-                report["runtime"] = "source_python"
+                report["runtime"] = ("source_python_legacy_quant" if variant == "model-int8-fused.onnx"
+                                     else "source_python")
                 print(json.dumps(report), flush=True)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError,
                     UnicodeError, json.JSONDecodeError) as error:
