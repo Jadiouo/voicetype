@@ -186,9 +186,13 @@ async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
                     .ok();
             }
             #[cfg(target_os = "linux")]
-            worker.activate_local(paths)
+            {
+                worker.activate_local(paths)
+            }
             #[cfg(windows)]
-            worker.activate_windows_local(paths)
+            {
+                worker.activate_windows_local(paths)
+            }
         })
         .await
     }
