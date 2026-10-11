@@ -77,7 +77,7 @@ def main():
                     if not data: raise ValueError("Empty OpenCC output")
                     files.append({"path": path.relative_to(stage).as_posix(), "bytes": len(data),
                                   "sha256": hashlib.sha256(data).hexdigest()})
-            (stage / "manifest.json").write_text(json.dumps({"source": provenance, "files": files}, indent=2) + "\n")
+            (stage / "manifest.json").write_text(json.dumps({"id": "opencc", "source": provenance, "files": files}, indent=2) + "\n")
             os.rename(stage, output)  # Windows refuses replacement of an existing destination.
     if args.stage_tests:
         target = args.stage_tests.absolute()
