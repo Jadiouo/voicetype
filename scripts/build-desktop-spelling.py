@@ -75,6 +75,15 @@ WINDOWS_OS_UCRT_DLLS = frozenset({
     "ucrtbase.dll",
 })
 
+PYINSTALLER_WINDOWS_WHEEL_URL = (
+    "https://files.pythonhosted.org/packages/24/83/"
+    "c5422204772a27aef643280fdc887b7ef55679989096b21dceb1b9625fc4/"
+    "pyinstaller-6.22.3-py3-none-win_amd64.whl"
+)
+PYINSTALLER_WINDOWS_WHEEL_SHA256 = "500bd58c7bf7e584a8435adccbd763a0b918d5c12b08d74ff50fd79b2915458b"
+PYINSTALLER_WINDOWS_BOOTLOADER_MEMBER = "PyInstaller/bootloader/Windows-64bit-intel/run.exe"
+PYINSTALLER_WINDOWS_BOOTLOADER_SHA256 = "581ea23eb35cee8f9df8835c892e91416df95ca629b1a6050289aea19390e08d"
+
 
 def run(*args):
     subprocess.run([str(a) for a in args], check=True, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
@@ -158,6 +167,56 @@ def is_pe(binary):
         return stream.read(4) == b"PE\0\0"
 
 
+def pe_sections(binary):
+    """Read PE section payload hashes; section headers can be rewritten in frozen EXEs."""
+    data = binary.read_bytes()
+    if len(data) < 64 or data[:2] != b"MZ":
+        raise RuntimeError("not a PE: " + str(binary))
+    offset = int.from_bytes(data[0x3c:0x40], "little")
+    if offset + 24 > len(data) or data[offset:offset + 4] != b"PE\0\0":
+        raise RuntimeError("invalid PE header: " + str(binary))
+    count = int.from_bytes(data[offset + 6:offset + 8], "little")
+    optional = int.from_bytes(data[offset + 20:offset + 22], "little")
+    table = offset + 24 + optional
+    if not count or table + count * 40 > len(data):
+        raise RuntimeError("invalid PE section table: " + str(binary))
+    sections = {}
+    for index in range(count):
+        header = data[table + index * 40:table + (index + 1) * 40]
+        name = header[:8].rstrip(b"\0").decode("ascii")
+        size = int.from_bytes(header[16:20], "little")
+        start = int.from_bytes(header[20:24], "little")
+        if not name or name in sections or start + size > len(data):
+            raise RuntimeError("invalid PE section: " + str(binary))
+        sections[name] = hashlib.sha256(data[start:start + size]).hexdigest()
+    return sections
+
+
+def generated_windows_executable_origin(executable, bootloader, spec, entry, arguments,
+                                        expected_bootloader_sha256=PYINSTALLER_WINDOWS_BOOTLOADER_SHA256):
+    """Track the generated EXE and exact bootloader input without asserting whole-file equality."""
+    bootloader_hash = digest(bootloader)
+    if bootloader_hash != expected_bootloader_sha256:
+        raise RuntimeError("PyInstaller Windows bootloader hash differs from pinned wheel member")
+    source_sections = pe_sections(bootloader)
+    output_sections = pe_sections(executable)
+    if source_sections.get(".text") is None or output_sections.get(".text") != source_sections[".text"]:
+        raise RuntimeError("generated executable bootloader code section differs")
+    unchanged = sorted(name for name in source_sections.keys() & output_sections.keys()
+                       if source_sections[name] == output_sections[name])
+    normalized = json.dumps(arguments, separators=(",", ":"), ensure_ascii=True).encode()
+    return dict(path=executable.name, bytes=executable.stat().st_size, sha256=digest(executable),
+                origin="generated PyInstaller Windows executable",
+                source_artifact=PYINSTALLER_WINDOWS_WHEEL_URL,
+                source_sha256=PYINSTALLER_WINDOWS_WHEEL_SHA256,
+                source_member=PYINSTALLER_WINDOWS_BOOTLOADER_MEMBER,
+                bootloader_sha256=bootloader_hash,
+                unchanged_bootloader_sections=unchanged,
+                entry_sha256=digest(entry), spec_sha256=digest(spec),
+                invocation=arguments, invocation_sha256=hashlib.sha256(normalized).hexdigest(),
+                notice="licenses/pyinstaller/00-COPYING.txt")
+
+
 def remove_windows_os_ucrt(bundle):
     """Use the Windows 11 system UCRT instead of shipping copied OS DLLs."""
     internal = bundle / "_internal"
@@ -177,7 +236,7 @@ def remove_windows_os_ucrt(bundle):
     return removed
 
 
-def binary_origins(bundle, excluded_os_binaries=()):
+def binary_origins(bundle, excluded_os_binaries=(), generated_windows_executable=None):
     """Account for frozen native libraries; fail Linux builds on unknown copies."""
     internal = bundle / "_internal"
     records = []
@@ -246,9 +305,16 @@ def binary_origins(bundle, excluded_os_binaries=()):
         # .dll/.pyd. Keep the incomplete catalog exact until source artifacts
         # and their redistribution notices are independently established.
         for binary in sorted(path for path in bundle.rglob("*") if path.is_file() and is_pe(path)):
-            records.append(dict(path=binary.relative_to(bundle).as_posix(),
-                                bytes=binary.stat().st_size, sha256=digest(binary),
-                                origin="Windows native binary; license audit pending"))
+            relative = binary.relative_to(bundle).as_posix()
+            if relative == "voicetype-csc.exe" and generated_windows_executable is not None:
+                if (generated_windows_executable["path"] != relative
+                        or generated_windows_executable["sha256"] != digest(binary)
+                        or generated_windows_executable["bytes"] != binary.stat().st_size):
+                    raise RuntimeError("generated Windows executable origin differs from bundle")
+                records.append(generated_windows_executable)
+            else:
+                records.append(dict(path=relative, bytes=binary.stat().st_size, sha256=digest(binary),
+                                    origin="Windows native binary; license audit pending"))
     return dict(complete=sys.platform == "linux", binaries=records,
                 excluded_os_binaries=list(excluded_os_binaries))
 
@@ -288,25 +354,41 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="spelling-build-", dir=cache) as temporary:
         work = Path(temporary)
-        run(sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--noupx",
+        pyinstaller_arguments = ["--noconfirm", "--clean", "--onedir", "--noupx",
             "--name", "voicetype-csc", "--distpath", work / "dist", "--workpath", work / "build",
             "--specpath", work, "--collect-data", "opencc", "--collect-data", "pypinyin",
             "--collect-binaries", "onnxruntime", "--exclude-module", "torch", "--exclude-module", "onnx",
             "--exclude-module", "transformers", "--exclude-module", "huggingface_hub",
-            ROOT / "scripts/voicetype_csc.py")
+            ROOT / "scripts/voicetype_csc.py"]
+        run(sys.executable, "-m", "PyInstaller", *pyinstaller_arguments)
         bundle = work / "bundle"
         # Resolve PyInstaller's same-directory library symlinks into ordinary
         # files; the app's version store never follows untrusted links.
         shutil.copytree(work / "dist/voicetype-csc", bundle, symlinks=False)
         excluded_os_binaries = remove_windows_os_ucrt(bundle) if sys.platform == "win32" else []
         versions = notices(bundle / "licenses")
-        origins = binary_origins(bundle, excluded_os_binaries)
+        generated = None
+        if sys.platform == "win32":
+            bootloader = Path(metadata.distribution("pyinstaller").locate_file(
+                PYINSTALLER_WINDOWS_BOOTLOADER_MEMBER))
+            if not bootloader.is_file():
+                raise RuntimeError("PyInstaller Windows bootloader missing from build environment")
+            normalized_arguments = [str(argument).replace(str(work), "{work}").replace(str(ROOT), "{repo}")
+                                    for argument in pyinstaller_arguments]
+            generated = generated_windows_executable_origin(
+                bundle / "voicetype-csc.exe", bootloader, work / "voicetype-csc.spec",
+                ROOT / "scripts/voicetype_csc.py", normalized_arguments)
+        origins = binary_origins(bundle, excluded_os_binaries, generated)
         models = bundle / "models"
         models.mkdir()
         for filename in ["model-int8-fused.onnx", "tokenizer.json"]:
             shutil.copyfile(prepared / filename, models / filename)
         provenance = bundle / "provenance"
         provenance.mkdir()
+        if generated is not None:
+            shutil.copyfile(work / "voicetype-csc.spec", provenance / "pyinstaller.spec")
+            if digest(provenance / "pyinstaller.spec") != generated["spec_sha256"]:
+                raise RuntimeError("stored PyInstaller spec differs from generated executable recipe")
         shutil.copyfile(prepared / "prepared.json", provenance / "model.json")
         shutil.copyfile(ROOT / "scripts/prepare_csc.py", provenance / "prepare_csc.py")
         shutil.copyfile(ROOT / "config/csc-requirements.txt", provenance / "requirements.txt")
