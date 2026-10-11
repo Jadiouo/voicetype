@@ -72,8 +72,12 @@ def checked_source_inputs(shared, cache, offline, work):
     sherpa = sources / "sherpa-onnx"
     # git apply needs a repository root; create one only inside temporary source.
     subprocess.run(["git", "-C", str(sherpa), "init", "--quiet"], check=True)
-    subprocess.run(["git", "-C", str(sherpa), "apply", "--check", str(PATCH)], check=True)
-    subprocess.run(["git", "-C", str(sherpa), "apply", str(PATCH)], check=True)
+    # Git for Windows may inherit core.autocrlf=true. The tarball, patch and
+    # post-patch hashes are byte-pinned LF inputs, independent of user config.
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-C", str(sherpa), "apply",
+                    "--check", str(PATCH)], check=True)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-C", str(sherpa), "apply",
+                    str(PATCH)], check=True)
     for extension, expected in [
         ("cc", "6e83fb54b5c468370eafa0301fd4372ca70f0e5049fc7d0553e477ae184cf7d8"),
         ("h", "0651bce685bd79d86c4d56b553e796c38917b6dafef87318c8f0c573e6be1b96"),
