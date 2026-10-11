@@ -1,5 +1,31 @@
-//! Ctrl+CapsLock toggle state, independent of Win32 message delivery.
-use crate::TargetLease;
+//! Finite toggle gesture state, independent of Win32 message delivery.
+use crate::{ShortcutBinding, ShortcutChoice, TargetLease};
+
+pub(crate) fn start_binding<T>(
+    binding: ShortcutBinding,
+    mut start: impl FnMut(ShortcutChoice) -> std::io::Result<T>,
+) -> std::io::Result<(T, ShortcutChoice)> {
+    match start(binding.requested) {
+        Ok(owner) => Ok((owner, binding.requested)),
+        Err(error) if binding.requested != binding.effective => start(binding.effective)
+            .map(|owner| (owner, binding.effective))
+            .map_err(|_| error),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn shortcut_matches(
+    choice: ShortcutChoice,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    windows: bool,
+) -> bool {
+    match choice {
+        ShortcutChoice::Default => ctrl,
+        ShortcutChoice::CtrlShiftF9 => ctrl && shift && !alt && !windows,
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum GestureAction {
@@ -25,7 +51,7 @@ enum Phase {
 #[derive(Default)]
 pub(crate) struct WindowsGesture {
     phase: Phase,
-    caps_latched: bool,
+    shortcut_latched: bool,
     escape_latched: bool,
     escape_consumed: bool,
     owner_active: bool,
@@ -34,7 +60,7 @@ pub(crate) struct WindowsGesture {
 impl WindowsGesture {
     #[cfg(windows)]
     pub fn needs_target(&self) -> bool {
-        matches!(self.phase, Phase::Idle) && !self.caps_latched
+        matches!(self.phase, Phase::Idle) && !self.shortcut_latched
     }
 
     pub fn caps(
@@ -43,21 +69,30 @@ impl WindowsGesture {
         ctrl: bool,
         target: impl FnOnce() -> Option<TargetLease>,
     ) -> KeyOutcome {
-        let suppress = self.caps_latched || ctrl;
+        self.trigger(down, ctrl, target)
+    }
+
+    pub fn trigger(
+        &mut self,
+        down: bool,
+        matched: bool,
+        target: impl FnOnce() -> Option<TargetLease>,
+    ) -> KeyOutcome {
+        let suppress = self.shortcut_latched || matched;
         if !down {
-            self.caps_latched = false;
+            self.shortcut_latched = false;
             return KeyOutcome {
                 action: None,
                 suppress,
             };
         }
-        if !ctrl || self.caps_latched {
+        if !matched || self.shortcut_latched {
             return KeyOutcome {
                 action: None,
                 suppress,
             };
         }
-        self.caps_latched = true;
+        self.shortcut_latched = true;
         let action = match self.phase {
             Phase::Idle => target().map(|target| {
                 self.phase = Phase::PendingStart;
@@ -125,6 +160,109 @@ mod tests {
 
     fn lease(id: u64) -> TargetLease {
         TargetLease::new("win:edit:1", id)
+    }
+
+    #[test]
+    fn alternate_chord_toggles_once_per_press_and_leaves_other_f9_keys_alone() {
+        let mut gesture = WindowsGesture::default();
+        assert!(!gesture.trigger(true, false, || Some(lease(99))).suppress);
+        assert!(gesture.trigger(false, false, || None).action.is_none());
+        assert_eq!(
+            gesture.trigger(true, true, || Some(lease(1))).action,
+            Some(GestureAction::Start(lease(1)))
+        );
+        assert!(gesture
+            .trigger(true, true, || Some(lease(2)))
+            .action
+            .is_none());
+        assert!(gesture.trigger(false, false, || None).suppress);
+        gesture.observe_owner(false); // queued Start must survive old idle poll
+        gesture.observe_owner(true);
+        assert_eq!(
+            gesture.trigger(true, true, || None).action,
+            Some(GestureAction::Stop)
+        );
+        gesture.trigger(false, true, || None);
+        assert!(gesture
+            .trigger(true, true, || Some(lease(2)))
+            .action
+            .is_none());
+        gesture.trigger(false, true, || None);
+        gesture.observe_owner(false);
+        assert_eq!(
+            gesture.trigger(true, true, || Some(lease(2))).action,
+            Some(GestureAction::Start(lease(2)))
+        );
+    }
+
+    #[test]
+    fn alternate_requires_exact_modifiers_and_default_keeps_ctrl_caps_behavior() {
+        assert!(shortcut_matches(
+            ShortcutChoice::Default,
+            true,
+            false,
+            false,
+            false
+        ));
+        assert!(!shortcut_matches(
+            ShortcutChoice::CtrlShiftF9,
+            true,
+            false,
+            false,
+            false
+        ));
+        assert!(!shortcut_matches(
+            ShortcutChoice::CtrlShiftF9,
+            false,
+            true,
+            false,
+            false
+        ));
+        assert!(shortcut_matches(
+            ShortcutChoice::CtrlShiftF9,
+            true,
+            true,
+            false,
+            false
+        ));
+        assert!(!shortcut_matches(
+            ShortcutChoice::CtrlShiftF9,
+            true,
+            true,
+            true,
+            false
+        ));
+        assert!(!shortcut_matches(
+            ShortcutChoice::CtrlShiftF9,
+            true,
+            true,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn failed_new_hook_retries_the_last_confirmed_key_without_marking_new_effective() {
+        let binding = crate::ShortcutBinding {
+            requested: ShortcutChoice::CtrlShiftF9,
+            effective: ShortcutChoice::Default,
+        };
+        let mut attempts = Vec::new();
+        let (owner, actual) = start_binding(binding, |choice| {
+            attempts.push(choice);
+            if choice == ShortcutChoice::CtrlShiftF9 {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            } else {
+                Ok("old-hook")
+            }
+        })
+        .unwrap();
+        assert_eq!(owner, "old-hook");
+        assert_eq!(actual, ShortcutChoice::Default);
+        assert_eq!(
+            attempts,
+            vec![ShortcutChoice::CtrlShiftF9, ShortcutChoice::Default]
+        );
     }
 
     #[test]

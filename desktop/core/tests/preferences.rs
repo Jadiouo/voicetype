@@ -1,4 +1,67 @@
-use voicetype_app_core::{Application, Availability, Provider};
+use voicetype_app_core::{Application, Availability, Provider, ShortcutChoice};
+
+#[test]
+fn shortcut_request_is_per_provider_and_restart_keeps_last_confirmed_binding() {
+    let home = tempfile::tempdir().unwrap();
+    let mut app = Application::open(home.path()).unwrap();
+    let initial = app.snapshot();
+    assert_eq!(initial.shortcuts.local.requested, ShortcutChoice::Default);
+    assert_eq!(initial.shortcuts.local.effective, ShortcutChoice::Default);
+    assert_eq!(initial.shortcuts.google.requested, ShortcutChoice::Default);
+    app.set_shortcut(Provider::Google, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    let pending = app.snapshot();
+    assert_eq!(
+        pending.shortcuts.google.requested,
+        ShortcutChoice::CtrlShiftF9
+    );
+    assert_eq!(pending.shortcuts.google.effective, ShortcutChoice::Default);
+    assert_eq!(pending.shortcuts.local.requested, ShortcutChoice::Default);
+    drop(app);
+    let mut reopened = Application::open(home.path()).unwrap();
+    assert_eq!(
+        reopened.snapshot().shortcuts.google.requested,
+        ShortcutChoice::CtrlShiftF9
+    );
+    assert_eq!(
+        reopened.snapshot().shortcuts.google.effective,
+        ShortcutChoice::Default
+    );
+    reopened
+        .confirm_shortcut(Provider::Google, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    assert_eq!(
+        Application::open(home.path())
+            .unwrap()
+            .snapshot()
+            .shortcuts
+            .google
+            .effective,
+        ShortcutChoice::CtrlShiftF9
+    );
+}
+
+#[test]
+fn invalid_shortcut_preserves_original_settings_and_stale_writer_cannot_clobber_choice() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("desktop.json");
+    let invalid = br#"{"schema_version":1,"selected_provider":"local","shortcuts":{"local":{"requested":"delete_everything"}}}"#;
+    std::fs::write(&path, invalid).unwrap();
+    assert!(Application::open(home.path()).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), invalid);
+    std::fs::remove_file(&path).unwrap();
+    let mut stale = Application::open(home.path()).unwrap();
+    let mut current = Application::open(home.path()).unwrap();
+    current
+        .set_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    assert!(stale
+        .set_shortcut(Provider::Google, ShortcutChoice::CtrlShiftF9)
+        .is_err());
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(saved["shortcuts"]["local"]["requested"], "ctrl_shift_f9");
+    assert_eq!(saved["shortcuts"]["google"]["requested"], "default");
+}
 
 #[test]
 fn user_can_choose_google_and_keep_the_choice_after_reopening() {

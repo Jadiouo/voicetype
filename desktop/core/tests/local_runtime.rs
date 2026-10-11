@@ -69,6 +69,115 @@ while True: time.sleep(1)
 }
 
 #[test]
+fn local_f9_route_is_confirmed_only_by_the_matching_loaded_fcitx() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixStream,
+        time::Instant,
+    };
+    use voicetype_app_core::{
+        worker::{DesktopWorker, LocalRuntimeStatus},
+        Provider, ShortcutChoice,
+    };
+    let (root, paths) = fixture();
+    let runtime = root.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker
+        .set_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    worker.activate_local(paths).unwrap();
+    worker.enable_local_input(runtime.clone()).unwrap();
+    assert!(
+        fs::read_to_string(runtime.join("voicetype-app-input/owner"))
+            .unwrap()
+            .contains("local-hold-ctrl-shift-f9")
+    );
+    assert_eq!(
+        worker
+            .settings()
+            .unwrap()
+            .settings
+            .shortcuts
+            .local
+            .effective,
+        ShortcutChoice::Default
+    );
+    let peer = UnixStream::connect(worker.local_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut wire = BufReader::new(peer);
+    let mut line = String::new();
+    wire.read_line(&mut line).unwrap();
+    let hello: Value = serde_json::from_str(&line).unwrap();
+    writeln!(
+        wire.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello",
+        "session":hello["session"],
+        "value":"voicetype.fcitx.local-hold.ctrl-shift-f9.v3"})
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let view = worker.settings().unwrap();
+        if view.local_runtime == LocalRuntimeStatus::Ready {
+            assert_eq!(
+                view.settings.shortcuts.local.effective,
+                ShortcutChoice::CtrlShiftF9
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "matching Fcitx identity did not confirm Local F9"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(wire);
+    worker.deactivate_local().unwrap();
+    worker.shutdown().unwrap();
+}
+
+#[test]
+fn unacknowledged_local_f9_route_restores_confirmed_key() {
+    use voicetype_app_core::{worker::DesktopWorker, Provider, ShortcutChoice};
+    let (root, paths) = fixture();
+    let runtime = root.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker
+        .set_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    worker.activate_local(paths).unwrap();
+    worker.enable_local_input(runtime.clone()).unwrap();
+    let owner = runtime.join("voicetype-app-input/owner");
+    assert!(fs::read_to_string(&owner)
+        .unwrap()
+        .contains("local-hold-ctrl-shift-f9"));
+    // No v3 HELLO arrives, as with a still installed older Fcitx addon.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let bytes = fs::read_to_string(&owner).unwrap();
+        if bytes.starts_with("voicetype-input-v1\n") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Local key did not recover"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let binding = worker.settings().unwrap().settings.shortcuts.local;
+    assert_eq!(binding.requested, ShortcutChoice::CtrlShiftF9);
+    assert_eq!(binding.effective, ShortcutChoice::Default);
+    worker.deactivate_local().unwrap();
+    worker.shutdown().unwrap();
+}
+
+#[test]
 fn owned_engine_receives_only_the_explicit_verified_spelling_bundle() {
     use voicetype_text::spelling::SpellingPaths;
     let (root, mut paths) = fixture();

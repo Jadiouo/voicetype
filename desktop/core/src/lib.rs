@@ -55,6 +55,47 @@ pub enum Provider {
     Google,
 }
 
+/// Deliberately finite choices. The platform and provider determine whether
+/// `Default` is hold-to-talk or toggle; arbitrary key strings are not accepted.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortcutChoice {
+    #[default]
+    Default,
+    CtrlShiftF9,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ShortcutBinding {
+    #[serde(default)]
+    pub requested: ShortcutChoice,
+    #[serde(default)]
+    pub effective: ShortcutChoice,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ShortcutSettings {
+    #[serde(default)]
+    pub local: ShortcutBinding,
+    #[serde(default)]
+    pub google: ShortcutBinding,
+}
+
+impl ShortcutSettings {
+    pub fn for_provider(self, provider: Provider) -> ShortcutBinding {
+        match provider {
+            Provider::Local => self.local,
+            Provider::Google => self.google,
+        }
+    }
+    fn for_provider_mut(&mut self, provider: Provider) -> &mut ShortcutBinding {
+        match provider {
+            Provider::Local => &mut self.local,
+            Provider::Google => &mut self.google,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Availability {
@@ -76,6 +117,7 @@ pub struct Snapshot {
     pub spelling_enabled: bool,
     pub dictation: DictationStatus,
     pub selected_provider: Provider,
+    pub shortcuts: ShortcutSettings,
     pub providers: Vec<ProviderStatus>,
     pub compute_device: &'static str,
     pub preview: bool,
@@ -98,6 +140,8 @@ pub enum AppError {
     DictationBusy,
     #[error("辨識引擎尚未就緒或未接受指令；未切換到其他引擎")]
     ProviderUnavailable,
+    #[error("快捷鍵要求已變更，尚未確認新鍵；請重新載入設定")]
+    ShortcutRequestChanged,
     #[error("工作階段編號已用盡，請重新開啟 App")]
     SessionIdsExhausted,
 }
@@ -108,6 +152,8 @@ struct Preferences {
     selected_provider: Provider,
     #[serde(default = "default_spelling")]
     spelling_enabled: bool,
+    #[serde(default)]
+    shortcuts: ShortcutSettings,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -122,6 +168,7 @@ impl Default for Preferences {
             schema_version: 1,
             selected_provider: Provider::Local,
             spelling_enabled: true,
+            shortcuts: ShortcutSettings::default(),
             extra: Default::default(),
         }
     }
@@ -177,6 +224,7 @@ impl Application {
             spelling_enabled: self.preferences.spelling_enabled,
             dictation: self.dictation.status(),
             selected_provider: self.preferences.selected_provider,
+            shortcuts: self.preferences.shortcuts,
             providers: [Provider::Local, Provider::Google]
                 .into_iter()
                 .map(|provider| ProviderStatus {
@@ -241,6 +289,41 @@ impl Application {
         }
         let mut next = self.preferences.clone();
         next.spelling_enabled = enabled;
+        self.save_preferences(next)
+    }
+
+    /// Store intent without claiming that an OS hook or Fcitx route has moved.
+    pub fn set_shortcut(
+        &mut self,
+        provider: Provider,
+        requested: ShortcutChoice,
+    ) -> Result<Snapshot, AppError> {
+        if self.dictation.busy() {
+            return Err(AppError::DictationBusy);
+        }
+        let mut next = self.preferences.clone();
+        next.shortcuts.for_provider_mut(provider).requested = requested;
+        self.save_preferences(next)
+    }
+
+    /// Call only after the native input owner has acknowledged this binding.
+    /// A stale activation cannot silently replace a newer user request.
+    pub fn confirm_shortcut(
+        &mut self,
+        provider: Provider,
+        confirmed: ShortcutChoice,
+    ) -> Result<Snapshot, AppError> {
+        if self.dictation.busy() {
+            return Err(AppError::DictationBusy);
+        }
+        if self.preferences.shortcuts.for_provider(provider).requested != confirmed {
+            return Err(AppError::ShortcutRequestChanged);
+        }
+        if self.preferences.shortcuts.for_provider(provider).effective == confirmed {
+            return Ok(self.snapshot());
+        }
+        let mut next = self.preferences.clone();
+        next.shortcuts.for_provider_mut(provider).effective = confirmed;
         self.save_preferences(next)
     }
 

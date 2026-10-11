@@ -1,7 +1,42 @@
 use voicetype_app_core::{
     AppError, Application, DeliveryOutcome, DeliveryPort, Provider, ProviderCommand, ProviderEvent,
-    ProviderPort, SessionKey, TargetLease,
+    ProviderPort, SessionKey, ShortcutChoice, TargetLease,
 };
+
+#[test]
+fn active_session_keeps_the_confirmed_shortcut_frozen_until_release() {
+    let profile = tempfile::tempdir().unwrap();
+    let mut app = Application::open(profile.path()).unwrap();
+    app.set_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    let mut engine = EngineProcess::default();
+    let mut input = InputContext::default();
+    let key = app
+        .start_dictation(TargetLease::new("editor", 1), &mut engine)
+        .unwrap();
+    app.provider_event(key, ProviderEvent::Recording, &mut input);
+    assert!(matches!(
+        app.confirm_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9),
+        Err(AppError::DictationBusy)
+    ));
+    assert_eq!(
+        Application::open(profile.path())
+            .unwrap()
+            .snapshot()
+            .shortcuts
+            .local
+            .effective,
+        ShortcutChoice::Default
+    );
+    app.stop_dictation(&mut engine).unwrap();
+    assert!(matches!(
+        app.confirm_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9),
+        Err(AppError::DictationBusy)
+    ));
+    app.provider_event(key, ProviderEvent::Released, &mut input);
+    app.confirm_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+}
 
 struct Clock(std::sync::Mutex<std::time::Instant>);
 impl voicetype_app_core::SessionClock for Clock {

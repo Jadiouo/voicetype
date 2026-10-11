@@ -1,6 +1,6 @@
 //! Resident application worker. All process owners are created, polled and
 //! destroyed on this thread. Webview commands send work, never own a child.
-use crate::{AppError, Application, Availability, Provider, Snapshot};
+use crate::{AppError, Application, Availability, Provider, ShortcutChoice, Snapshot};
 use serde::Serialize;
 use std::{
     io,
@@ -235,6 +235,40 @@ impl DesktopWorker {
             desktop
                 .app_mut()?
                 .set_spelling_enabled(enabled)
+                .map_err(|e| e.to_string())?;
+            desktop.snapshot()
+        })
+    }
+
+    pub fn set_shortcut(
+        &self,
+        provider: Provider,
+        choice: ShortcutChoice,
+    ) -> Result<DesktopSnapshot, String> {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            if desktop.local_status != LocalRuntimeStatus::Inactive
+                || desktop.google_status != GoogleRuntimeStatus::Inactive
+            {
+                return Err("請先停用並卸載引擎，再變更聽寫快捷鍵".into());
+            }
+            #[cfg(target_os = "linux")]
+            if desktop.local.is_some()
+                || desktop.google.is_some()
+                || desktop.legacy_ownership.is_some()
+                || desktop.transfer_pending
+            {
+                return Err("輸入路由或 Google 快捷鍵交接尚未完成".into());
+            }
+            #[cfg(windows)]
+            if desktop.windows_local.is_some() || desktop.windows_google.is_some() {
+                return Err("Windows 快捷鍵或錄音程序尚未完全釋放".into());
+            }
+            desktop
+                .app_mut()?
+                .set_shortcut(provider, choice)
                 .map_err(|e| e.to_string())?;
             desktop.snapshot()
         })
@@ -477,8 +511,24 @@ impl DesktopWorker {
             if desktop.windows_local.is_some() || desktop.windows_google.is_some() {
                 return Err("請先卸載目前的聽寫引擎".into());
             }
-            match WindowsGoogle::start(create, format) {
+            let binding = desktop.app()?.snapshot().shortcuts.google;
+            match WindowsGoogle::start(create, format, binding) {
                 Ok(host) => {
+                    if host.choice == binding.requested {
+                        if let Err(error) = desktop
+                            .app_mut()?
+                            .confirm_shortcut(Provider::Google, host.choice)
+                        {
+                            if let Ok(input) = host.input.lock() {
+                                input.disable();
+                            }
+                            desktop.google_status = GoogleRuntimeStatus::Failed;
+                            // GoogleProvider's Drop retains its boundary and hook
+                            // until process/ConPTY cleanup is actually confirmed.
+                            drop(host);
+                            return Err(error.to_string());
+                        }
+                    }
                     desktop.windows_google = Some(host);
                     desktop.google_status = GoogleRuntimeStatus::Ready;
                     desktop.spelling_status = if !desktop.app()?.snapshot().spelling_enabled {
@@ -506,12 +556,31 @@ impl DesktopWorker {
             if desktop.app()?.snapshot().dictation.busy {
                 return Err(AppError::DictationBusy.to_string());
             }
-            let local = desktop.windows_local.as_mut().ok_or("請先載入本機引擎")?;
-            if local.input.is_none() {
-                local.input = Some(
-                    crate::windows_input::WindowsInput::start()
-                        .map_err(|_| "無法註冊 Ctrl＋CapsLock 快捷鍵".to_string())?,
-                );
+            let binding = desktop.app()?.snapshot().shortcuts.local;
+            if desktop
+                .windows_local
+                .as_ref()
+                .ok_or("請先載入本機引擎")?
+                .input
+                .is_none()
+            {
+                let (mut input, actual) = crate::windows_gesture::start_binding(
+                    binding,
+                    crate::windows_input::WindowsInput::start,
+                )
+                .map_err(|_| "無法啟用所選 Windows 聽寫快捷鍵；原有效設定保留".to_string())?;
+                if actual == binding.requested {
+                    if let Err(error) = desktop.app_mut()?.confirm_shortcut(Provider::Local, actual)
+                    {
+                        input.disable();
+                        if input.stop().is_err() {
+                            desktop.windows_local.as_mut().unwrap().input = Some(input);
+                        }
+                        desktop.local_status = LocalRuntimeStatus::Failed;
+                        return Err(error.to_string());
+                    }
+                }
+                desktop.windows_local.as_mut().unwrap().input = Some(input);
             }
             desktop.local_status = LocalRuntimeStatus::Ready;
             desktop.snapshot()
@@ -640,7 +709,17 @@ impl DesktopWorker {
             {
                 return Err("請先卸載目前的聽寫引擎".into());
             }
-            match GoogleHost::start(&runtime_dir, create, format, review, allow_start) {
+            let binding = desktop.app()?.snapshot().shortcuts.google;
+            let choice = binding.requested;
+            match GoogleHost::start(
+                &runtime_dir,
+                create,
+                format,
+                review,
+                allow_start,
+                choice,
+                binding.effective,
+            ) {
                 Ok(host) => {
                     desktop.google = Some(host);
                     desktop.google_status = GoogleRuntimeStatus::WaitingForInput;
@@ -674,7 +753,7 @@ impl DesktopWorker {
                 desktop.legacy_ownership = Some(ownership);
                 return Err("Google 交接路由狀態不符；錄音仍鎖定".into());
             }
-            let Some(host) = desktop.google.as_mut() else {
+            let Some(host) = desktop.google.as_ref() else {
                 desktop.legacy_ownership = Some(ownership);
                 return Err("Google 交接路由已中斷；服務鎖仍由 App 持有".into());
             };
@@ -686,6 +765,22 @@ impl DesktopWorker {
                 desktop.legacy_ownership = Some(ownership);
                 return Err("Google 交接路由狀態不符；錄音仍鎖定".into());
             }
+            let choice = host.choice;
+            let binding = desktop.app()?.snapshot().shortcuts.google;
+            if choice == binding.requested {
+                let confirmation = desktop.app_mut().and_then(|app| {
+                    app.confirm_shortcut(Provider::Google, choice)
+                        .map_err(|e| e.to_string())
+                });
+                if let Err(error) = confirmation {
+                    desktop.legacy_ownership = Some(ownership);
+                    return Err(format!("Google 快捷鍵確認未保存，錄音仍鎖定：{error}"));
+                }
+            } else if choice != binding.effective {
+                desktop.legacy_ownership = Some(ownership);
+                return Err("Google 輸入路由不是已要求或已確認的快捷鍵；錄音仍鎖定".into());
+            }
+            let host = desktop.google.as_mut().expect("validated Google owner");
             host.legacy_ownership = Some(ownership);
             host.start_permit.store(true, Ordering::Release);
             desktop.google_status = GoogleRuntimeStatus::Ready;
@@ -831,17 +926,24 @@ impl DesktopWorker {
             if desktop.app()?.snapshot().dictation.busy {
                 return Err(AppError::DictationBusy.to_string());
             }
+            let binding = desktop.app()?.snapshot().shortcuts.local;
+            let choice = binding.requested;
             let local = desktop.local.as_mut().ok_or("請先載入本機引擎")?;
             if local.input.is_none() {
                 local.input = Some(
                     crate::input_lease::InputLease::acquire(
                         &runtime_dir,
                         &local.endpoint.path().join("frontend.sock"),
+                        choice,
                     )
                     .map_err(|_| {
                         "無法接管輸入法：請確認登入環境，並關閉其他 VoiceType App".to_string()
                     })?,
                 );
+                local.choice = choice;
+                local.fallback = binding.effective;
+                local.route_deadline = (choice != binding.effective)
+                    .then(|| Instant::now() + Duration::from_millis(1500));
             }
             desktop.snapshot()
         })
@@ -1248,11 +1350,12 @@ struct WindowsGoogle {
     hook_released: bool,
     active: Option<crate::SessionKey>,
     pending_release: Option<crate::SessionKey>,
+    choice: ShortcutChoice,
 }
 
 #[cfg(windows)]
 impl WindowsGoogle {
-    fn start<B, F, M>(create: F, format: M) -> io::Result<Self>
+    fn start<B, F, M>(create: F, format: M, binding: crate::ShortcutBinding) -> io::Result<Self>
     where
         B: crate::google::GoogleBoundary + Send + 'static,
         F: FnOnce() -> io::Result<B>,
@@ -1261,13 +1364,17 @@ impl WindowsGoogle {
         let boundary = create()?;
         // The official CLI may spend seconds in login/editor preflight. Do not
         // consume Ctrl+CapsLock before the CLI is ready to accept a Start.
-        let input = match crate::windows_input::WindowsInput::start() {
-            Ok(input) => std::sync::Arc::new(Mutex::new(input)),
+        let (input, choice) = match crate::windows_gesture::start_binding(
+            binding,
+            crate::windows_input::WindowsInput::start,
+        ) {
+            Ok(value) => value,
             Err(error) => {
                 crate::google::owned::retire_unpublished_boundary(boundary);
                 return Err(error);
             }
         };
+        let input = std::sync::Arc::new(Mutex::new(input));
         let released = std::sync::Arc::new(AtomicBool::new(false));
         let unpublished = crate::google::owned::OwnedGoogleBoundary::new(
             boundary,
@@ -1296,6 +1403,7 @@ impl WindowsGoogle {
             hook_released: false,
             active: None,
             pending_release: None,
+            choice,
         })
     }
 
@@ -1413,6 +1521,9 @@ enum EngineOwner {
 #[cfg(target_os = "linux")]
 struct LocalHost {
     input: Option<crate::input_lease::InputLease>,
+    choice: ShortcutChoice,
+    fallback: ShortcutChoice,
+    route_deadline: Option<Instant>,
     owner: Option<EngineOwner>,
     listener: std::os::unix::net::UnixListener,
     endpoint: tempfile::TempDir,
@@ -1436,6 +1547,9 @@ impl LocalHost {
         let spelling_ready = runtime.spelling_ready();
         Ok(Self {
             input: None,
+            choice: ShortcutChoice::Default,
+            fallback: ShortcutChoice::Default,
+            route_deadline: None,
             owner: Some(EngineOwner::Waiting(runtime)),
             listener,
             endpoint,
@@ -1488,11 +1602,29 @@ impl LocalHost {
                         let Some(EngineOwner::Waiting(runtime)) = self.owner.take() else {
                             unreachable!();
                         };
-                        let session = runtime.attach_frontend(peer, Duration::from_millis(300))?;
+                        let session = runtime.attach_frontend_with_choice(
+                            peer,
+                            Duration::from_millis(300),
+                            self.choice,
+                        )?;
                         self.owner = Some(EngineOwner::Connected(session));
+                        if app.snapshot().shortcuts.local.requested == self.choice {
+                            app.confirm_shortcut(Provider::Local, self.choice)
+                                .map_err(io::Error::other)?;
+                        }
                         Ok(LocalRuntimeStatus::Ready)
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if self
+                            .route_deadline
+                            .is_some_and(|deadline| Instant::now() >= deadline)
+                        {
+                            if let Some(lease) = &self.input {
+                                lease.rebind(self.fallback)?;
+                                self.choice = self.fallback;
+                            }
+                            self.route_deadline = None;
+                        }
                         Ok(LocalRuntimeStatus::WaitingForInput)
                     }
                     Err(error) => Err(error),
@@ -1577,7 +1709,7 @@ struct LeasedGoogle<B: crate::google::GoogleBoundary, F: FnMut() -> io::Result<B
     reopen: F,
     closed: bool,
     cancellation: Option<std::sync::Arc<AtomicBool>>,
-    lease: Option<crate::input_lease::InputLease>,
+    lease: Option<std::sync::Arc<Mutex<crate::input_lease::InputLease>>>,
     released: std::sync::Arc<AtomicBool>,
 }
 
@@ -1651,6 +1783,10 @@ struct GoogleHost {
     pending_release: Option<crate::SessionKey>,
     review: Option<std::sync::Arc<crate::review_collector::Collector>>,
     start_permit: std::sync::Arc<AtomicBool>,
+    choice: ShortcutChoice,
+    fallback: ShortcutChoice,
+    route_deadline: Option<Instant>,
+    route_control: std::sync::Weak<Mutex<crate::input_lease::InputLease>>,
     legacy_ownership: Option<crate::google::legacy_transfer::LegacyOwnership>,
 }
 
@@ -1677,6 +1813,8 @@ impl GoogleHost {
         format: M,
         review: Option<std::sync::Arc<crate::review_collector::Collector>>,
         allow_start: bool,
+        choice: ShortcutChoice,
+        fallback: ShortcutChoice,
     ) -> io::Result<Self>
     where
         B: crate::google::GoogleBoundary + Send + 'static,
@@ -1690,10 +1828,13 @@ impl GoogleHost {
             std::os::unix::net::UnixListener::bind(endpoint.path().join("frontend.sock"))?;
         listener.set_nonblocking(true)?;
         let boundary = create()?;
-        let lease = crate::input_lease::InputLease::acquire_google(
-            runtime_dir,
-            &endpoint.path().join("frontend.sock"),
-        )?;
+        let lease =
+            std::sync::Arc::new(Mutex::new(crate::input_lease::InputLease::acquire_google(
+                runtime_dir,
+                &endpoint.path().join("frontend.sock"),
+                choice,
+            )?));
+        let route_control = std::sync::Arc::downgrade(&lease);
         let released = std::sync::Arc::new(AtomicBool::new(false));
         let provider = crate::google::GoogleProvider::spawn_with_text(
             LeasedGoogle {
@@ -1714,6 +1855,11 @@ impl GoogleHost {
             pending_release: None,
             review,
             start_permit: std::sync::Arc::new(AtomicBool::new(allow_start)),
+            choice,
+            fallback,
+            route_deadline: (choice != fallback)
+                .then(|| Instant::now() + Duration::from_millis(1500)),
+            route_control,
             legacy_ownership: None,
         })
     }
@@ -1731,8 +1877,15 @@ impl GoogleHost {
                         Duration::from_millis(300),
                         self.review.clone(),
                         self.start_permit.clone(),
+                        self.choice,
                     )?;
                     self.owner = Some(GoogleOwner::Connected(dispatcher));
+                    if self.start_permit.load(Ordering::Acquire)
+                        && app.snapshot().shortcuts.google.requested == self.choice
+                    {
+                        app.confirm_shortcut(Provider::Google, self.choice)
+                            .map_err(io::Error::other)?;
+                    }
                     Ok(if self.start_permit.load(Ordering::Acquire) {
                         GoogleRuntimeStatus::Ready
                     } else {
@@ -1740,6 +1893,21 @@ impl GoogleHost {
                     })
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if self
+                        .route_deadline
+                        .is_some_and(|deadline| Instant::now() >= deadline)
+                    {
+                        let control = self
+                            .route_control
+                            .upgrade()
+                            .ok_or(io::ErrorKind::BrokenPipe)?;
+                        control
+                            .lock()
+                            .map_err(|_| io::ErrorKind::Other)?
+                            .rebind(self.fallback)?;
+                        self.choice = self.fallback;
+                        self.route_deadline = None;
+                    }
                     Ok(GoogleRuntimeStatus::WaitingForInput)
                 }
                 Err(error) => Err(error),

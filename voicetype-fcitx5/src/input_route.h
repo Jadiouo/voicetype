@@ -3,7 +3,12 @@
 #include <optional>
 #include <string>
 namespace voicetype {
-struct InputRoute { std::string socket; int pid; bool googleToggle = false; };
+struct InputRoute {
+    std::string socket;
+    int pid;
+    bool googleToggle = false;
+    bool ctrlShiftF9 = false;
+};
 enum class GoogleToggleAction { None, Start, Stop };
 // A physical key-down toggles only after the prior delivery finishes. Repeat,
 // key-up and a different target cannot create or stop a session.

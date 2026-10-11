@@ -45,11 +45,18 @@ static void key(fcitx::Instance &instance, Client &client, bool release) {
     fcitx::KeyEvent event(&client, fcitx::Key(FcitxKey_Alt_L, fcitx::KeyState::Ctrl), release);
     instance.postEvent(event);
 }
+static void f9Key(fcitx::Instance &instance, Client &client, bool release) {
+    fcitx::KeyEvent event(&client, fcitx::Key(FcitxKey_F9,
+        fcitx::KeyStates(fcitx::KeyState::Ctrl) | fcitx::KeyState::Shift), release);
+    instance.postEvent(event);
+}
 
 int main(int argc, char **argv) {
     const std::string scenario = argc > 1 ? argv[1] : "crash";
-    char temporary[] = "/tmp/voicetype-handoff-XXXXXX";
-    const char *root = mkdtemp(temporary);
+    const char *temp = getenv("TMPDIR");
+    if (!temp || temp[0] != '/') return EXIT_FAILURE;
+    auto temporary = std::string(temp) + "/voicetype-handoff-XXXXXX";
+    const char *root = mkdtemp(temporary.data());
     if (!root) return EXIT_FAILURE;
     const std::string legacy = std::string(root) + "/legacy.sock";
     const std::string app = std::string(root) + "/frontend.sock";
@@ -93,8 +100,18 @@ int main(int argc, char **argv) {
                     if (m.type == "start") { ++oldStarts; oldStart = m; }
                 });
                 drain(appPeer, appBuffer, [&](const IpcMessage &m) {
-                    if (m.type == "desktop_hello") { CHECK(m.value == "voicetype.fcitx.v1"); key(instance, client, false); key(instance, client, true); }
-                    if (m.type == "start") { ++appStarts; appStart = m; }
+                    if (m.type == "desktop_hello") {
+                        CHECK(m.value == (scenario == "google_f9" ?
+                            "voicetype.fcitx.google-toggle.ctrl-shift-f9.v3" :
+                            scenario == "f9" ? "voicetype.fcitx.local-hold.ctrl-shift-f9.v3" :
+                            "voicetype.fcitx.v1"));
+                        if (scenario == "f9" || scenario == "google_f9") { f9Key(instance, client, false); f9Key(instance, client, true); }
+                        else { key(instance, client, false); key(instance, client, true); }
+                    }
+                    if (m.type == "start") {
+                        ++appStarts; appStart = m;
+                        if (scenario == "google_f9") { f9Key(instance, client, false); f9Key(instance, client, true); }
+                    }
                     if (m.type == "stop") ++appStops;
                     if (m.type == "delivered" && m.code == "committed") ++delivered;
                 });
@@ -103,7 +120,14 @@ int main(int argc, char **argv) {
                 else if (stage == 1 && oldStarts == 1) {
                     CHECK(mkdir(routeDir.c_str(), 0700) == 0);
                     std::ofstream file(routeDir + "/owner");
-                    file << "voicetype-input-v1\n" << (scenario == "pid_mismatch" ? getpid() + 1 : getpid()) << "\n" << app << "\n"; file.close();
+                    if (scenario == "f9" || scenario == "google_f9") {
+                        file << "voicetype-input-v3\n" << getpid() << "\n" << app
+                             << (scenario == "f9" ? "\nlocal-hold-ctrl-shift-f9\n" :
+                                                     "\ngoogle-toggle-ctrl-shift-f9\n");
+                    } else {
+                        file << "voicetype-input-v1\n" << (scenario == "pid_mismatch" ? getpid() + 1 : getpid()) << "\n" << app << "\n";
+                    }
+                    file.close();
                     CHECK(chmod((routeDir + "/owner").c_str(), 0600) == 0);
                     published = now; stage = 2;
                 } else if (stage == 2 && now - published > 350000) {
@@ -143,8 +167,8 @@ int main(int argc, char **argv) {
                     if (fallbackPeer >= 0) { key(instance, client, false); key(instance, client, true); stage = 7; }
                 } else if (stage == 7 && fallbackStarts == 1) {
                     CHECK(oldStarts == 1);
-                    CHECK(appStarts == (scenario == "crash" ? 1 : 0));
-                    CHECK(delivered == (scenario == "crash" ? 1 : 0));
+                    CHECK(appStarts == ((scenario == "crash" || scenario == "f9" || scenario == "google_f9") ? 1 : 0));
+                    CHECK(delivered == ((scenario == "crash" || scenario == "f9" || scenario == "google_f9") ? 1 : 0));
                     instance.exit(); return false;
                 }
                 if (now - started > 3000000) { fprintf(stderr, "handoff timed out at stage %d\n", stage); ++failures; instance.exit(); return false; }

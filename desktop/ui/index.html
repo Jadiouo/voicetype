@@ -38,6 +38,16 @@
           <span class="availability" id="google-availability">準備中 · 尚未連接辨識引擎</span>
         </label>
       </fieldset>
+      <section class="shortcut-setup" aria-labelledby="shortcut-title">
+        <h2 id="shortcut-title">聽寫快捷鍵</h2>
+        <label for="shortcut-choice">所選辨識方式的按鍵</label>
+        <select id="shortcut-choice" disabled>
+          <option value="default">沿用預設</option>
+          <option value="ctrl_shift_f9">Ctrl＋Shift＋F9</option>
+        </select>
+        <p id="shortcut-note" role="status" aria-live="polite">正在讀取快捷鍵設定…</p>
+        <p>先停用並卸載引擎才能變更。兩種辨識方式各自保存選擇；按鍵須在下一次啟用時通過輸入路由確認。Esc 仍可取消。</p>
+      </section>
       <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="cancel-dictation" type="button" hidden>取消聽寫</button><button id="check-providers" type="button" disabled>檢查服務</button><button id="reload" type="button">重新載入</button></div>
       <section class="model-setup" aria-labelledby="model-setup-title">
         <label><input id="spelling-enabled" type="checkbox" disabled> 自動修正中文錯字（CPU）</label>
