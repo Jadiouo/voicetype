@@ -313,6 +313,9 @@ impl Application {
         provider: Provider,
         confirmed: ShortcutChoice,
     ) -> Result<Snapshot, AppError> {
+        if self.dictation.busy() {
+            return Err(AppError::DictationBusy);
+        }
         if self.preferences.shortcuts.for_provider(provider).requested != confirmed {
             return Err(AppError::ShortcutRequestChanged);
         }
