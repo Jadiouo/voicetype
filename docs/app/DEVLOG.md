@@ -889,3 +889,11 @@ ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前
 隔離的 [升級 run 38138065457](https://github.com/Jadiouo/voicetype/actions/runs/38138065457) 證實舊 App 只在 OS LocalAppData 預建一個空的產品目錄，沒有子檔；原期待的 repo 內 WebView 資料夾當時不存在。釘版 WebDriver 的 session 原先沒有指定 UDF，[Microsoft 的 WebView2 WebDriver 規格](https://learn.microsoft.com/en-us/microsoft-edge/webdriver/capabilities-edge-options) 說這時會另建臨時資料夾。加上明確 repo UDF 後，[run 38138783747](https://github.com/Jadiouo/voicetype/actions/runs/38138783747) 看見所要求的 repo 目錄已建立，但 WebView2 session 未回報 `msedge.userDataDir`，新嚴格核對在舊版公開命令前失敗。這不等於已證實瀏覽資料落點；下一步要在 App 運行時限定該 driver／App 的 WebView2 子程序、核實際 `--user-data-dir`，原 OS 目錄斷言仍保留。兩輪都未進入新版安裝、資料保留與回復，不能宣稱升級通過。
 
 [升級 run 38139520407](https://github.com/Jadiouo/voicetype/actions/runs/38139520407) 的真行程證據已限定到該 WebDriver 啟動的舊 App：六個 WebView2 後裔的資料目錄皆是 repo 內所請求路徑的直屬 `EBWebView` 子目錄；session capability 仍未回值。舊版 NSIS 安裝與版本檢查通過，但新檢查原先要求路徑與父目錄完全相等，故仍在公開命令前失敗、`phases=[]`。下一候選只接受父目錄或該直屬子目錄，拒絕 reparse／路徑逃逸；在真行程驗證成立時，對先前不存在、僅 Tauri 預建且即時精確為空的 OS identifier 目錄做**唯讀**工具狀態記錄，不刪除 repo 外目錄。其他 OS 路徑、有內容及 baseline 已存在均維持失敗；真升級／回復與資料保留尚待 hosted 實跑。
+
+### 同日進展：雙版資料讀回與 Windows PE 聚合候選
+
+`e66183b` 的 [preview run 38139513120](https://github.com/Jadiouo/voicetype/actions/runs/38139513120) Windows job 成功；Linux 已安裝快捷鍵情境仍失敗。失敗時 Google F9 選項點擊後沒有 Google `change` 事件，磁碟仍是 Google 預設值，不能據此判斷後端拒絕。已審的 UI 候選只在 provider／requested 值或文案真正改變時重繪選單，避免每秒狀態輪詢覆寫互動；原 30 秒斷言保留，Linux 真 GREEN 待新 preview。
+
+隔離 [升級 run 38140075066](https://github.com/Jadiouo/voicetype/actions/runs/38140075066) 以固定來源與雜湊的兩個真 NSIS 包通過舊版及新版安裝、PE／registry 版號和公開命令資料讀回，報告已有 `old-installed-public-data`、`new-installed-public-data` 兩階段。WebView2 實際子程序的資料目錄在 repo 內；唯一新增的 OS 產品目錄即時精確為空，只讀保留且未刪除。新版卸載程式以 `/S` 回傳 0 後，10 秒內安裝目錄仍有檔案，故整項升級／回復測試失敗；尚未通過卸載、回復與最終資料保留。下一次僅在原失敗時記安裝目錄剩餘項目、產品登錄數及本次安裝路徑內的行程 PID／名稱，不加長 gate、不處理未知程序。
+
+Windows PE 聚合候選已經異作者短審及本機 12 項定點測試：對實包抽出的 CSC、NSIS 插件、Google、原生 runtime、OpenCC、主程式與外層 setup 做雙向路徑／位元組／notice 核對；生成的卸載程式另記實際輸出與來源 recipe。舊 `6016358` 實包仍回報 `complete=false`，新候選必須等真 NSIS 產生後讀 `complete/unresolved`，不能把原始碼審查當成來源完整。Microsoft runtime 的來源／條款文本與「是否具有散裝轉發資格」分欄，後者維持 `not_assessed`。Windows Google 目前由官方 CLI 持有擷取，App 沒有 PCM／audioReview；這仍是 GOAL／SDD APP-05 的未完成要求，不因 UI 如實告知而視為平台豁免。真人語音、TSF 跨應用送字亦未驗，PR 維持草稿。
