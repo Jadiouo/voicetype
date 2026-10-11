@@ -855,3 +855,11 @@ ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前
 同輪 Linux 在公開測試發現合成錄音器 PID 檔先建立、後寫入的競態，讀端可能看到空檔。Google 作者已在獨立測試修正中改為同目錄暫存檔寫完再原子發布，本地該組 4/4 通過；新版 Linux 安裝包仍待 CI。另已本地整合經審的 Windows runtime 明確修復／回復入口，以及正式預覽版號 `0.2.1-alpha.1`，用於與先前真 `0.2.0-alpha.1` NSIS 比較；兩版安裝、保留個資與回復尚未實測。PR 保持草稿，日常安裝未切換。
 
 下一候選 `58f752f` 的 [run 38132543448](https://github.com/Jadiouo/voicetype/actions/runs/38132543448) 雙平台公開命令測試通過，包含 Linux 合成 PCM 的 4 項測試與 Windows runtime 修復／回復測試。Linux 真 Nano 原生碼建完後，daemon 的獨立 `Cargo.lock` 仍指向桌面共用套件舊版號，使 `--locked` 建置明確失敗；此輪未產新 `.deb`。已只更新兩個 path 套件的鎖檔版號，完整 `cargo metadata --locked` 本地通過，並在昂貴原生建置前加入同一鎖檔檢查。Windows 公開測試通過後仍在 Nano C++ 建置，因已確定相同 daemon `--locked` gate 會阻斷，root 授權取消以節省 runner 時間；取消不是 Windows 產品斷言失敗，也沒有新版 NSIS 或安裝結果。兩項修正與實際跨版本安裝仍待下一輪 hosted 驗證。
+
+### 同日進展：0.2.1 預覽版真安裝與 Windows UI 文案回歸
+
+`a417fe8` 的 [run 38132976717](https://github.com/Jadiouo/voicetype/actions/runs/38132976717) Linux job 完整成功：真 `.deb` 安裝、已安裝 UI 的 22 項操作與校正開關、詞庫、抽樣校對測試通過。下載的 `0.2.1-alpha.1` deb 為 235,042,536 bytes、SHA-256 `3940adb7f5a8c10e38ee4555ee15196db41fd9b54044f2d55edccfeacb70d4be`，獨立重算與來源 commit／manifest 相符；manifest 仍標示端到端語音未驗證。
+
+同輪 Windows 真 MSVC／Nano、CSC 封裝與 NSIS 建置、靜默安裝、模型／DLL 載入、OpenCC、Google helper、365 個 Rust 套件的 notice 及實際 NSIS 六插件／已安裝 notice 核對通過。CSC 固定合成句在模型載入後第 1 次、10ms 改字，`first_fail_open=false`；這不是整句或麥克風延遲。安裝後 UI 測試在開始階段發現待載入引擎說明少了測試要求的「引擎」二字而失敗，故本輪沒有通過完整 Windows UI，也沒有上傳可獨立核對的 NSIS 產物；run log 的安裝包雜湊不能代替下載後重算。Windows CSC 原生 notice 與整包 PE 來源仍標示未完整；真人錄音、跨應用送字與兩個實包的升級／回復測試尚未執行。正在按實際 UI 文案失敗定點修正，下一輪仍須真 Windows 安裝與 UI 驗證。
+
+已在本地整合經原作者複查的 Google Windows 原生 CLI／單一輸入 owner 候選 `ae9539c`；Linux core／文字全套、本機格式與 JavaScript 語法檢查通過，但這些 Linux 測試沒有執行 Windows 平台分支，新整合仍待真 Windows CI。PR 保持草稿，日常服務未切換。
