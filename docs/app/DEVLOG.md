@@ -901,3 +901,11 @@ Windows PE 聚合候選已經異作者短審及本機 12 項定點測試：對�
 後續 [升級 run 38140967388](https://github.com/Jadiouo/voicetype/actions/runs/38140967388) 同樣通過舊／新版真安裝與公開資料讀回，新卸載 `/S` 回傳 0 且登錄已清、安裝目錄內沒有存活程序，卻留下精確 44 個 `spelling/_internal` UCRT／API-set 檔。這 44 個路徑及大小與舊 `0.2.0-alpha.1` 實包全數相同，新版實包全數不含，且恰是新版建置時排除的 OS 提供清單。釘版 Tauri 2.12.1 的新卸載程式只刪新包列出的檔案，因此無法清理覆寫安裝前的舊檔。經 Windows 作者定點短審的候選只在 registry 版本、產品及安裝路徑精確對上這一舊版時，使用其原卸載程式的 `/S /UPDATE _?=` 路線先清舊資源；退出碼與舊主程式／44 類別檔案清除不符即讓安裝失敗。未知檔案和個人 profile 不遞迴清理，舊 `0.2.1` 候選安裝不在此窄修範圍。這仍是原 `381409` RED 對應的原始碼候選，需新真包 old→new→卸載→回復實測才能記為 GREEN。
 
 `559f67f` 的 [preview run 38140803904](https://github.com/Jadiouo/voicetype/actions/runs/38140803904) Linux job 在原生測試階段由 Xvfb 啟動工具等候 5 秒超時而失敗，未到已安裝 UI，不能把快捷鍵 UI 修正判成通過或失敗。Xvfb 原作者已交經獨立短審的有界 readiness／早退／stderr 診斷，本機假子程序測試 5/5；沒有更動原 5 秒判定，真 runner 結果待下一輪。Windows job 成功完成真 NSIS 安裝與已安裝 UI 的 24 項操作，含各 provider 快捷鍵要求保存／重啟／還原；截圖可讀，`speech_adapters_tested=false` 且 `shortcut_registration_tested=false`。新 PE 聚合在安裝步驟正常產出 `complete=false`，首個未解項是 OpenCC manifest `data/s2tw.json` 對安裝路徑 `opencc/s2tw.json` 的既有映射沒有套入聚合；manifest 旗標仍是 false。定點候選沿用已通過的 OpenCC 安裝檢查映射，保留實檔大小／雜湊驗證和錯檔負例，尚須下一真包才能看到後續未解項或完整結果。
+
+### 同日進展：新版真包安裝與雙版回復驗證
+
+`cecac71` 的 [preview run 38142202595](https://github.com/Jadiouo/voicetype/actions/runs/38142202595) Windows job 成功建置並安裝含舊 UCRT 升級 hook 的 NSIS，OpenCC、Nano DLL 載入、CSC 192 項、Rust 與原生 notices、已安裝 UI 均通過；固定合成句在已載入後第 1 次 15ms 修字，非整句或麥克風延遲。實包 188,020,444 bytes、SHA-256 `a32e482b87141afbd611ded7f5674228c905acc805a1a267b79903c9ae86c828`，與 manifest 同源，setup 的數字版號為 `0.2.1.0`、字串版號 `0.2.1-alpha.1`。PE 聚合仍是 `complete=false`：Windows NSIS 抽取比原 60 項預期多 `uninstall.exe`，實際抽取與已安裝卸載程式的位元組關係須下一 hosted 核對；不以猜測將其列為完整。
+
+同輪 Linux 已越過先前的 Xvfb 啟動故障並完成真 deb 安裝，但已安裝 UI 的 Google F9 WebDriver 選項仍未送出新的 `change` 事件：畫面選單已是 F9，磁碟上的 Google 要求仍是預設，故 job 失敗。跨作者短審的下一候選改用真 WebDriver 鍵盤 Actions 選項，不用 JavaScript 合成事件；原 30 秒與磁碟斷言不變，真 hosted GREEN 尚待測。
+
+新舊固定真包的 [升級 run 38143838772](https://github.com/Jadiouo/voicetype/actions/runs/38143838772) 已通過舊／新安裝、PE 與登錄版號及兩階段公開資料讀回；新版 `/S` 卸載回傳 0、安裝目錄清空後，立即查 HKCU 時仍有產品註冊，因此未到回復。只加失敗時有界登錄身分診斷、保留原判定，以同兩包重跑 [run 38144360729](https://github.com/Jadiouo/voicetype/actions/runs/38144360729) 則五階段全通過：新版卸載保留個人資料、舊版回裝讀回及最終卸載保留資料，六類公開測試資料雜湊未變。兩輪同包不同註冊結果支持卸載收尾時序競態，但尚未量到子程序／登錄先後；不能把一次成功當作時序缺口已修。日常安裝與個人資料未動，真人語音、TSF 跨應用送字及 Windows Google PCM／audioReview 仍未驗，PR 維持草稿。
