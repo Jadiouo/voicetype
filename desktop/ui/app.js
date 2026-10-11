@@ -17,6 +17,8 @@ const recoveryText = document.querySelector('#recovery-text');
 const dismissRecovery = document.querySelector('#dismiss-recovery');
 const loadRuntime = document.querySelector('#load-local-runtime');
 const unloadRuntime = document.querySelector('#unload-local-runtime');
+const repairRuntime = document.querySelector('#repair-local-runtime');
+const rollbackRuntime = document.querySelector('#rollback-local-runtime');
 const loadGoogle = document.querySelector('#load-google-runtime');
 const unloadGoogle = document.querySelector('#unload-google-runtime');
 const stageGoogle = document.querySelector('#stage-google-shortcut');
@@ -46,8 +48,10 @@ function runtimeControls(view) {
   installModule.disabled = restoreModule.disabled = moduleBusy || commandBusy
     || !view?.local_runtime_bundled || view.input_requested || view.settings.dictation.busy;
   const loaded = ['waiting_for_input', 'ready'].includes(view?.local_runtime);
-  loadRuntime.disabled = commandBusy || !view?.local_runtime_bundled || loaded
-    || view.settings.dictation.busy || view.settings.selected_provider !== 'local';
+  const runtimeAssetsIdle = !!view?.local_runtime_bundled && view.local_runtime === 'inactive'
+    && view.google_runtime === 'inactive' && !view.input_requested && !view.settings.dictation.busy;
+  loadRuntime.disabled = commandBusy || !runtimeAssetsIdle || view.settings.selected_provider !== 'local';
+  repairRuntime.disabled = rollbackRuntime.disabled = commandBusy || !runtimeAssetsIdle;
   unloadRuntime.hidden = !loaded && view?.local_runtime !== 'failed';
   unloadRuntime.disabled = commandBusy || !!view?.settings.dictation.busy;
   enableInput.disabled = commandBusy || !view?.local_runtime_bundled || !loaded
@@ -183,6 +187,8 @@ async function command(name, args = {}) {
   error.hidden = true;
   status.textContent = name === 'select_provider' ? '正在儲存…'
     : name === 'load_local_runtime' ? '正在核對模型並載入本機引擎，首次載入可能需要一些時間…'
+    : name === 'repair_local_runtime' ? '正在核對安裝包並修復本機引擎…'
+    : name === 'rollback_local_runtime' ? '正在核對上一版並保存回復選擇…'
     : name === 'load_google_runtime' ? '正在核對官方 CLI、登入與空草稿；這一步不錄音…'
     : name === 'stage_google_shortcut' ? '正在保存舊設定並暫停舊快捷鍵…'
     : name === 'switch_google_shortcut' ? '正在核對 Fcitx 路由、停止舊服務並取得跨產品鎖…'
@@ -203,6 +209,8 @@ async function command(name, args = {}) {
       : name === 'load_local_runtime' ? (view.spelling_runtime === 'unavailable'
         ? '本機辨識引擎已載入；CPU 校正器本次不可用。仍可啟用本機聽寫。'
         : '引擎已載入，可啟用本機聽寫。尚未開始錄音。')
+      : name === 'repair_local_runtime' ? '本機引擎已用目前安裝包修復。個人資料保留；按「載入本機引擎」後才會啟動。'
+      : name === 'rollback_local_runtime' ? '已選擇並核對上一版引擎，重新開啟 App 仍沿用。個人資料保留；按「載入本機引擎」後才會啟動。'
       : name === 'enable_local_input' ? '已要求接管，請等待顯示「本機引擎與輸入法已連接」。'
       : name === 'load_google_runtime' ? 'Google CLI 預檢完成；等待輸入法路由連接。尚未開始錄音。'
       : name === 'stage_google_shortcut' ? '舊快捷鍵設定已保存並暫停；請自行重新載入 Fcitx 後完成切換。'
@@ -297,6 +305,8 @@ reload.addEventListener('click', () => command('reload_settings'));
 check.addEventListener('click', () => command('refresh_providers'));
 cancel.addEventListener('click', () => command('cancel_dictation'));
 loadRuntime.addEventListener('click', () => command('load_local_runtime'));
+repairRuntime.addEventListener('click', () => command('repair_local_runtime'));
+rollbackRuntime.addEventListener('click', () => command('rollback_local_runtime'));
 unloadRuntime.addEventListener('click', () => command('unload_local_runtime'));
 enableInput.addEventListener('click', () => command('enable_local_input'));
 loadGoogle.addEventListener('click', () => command('load_google_runtime'));

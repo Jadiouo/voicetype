@@ -114,6 +114,19 @@ def main():
                 assert not (Path(profile) / "runtime-assets").exists(), "Opening settings installed a runtime"
                 assert not (Path(profile) / "local-profile").exists(), "Opening settings launched an engine"
                 assert js("return document.querySelector('#enable-local-input').disabled"), "Input enabled before runtime"
+                # Public repair/rollback commands are reachable but cannot
+                # publish a runtime without verified models/previous version.
+                for action, expected in [
+                    ("#rollback-local-runtime", "沒有可回復"),
+                    ("#repair-local-runtime", "無法修復"),
+                ]:
+                    eventually(lambda: js(f"return !document.querySelector('{action}').disabled"))
+                    click(action)
+                    eventually(lambda: js(f"return !document.querySelector('#error').hidden && document.querySelector('#error').textContent.includes('{expected}')"))
+                    assert not (Path(profile) / "runtime-assets").exists()
+                    assert not (Path(profile) / "local-profile").exists()
+                    click("#reload")
+                    eventually(ready)
                 if sys.platform == "linux":
                     click("#install-input-module")
                     eventually(lambda: js("return document.querySelector('#input-module-status').textContent.includes('模組已安裝')"))
