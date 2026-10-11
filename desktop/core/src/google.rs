@@ -11,6 +11,7 @@ pub mod legacy_transfer;
 #[cfg(target_os = "linux")]
 pub mod linux_audio;
 pub mod native;
+pub(crate) mod owned;
 pub mod release;
 pub(crate) mod status;
 pub mod terminal;
