@@ -32,23 +32,34 @@ fn installed_bundle_corrects_han_without_dropping_english_or_digits() {
     let started = Instant::now();
     let until = started + Duration::from_secs(3);
     let mut attempts = 0;
+    let mut slow_calls = 0;
+    let mut longest_call = Duration::ZERO;
     loop {
         assert!(worker.is_running().unwrap());
         attempts += 1;
+        let call_started = Instant::now();
         let actual = worker.correct(original, &[]);
+        let call_elapsed = call_started.elapsed();
+        longest_call = longest_call.max(call_elapsed);
+        if call_elapsed >= Duration::from_millis(50) {
+            slow_calls += 1;
+        }
         if actual == expected {
             eprintln!(
-                "CSC installed CPU probe: first_fail_open={} warm_correction_attempt={} elapsed_ms={}",
+                "CSC installed CPU probe: first_fail_open={} warm_correction_attempt={} elapsed_ms={} slow_calls={} longest_call_ms={}",
                 attempts > 1,
                 attempts,
-                started.elapsed().as_millis()
+                started.elapsed().as_millis(),
+                slow_calls,
+                longest_call.as_millis()
             );
             break;
         }
         assert_eq!(actual, original, "unexpected model rewrite");
         assert!(
             Instant::now() < until,
-            "CPU model never corrected after {attempts} attempts within the 3 s test budget"
+            "CPU model never corrected after {attempts} attempts within the 3 s test budget; slow_calls={slow_calls}, longest_call_ms={}",
+            longest_call.as_millis()
         );
         thread::sleep(Duration::from_millis(100));
     }
