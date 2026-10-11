@@ -114,10 +114,25 @@ if (!window.__shortcutChangeEvents) {
 }
 return window.__shortcutChangeEvents.length;
 """)
-                    # WebDriver selects the real option, exercising the UI's
-                    # change handler and public Tauri command.
+                    # Exercise the native select with WebDriver keyboard actions.
+                    # Element Send Keys may set a select's value without a user
+                    # change event, so it would not test this UI path.
                     try:
-                        click(f"#shortcut-choice option[value='{value}']")
+                        current = js("return document.querySelector('#shortcut-choice').value")
+                        assert current in ("default", "ctrl_shift_f9")
+                        assert value in ("default", "ctrl_shift_f9")
+                        click("#shortcut-choice")
+                        keys = []
+                        if current != value:
+                            keys.append("\ue015" if current == "default" else "\ue013")
+                        keys.extend(("\ue007", "\ue004"))  # Enter commits, Tab blurs.
+                        actions = [item for key in keys for item in (
+                            {"type": "keyDown", "value": key},
+                            {"type": "keyUp", "value": key},
+                        )]
+                        request("POST", f"/session/{session}/actions", {"actions": [{
+                            "type": "key", "id": "shortcut-keyboard", "actions": actions,
+                        }]})
                         eventually(lambda: (Path(profile) / "desktop.json").exists()
                                    and shortcut_binding(provider)["requested"] == value)
                         eventually(lambda: ready() and js(
