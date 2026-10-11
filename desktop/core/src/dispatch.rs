@@ -61,9 +61,13 @@ pub struct GoogleDispatcher {
     failed: bool,
     review: Option<Arc<crate::review_collector::Collector>>,
     latest_review: Arc<AtomicU64>,
+    start_permit: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl GoogleDispatcher {
+    pub fn peer_pid(&self) -> u32 {
+        self.input.wire.peer_pid()
+    }
     pub fn warm_state(&self) -> u8 {
         self.provider.warm_state()
     }
@@ -72,6 +76,7 @@ impl GoogleDispatcher {
         provider: GoogleProvider,
         budget: Duration,
         review: Option<Arc<crate::review_collector::Collector>>,
+        start_permit: Arc<std::sync::atomic::AtomicBool>,
     ) -> io::Result<Self> {
         Ok(Self {
             input: FcitxConnection::accept(peer, budget, "voicetype.fcitx.google-toggle.v2")?,
@@ -81,6 +86,7 @@ impl GoogleDispatcher {
             failed: false,
             review,
             latest_review: Arc::new(AtomicU64::new(0)),
+            start_permit,
         })
     }
 
@@ -116,7 +122,10 @@ impl GoogleDispatcher {
                         continue;
                     }
                     self.last_session = session;
-                    if self.active.is_some() || app.snapshot().dictation.busy {
+                    if !self.start_permit.load(Ordering::Acquire) {
+                        self.input
+                            .error(session, "Google 快捷鍵交接尚未完成；錄音未開始")?;
+                    } else if self.active.is_some() || app.snapshot().dictation.busy {
                         self.input.error(session, "請等待目前工作結束後再錄音")?;
                     } else if is_password
                         || context_id.is_empty()

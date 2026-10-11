@@ -5,6 +5,10 @@ pub mod adapter;
 #[cfg(target_os = "linux")]
 pub mod legacy_config;
 #[cfg(target_os = "linux")]
+pub mod legacy_systemd;
+#[cfg(target_os = "linux")]
+pub mod legacy_transfer;
+#[cfg(target_os = "linux")]
 pub mod linux_audio;
 pub mod release;
 pub mod terminal;

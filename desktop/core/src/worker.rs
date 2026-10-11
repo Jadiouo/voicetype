@@ -36,6 +36,7 @@ pub enum SpellingRuntimeStatus {
 pub enum GoogleRuntimeStatus {
     Inactive,
     WaitingForInput,
+    TransferPending,
     Ready,
     Prewarming,
     Cleaning,
@@ -97,6 +98,11 @@ impl DesktopWorker {
                     state: crate::google::GoogleInstallState::Missing,
                     version: None,
                 };
+                #[cfg(target_os = "linux")]
+                let transfer_pending = !matches!(
+                    std::fs::symlink_metadata(config_dir.join("google-shortcut-rollback.json")),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound
+                );
                 let mut desktop = Desktop {
                     app: Application::open(&config_dir),
                     config_dir,
@@ -106,6 +112,10 @@ impl DesktopWorker {
                     local: None,
                     #[cfg(target_os = "linux")]
                     google: None,
+                    #[cfg(target_os = "linux")]
+                    legacy_ownership: None,
+                    #[cfg(target_os = "linux")]
+                    transfer_pending,
                     google_status: GoogleRuntimeStatus::Inactive,
                     google_install,
                 };
@@ -303,6 +313,9 @@ impl DesktopWorker {
         mut paths: crate::runtime::LocalRuntimePaths,
     ) -> Result<DesktopSnapshot, String> {
         self.call(move |desktop| {
+            if desktop.transfer_pending {
+                return Err("Google 快捷鍵交接尚未完成；請先切換或還原".into());
+            }
             if desktop.app()?.snapshot().dictation.busy {
                 return Err(AppError::DictationBusy.to_string());
             }
@@ -373,17 +386,101 @@ impl DesktopWorker {
         F: FnMut() -> io::Result<B> + Send + 'static,
         M: Fn(String) -> io::Result<String> + Send + 'static,
     {
+        self.activate_google_mode(runtime_dir, create, format, spelling_ready, review, true)
+    }
+
+    /// Preclaim route accepts the v2 identity handshake, but its resident
+    /// dispatcher rejects Start until the legacy bridge ownership is installed.
+    #[cfg(target_os = "linux")]
+    pub fn prepare_google_transfer<B, F, M>(
+        &self,
+        runtime_dir: PathBuf,
+        create: F,
+        format: M,
+        spelling_ready: bool,
+        review: Option<std::sync::Arc<crate::review_collector::Collector>>,
+    ) -> Result<DesktopSnapshot, String>
+    where
+        B: crate::google::GoogleBoundary + Send + 'static,
+        F: FnMut() -> io::Result<B> + Send + 'static,
+        M: Fn(String) -> io::Result<String> + Send + 'static,
+    {
+        self.activate_google_mode(runtime_dir, create, format, spelling_ready, review, false)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn begin_google_transfer_setup(&self) -> Result<DesktopSnapshot, String> {
+        self.call(|desktop| {
+            if desktop.app()?.snapshot().selected_provider != Provider::Google {
+                return Err("請先選擇 Google 官方辨識".into());
+            }
+            if desktop.app()?.snapshot().dictation.busy
+                || desktop.local.is_some()
+                || desktop.google.is_some()
+                || desktop.legacy_ownership.is_some()
+                || desktop.local_status != LocalRuntimeStatus::Inactive
+                || desktop.google_status != GoogleRuntimeStatus::Inactive
+            {
+                return Err("請先結束聽寫並卸載 App 引擎，再準備切換".into());
+            }
+            desktop.transfer_pending = true;
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn finish_google_transfer_setup(
+        &self,
+        transfer: crate::google::legacy_transfer::GoogleShortcutTransfer,
+    ) -> Result<DesktopSnapshot, String> {
         self.call(move |desktop| {
+            if desktop.local.is_some()
+                || desktop.google.is_some()
+                || desktop.app()?.snapshot().dictation.busy
+            {
+                return Err("Google 引擎尚未完全清理".into());
+            }
+            if transfer.phase().map_err(|e| e.to_string())?.is_some() {
+                return Err("Google 快捷鍵還原仍待 Fcitx 重新載入".into());
+            }
+            desktop.legacy_ownership = None;
+            desktop.transfer_pending = false;
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn activate_google_mode<B, F, M>(
+        &self,
+        runtime_dir: PathBuf,
+        create: F,
+        format: M,
+        spelling_ready: bool,
+        review: Option<std::sync::Arc<crate::review_collector::Collector>>,
+        allow_start: bool,
+    ) -> Result<DesktopSnapshot, String>
+    where
+        B: crate::google::GoogleBoundary + Send + 'static,
+        F: FnMut() -> io::Result<B> + Send + 'static,
+        M: Fn(String) -> io::Result<String> + Send + 'static,
+    {
+        self.call(move |desktop| {
+            if desktop.transfer_pending != !allow_start {
+                return Err("Google 交接狀態不符；錄音未開始".into());
+            }
             if desktop.app()?.snapshot().dictation.busy {
                 return Err(AppError::DictationBusy.to_string());
             }
             if desktop.app()?.snapshot().selected_provider != Provider::Google {
                 return Err("請先選擇 Google 官方辨識".into());
             }
-            if desktop.local.is_some() || desktop.google.is_some() {
+            if desktop.local.is_some()
+                || desktop.google.is_some()
+                || desktop.legacy_ownership.is_some()
+            {
                 return Err("請先卸載目前的聽寫引擎".into());
             }
-            match GoogleHost::start(&runtime_dir, create, format, review) {
+            match GoogleHost::start(&runtime_dir, create, format, review, allow_start) {
                 Ok(host) => {
                     desktop.google = Some(host);
                     desktop.google_status = GoogleRuntimeStatus::WaitingForInput;
@@ -402,6 +499,142 @@ impl DesktopWorker {
                     return Err("Google 官方 CLI、登入或輸入環境尚未通過檢查；未啟動錄音".into());
                 }
             }
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn complete_google_transfer(
+        &self,
+        ownership: crate::google::legacy_transfer::LegacyOwnership,
+        expected_fcitx: crate::google::legacy_transfer::FcitxIdentity,
+    ) -> Result<DesktopSnapshot, String> {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                desktop.legacy_ownership = Some(ownership);
+                return Err("Google 交接路由狀態不符；錄音仍鎖定".into());
+            }
+            let Some(host) = desktop.google.as_mut() else {
+                desktop.legacy_ownership = Some(ownership);
+                return Err("Google 交接路由已中斷；服務鎖仍由 App 持有".into());
+            };
+            if host.start_permit.load(Ordering::Acquire)
+                || host.legacy_ownership.is_some()
+                || !matches!(host.owner.as_ref(), Some(GoogleOwner::Connected(dispatcher))
+                    if dispatcher.peer_pid() == expected_fcitx.pid)
+            {
+                desktop.legacy_ownership = Some(ownership);
+                return Err("Google 交接路由狀態不符；錄音仍鎖定".into());
+            }
+            host.legacy_ownership = Some(ownership);
+            host.start_permit.store(true, Ordering::Release);
+            desktop.google_status = GoogleRuntimeStatus::Ready;
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn park_google_transfer_ownership(
+        &self,
+        ownership: crate::google::legacy_transfer::LegacyOwnership,
+    ) -> Result<DesktopSnapshot, String> {
+        self.call(move |desktop| {
+            if let Some(host) = desktop.google.as_mut() {
+                if host.legacy_ownership.is_some() {
+                    return Err("服務鎖已由 App 持有".into());
+                }
+                host.start_permit.store(false, Ordering::Release);
+                host.legacy_ownership = Some(ownership);
+            } else {
+                if desktop.legacy_ownership.is_some() {
+                    return Err("服務鎖已由 App 持有".into());
+                }
+                desktop.legacy_ownership = Some(ownership);
+            }
+            desktop.google_status = GoogleRuntimeStatus::TransferPending;
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn google_transfer_owned(&self) -> Result<bool, String> {
+        self.call(|desktop| {
+            Ok(desktop.legacy_ownership.is_some()
+                || desktop
+                    .google
+                    .as_ref()
+                    .is_some_and(|host| host.legacy_ownership.is_some()))
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn google_transfer_route_ready(&self) -> Result<bool, String> {
+        self.call(|desktop| {
+            Ok(desktop.google.as_ref().is_some_and(|host| {
+                !host.start_permit.load(Ordering::Acquire)
+                    && matches!(host.owner, Some(GoogleOwner::Connected(_)))
+            }))
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn google_transfer_route_pid(&self) -> Result<Option<u32>, String> {
+        self.call(|desktop| {
+            Ok(desktop.google.as_ref().and_then(|host| {
+                if host.start_permit.load(Ordering::Acquire) {
+                    return None;
+                }
+                match host.owner.as_ref() {
+                    Some(GoogleOwner::Connected(dispatcher)) => Some(dispatcher.peer_pid()),
+                    _ => None,
+                }
+            }))
+        })
+    }
+
+    /// Close the resident Start gate before draining the route for restore.
+    #[cfg(target_os = "linux")]
+    pub fn begin_google_transfer_restore(&self) -> Result<DesktopSnapshot, String> {
+        self.call(|desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            let host = desktop.google.as_mut().ok_or("Google 引擎未載入")?;
+            if host.legacy_ownership.is_none() && desktop.legacy_ownership.is_none() {
+                return Err("目前沒有舊 Google 服務的交接所有權".into());
+            }
+            host.start_permit.store(false, Ordering::Release);
+            desktop.google_status = GoogleRuntimeStatus::TransferPending;
+            desktop.snapshot()
+        })
+    }
+
+    /// Called only after deactivate_google has reaped the route and child.
+    /// The lock remains in resident state if restore refuses external drift.
+    #[cfg(target_os = "linux")]
+    pub fn restore_google_transfer<S>(
+        &self,
+        transfer: crate::google::legacy_transfer::GoogleShortcutTransfer,
+        service: S,
+    ) -> Result<DesktopSnapshot, String>
+    where
+        S: crate::google::legacy_transfer::LegacyService + Send + 'static,
+    {
+        self.call(move |desktop| {
+            if desktop.google.is_some()
+                || desktop.google_status != GoogleRuntimeStatus::Inactive
+                || desktop.app()?.snapshot().dictation.busy
+            {
+                return Err("Google 錄音或清理尚未完成".into());
+            }
+            let ownership = desktop
+                .legacy_ownership
+                .as_mut()
+                .ok_or("沒有可還原的服務鎖")?;
+            transfer
+                .stage_restore(ownership, true, &service)
+                .map_err(|e| e.to_string())?;
+            desktop.legacy_ownership = None;
             desktop.snapshot()
         })
     }
@@ -432,6 +665,9 @@ impl DesktopWorker {
     #[cfg(target_os = "linux")]
     pub fn enable_local_input(&self, runtime_dir: PathBuf) -> Result<DesktopSnapshot, String> {
         self.call(move |desktop| {
+            if desktop.transfer_pending {
+                return Err("Google 快捷鍵交接尚未完成；請先切換或還原".into());
+            }
             if desktop.app()?.snapshot().dictation.busy {
                 return Err(AppError::DictationBusy.to_string());
             }
@@ -545,6 +781,10 @@ struct Desktop {
     local: Option<LocalHost>,
     #[cfg(target_os = "linux")]
     google: Option<GoogleHost>,
+    #[cfg(target_os = "linux")]
+    legacy_ownership: Option<crate::google::legacy_transfer::LegacyOwnership>,
+    #[cfg(target_os = "linux")]
+    transfer_pending: bool,
 }
 
 impl Desktop {
@@ -554,6 +794,7 @@ impl Desktop {
             GoogleRuntimeStatus::Ready => Availability::ServiceAvailable,
             GoogleRuntimeStatus::Failed => Availability::Offline,
             GoogleRuntimeStatus::WaitingForInput
+            | GoogleRuntimeStatus::TransferPending
             | GoogleRuntimeStatus::Prewarming
             | GoogleRuntimeStatus::Cleaning => Availability::NotConnected,
             GoogleRuntimeStatus::Inactive => match self.google_install.state {
@@ -602,6 +843,9 @@ impl Desktop {
                 self.google_status = GoogleRuntimeStatus::Cleaning;
                 "Google 錄音尚未確認停止，麥克風仍保留；請稍後再試".to_string()
             })?;
+            if let Some(ownership) = google.legacy_ownership.take() {
+                self.legacy_ownership = Some(ownership);
+            }
             self.google = None;
         }
         #[cfg(target_os = "linux")]
@@ -656,6 +900,9 @@ impl Desktop {
                 }
             };
             if google.released.load(Ordering::Acquire) && google.owner.is_none() {
+                if let Some(ownership) = google.legacy_ownership.take() {
+                    self.legacy_ownership = Some(ownership);
+                }
                 self.google = None;
             }
         }
@@ -909,6 +1156,8 @@ struct GoogleHost {
     released: std::sync::Arc<AtomicBool>,
     pending_release: Option<crate::SessionKey>,
     review: Option<std::sync::Arc<crate::review_collector::Collector>>,
+    start_permit: std::sync::Arc<AtomicBool>,
+    legacy_ownership: Option<crate::google::legacy_transfer::LegacyOwnership>,
 }
 
 #[cfg(target_os = "linux")]
@@ -933,6 +1182,7 @@ impl GoogleHost {
         mut create: F,
         format: M,
         review: Option<std::sync::Arc<crate::review_collector::Collector>>,
+        allow_start: bool,
     ) -> io::Result<Self>
     where
         B: crate::google::GoogleBoundary + Send + 'static,
@@ -969,6 +1219,8 @@ impl GoogleHost {
             released,
             pending_release: None,
             review,
+            start_permit: std::sync::Arc::new(AtomicBool::new(allow_start)),
+            legacy_ownership: None,
         })
     }
 
@@ -984,9 +1236,14 @@ impl GoogleHost {
                         provider,
                         Duration::from_millis(300),
                         self.review.clone(),
+                        self.start_permit.clone(),
                     )?;
                     self.owner = Some(GoogleOwner::Connected(dispatcher));
-                    Ok(GoogleRuntimeStatus::Ready)
+                    Ok(if self.start_permit.load(Ordering::Acquire) {
+                        GoogleRuntimeStatus::Ready
+                    } else {
+                        GoogleRuntimeStatus::TransferPending
+                    })
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     Ok(GoogleRuntimeStatus::WaitingForInput)
@@ -995,6 +1252,9 @@ impl GoogleHost {
             },
             Some(GoogleOwner::Connected(dispatcher)) => {
                 dispatcher.step(app, Duration::from_millis(10))?;
+                if !self.start_permit.load(Ordering::Acquire) {
+                    return Ok(GoogleRuntimeStatus::TransferPending);
+                }
                 Ok(match dispatcher.warm_state() {
                     1 => GoogleRuntimeStatus::Prewarming,
                     2 => GoogleRuntimeStatus::Failed,

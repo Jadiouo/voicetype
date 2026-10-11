@@ -254,6 +254,7 @@ impl ProviderPort for LocalConnection {
 pub(crate) struct Wire {
     stream: UnixStream,
     buffer: Vec<u8>,
+    peer_pid: u32,
 }
 impl Wire {
     pub(crate) fn authenticated(stream: UnixStream, pid: Option<u32>) -> io::Result<Self> {
@@ -293,7 +294,12 @@ impl Wire {
         Ok(Self {
             stream,
             buffer: Vec::new(),
+            peer_pid: credentials.pid as u32,
         })
+    }
+
+    pub(crate) fn peer_pid(&self) -> u32 {
+        self.peer_pid
     }
 
     pub(crate) fn send(&mut self, value: &Value, until: Instant) -> io::Result<()> {
