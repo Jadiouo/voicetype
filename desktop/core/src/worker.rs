@@ -128,6 +128,8 @@ impl DesktopWorker {
                     #[cfg(target_os = "linux")]
                     google: None,
                     #[cfg(target_os = "linux")]
+                    google_startup_cleanup: None,
+                    #[cfg(target_os = "linux")]
                     legacy_ownership: None,
                     #[cfg(target_os = "linux")]
                     transfer_pending,
@@ -665,6 +667,7 @@ impl DesktopWorker {
         self.call(move |desktop| {
             if desktop.local.is_some()
                 || desktop.google.is_some()
+                || desktop.google_startup_cleanup.is_some()
                 || desktop.app()?.snapshot().dictation.busy
             {
                 return Err("Google 引擎尚未完全清理".into());
@@ -706,6 +709,7 @@ impl DesktopWorker {
             if desktop.local.is_some()
                 || desktop.google.is_some()
                 || desktop.legacy_ownership.is_some()
+                || desktop.google_startup_cleanup.is_some()
             {
                 return Err("請先卸載目前的聽寫引擎".into());
             }
@@ -732,8 +736,17 @@ impl DesktopWorker {
                     };
                     desktop.sync_google_availability();
                 }
-                Err(_) => {
-                    desktop.google_status = GoogleRuntimeStatus::Failed;
+                Err(error) => {
+                    desktop.google_startup_cleanup = error.cleanup;
+                    desktop.google_status = if desktop
+                        .google_startup_cleanup
+                        .as_ref()
+                        .is_some_and(|cleanup| !cleanup.load(Ordering::Acquire))
+                    {
+                        GoogleRuntimeStatus::Cleaning
+                    } else {
+                        GoogleRuntimeStatus::Failed
+                    };
                     desktop.sync_google_availability();
                     return Err("Google 官方 CLI、登入或輸入環境尚未通過檢查；未啟動錄音".into());
                 }
@@ -962,6 +975,7 @@ impl DesktopWorker {
                     .as_ref()
                     .is_some_and(|local| local.input.is_some())
                 || desktop.google.is_some()
+                || desktop.google_startup_cleanup.is_some()
             {
                 return Err("請先停用 App 聽寫，再變更輸入法模組".into());
             }
@@ -1058,6 +1072,8 @@ struct Desktop {
     #[cfg(target_os = "linux")]
     google: Option<GoogleHost>,
     #[cfg(target_os = "linux")]
+    google_startup_cleanup: Option<std::sync::Arc<AtomicBool>>,
+    #[cfg(target_os = "linux")]
     legacy_ownership: Option<crate::google::legacy_transfer::LegacyOwnership>,
     #[cfg(target_os = "linux")]
     transfer_pending: bool,
@@ -1103,6 +1119,7 @@ impl Desktop {
                         .as_ref()
                         .is_some_and(|local| local.input.is_some())
                         || self.google.is_some()
+                        || self.google_startup_cleanup.is_some()
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
@@ -1122,6 +1139,14 @@ impl Desktop {
         })
     }
     fn deactivate(&mut self) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if let Some(cleanup) = self.google_startup_cleanup.as_ref() {
+            if !cleanup.load(Ordering::Acquire) {
+                self.google_status = GoogleRuntimeStatus::Cleaning;
+                return Err("Google CLI 尚未確認關閉；請稍後再試".into());
+            }
+            self.google_startup_cleanup = None;
+        }
         #[cfg(windows)]
         if let Some(google) = self.windows_google.as_mut() {
             let app = self.app.as_mut().map_err(|e| e.to_string())?;
@@ -1246,6 +1271,17 @@ impl Desktop {
                     self.legacy_ownership = Some(ownership);
                 }
                 self.google = None;
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if self
+            .google_startup_cleanup
+            .as_ref()
+            .is_some_and(|cleanup| cleanup.load(Ordering::Acquire))
+        {
+            self.google_startup_cleanup = None;
+            if self.google.is_none() && self.google_status == GoogleRuntimeStatus::Cleaning {
+                self.google_status = GoogleRuntimeStatus::Failed;
             }
         }
         self.sync_google_availability();
@@ -1709,18 +1745,6 @@ struct LeasedGoogle<B: crate::google::GoogleBoundary, F: FnMut() -> io::Result<B
     reopen: F,
     closed: bool,
     cancellation: Option<std::sync::Arc<AtomicBool>>,
-    lease: Option<std::sync::Arc<Mutex<crate::input_lease::InputLease>>>,
-    released: std::sync::Arc<AtomicBool>,
-}
-
-#[cfg(target_os = "linux")]
-impl<B: crate::google::GoogleBoundary, F: FnMut() -> io::Result<B>> Drop for LeasedGoogle<B, F> {
-    fn drop(&mut self) {
-        // The worker drops this only after verified cleanup. Keep the route
-        // lock through every failed retry, including a detached worker.
-        drop(self.lease.take());
-        self.released.store(true, Ordering::Release);
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1774,6 +1798,126 @@ impl<B: crate::google::GoogleBoundary, F: FnMut() -> io::Result<B>> crate::googl
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod google_startup_tests {
+    use super::*;
+    use crate::google::{GoogleBoundary, GoogleProvider};
+    use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicUsize};
+
+    #[test]
+    fn failed_provider_thread_spawn_keeps_cli_and_input_lease_until_cleanup() {
+        struct Closing {
+            allowed: std::sync::Arc<AtomicBool>,
+            attempts: std::sync::Arc<AtomicUsize>,
+            dropped: std::sync::Arc<AtomicBool>,
+        }
+        impl Drop for Closing {
+            fn drop(&mut self) {
+                self.dropped.store(true, Ordering::Release);
+            }
+        }
+        impl GoogleBoundary for Closing {
+            fn start_capture(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+            fn stop_capture_and_drain(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+            fn stop_official_voice(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+            fn wait_official_recorder(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+            fn capture_editor(&mut self) -> io::Result<String> {
+                Ok(String::new())
+            }
+            fn settle(&mut self, _: Duration) -> io::Result<()> {
+                Ok(())
+            }
+            fn reject_known_voice_errors(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+            fn cleanup(&mut self) -> io::Result<()> {
+                self.attempts.fetch_add(1, Ordering::AcqRel);
+                if self.allowed.load(Ordering::Acquire) {
+                    Ok(())
+                } else {
+                    Err(io::ErrorKind::WouldBlock.into())
+                }
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let lease = crate::input_lease::InputLease::acquire_google(
+            &runtime,
+            &root.path().join("frontend.sock"),
+            ShortcutChoice::Default,
+        )
+        .unwrap();
+        let record = runtime.join("voicetype-app-input/owner");
+        let allowed = std::sync::Arc::new(AtomicBool::new(false));
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let dropped = std::sync::Arc::new(AtomicBool::new(false));
+        let released = std::sync::Arc::new(AtomicBool::new(false));
+        let boundary = crate::google::owned::OwnedGoogleBoundary::new(
+            LeasedGoogle {
+                boundary: Closing {
+                    allowed: allowed.clone(),
+                    attempts: attempts.clone(),
+                    dropped: dropped.clone(),
+                },
+                reopen: || Err(io::ErrorKind::NotFound.into()),
+                closed: false,
+                cancellation: None,
+            },
+            std::sync::Arc::new(Mutex::new(lease)),
+            released.clone(),
+        );
+        let failed = GoogleProvider::spawn_with_text_using(boundary, Ok, |_run| {
+            Err(io::ErrorKind::OutOfMemory.into())
+        });
+        assert!(failed.is_err());
+        let until = Instant::now() + Duration::from_secs(2);
+        while attempts.load(Ordering::Acquire) == 0 && Instant::now() < until {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(attempts.load(Ordering::Acquire) > 0);
+        assert!(
+            record.exists(),
+            "input owner was dropped before CLI cleanup"
+        );
+        assert!(!released.load(Ordering::Acquire));
+        assert!(!dropped.load(Ordering::Acquire));
+        allowed.store(true, Ordering::Release);
+        let settled = Instant::now() + Duration::from_secs(2);
+        while !released.load(Ordering::Acquire) && Instant::now() < settled {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(released.load(Ordering::Acquire));
+        assert!(!record.exists());
+        assert!(dropped.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct GoogleStartupError {
+    _source: io::Error,
+    cleanup: Option<std::sync::Arc<AtomicBool>>,
+}
+
+#[cfg(target_os = "linux")]
+impl From<io::Error> for GoogleStartupError {
+    fn from(source: io::Error) -> Self {
+        Self {
+            _source: source,
+            cleanup: None,
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 struct GoogleHost {
     owner: Option<GoogleOwner>,
@@ -1815,7 +1959,7 @@ impl GoogleHost {
         allow_start: bool,
         choice: ShortcutChoice,
         fallback: ShortcutChoice,
-    ) -> io::Result<Self>
+    ) -> Result<Self, GoogleStartupError>
     where
         B: crate::google::GoogleBoundary + Send + 'static,
         F: FnMut() -> io::Result<B> + Send + 'static,
@@ -1828,25 +1972,39 @@ impl GoogleHost {
             std::os::unix::net::UnixListener::bind(endpoint.path().join("frontend.sock"))?;
         listener.set_nonblocking(true)?;
         let boundary = create()?;
-        let lease =
-            std::sync::Arc::new(Mutex::new(crate::input_lease::InputLease::acquire_google(
-                runtime_dir,
-                &endpoint.path().join("frontend.sock"),
-                choice,
-            )?));
+        let lease = match crate::input_lease::InputLease::acquire_google(
+            runtime_dir,
+            &endpoint.path().join("frontend.sock"),
+            choice,
+        ) {
+            Ok(lease) => std::sync::Arc::new(Mutex::new(lease)),
+            Err(error) => {
+                let cleanup = crate::google::owned::retire_unpublished_boundary(boundary);
+                return Err(GoogleStartupError {
+                    _source: error,
+                    cleanup: Some(cleanup),
+                });
+            }
+        };
         let route_control = std::sync::Arc::downgrade(&lease);
         let released = std::sync::Arc::new(AtomicBool::new(false));
         let provider = crate::google::GoogleProvider::spawn_with_text(
-            LeasedGoogle {
-                boundary,
-                reopen: create,
-                closed: false,
-                cancellation: None,
-                lease: Some(lease),
-                released: released.clone(),
-            },
+            crate::google::owned::OwnedGoogleBoundary::new(
+                LeasedGoogle {
+                    boundary,
+                    reopen: create,
+                    closed: false,
+                    cancellation: None,
+                },
+                lease,
+                released.clone(),
+            ),
             format,
-        )?;
+        )
+        .map_err(|error| GoogleStartupError {
+            _source: error,
+            cleanup: Some(released.clone()),
+        })?;
         Ok(Self {
             owner: Some(GoogleOwner::Waiting(provider)),
             listener,

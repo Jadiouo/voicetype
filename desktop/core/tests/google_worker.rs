@@ -187,6 +187,155 @@ impl GoogleBoundary for ReadyCli {
 }
 
 #[test]
+fn lease_acquire_failure_retires_created_cli_before_it_is_dropped() {
+    use std::{
+        fs::OpenOptions,
+        os::{fd::AsRawFd, unix::fs::PermissionsExt},
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        },
+        time::Instant,
+    };
+    struct CreatedCli {
+        cleanup_allowed: Arc<AtomicBool>,
+        cleanup_attempts: Arc<AtomicUsize>,
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for CreatedCli {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+    impl GoogleBoundary for CreatedCli {
+        fn start_capture(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn stop_capture_and_drain(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn stop_official_voice(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn wait_official_recorder(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn capture_editor(&mut self) -> io::Result<String> {
+            Ok(String::new())
+        }
+        fn settle(&mut self, _: Duration) -> io::Result<()> {
+            Ok(())
+        }
+        fn reject_known_voice_errors(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn cleanup(&mut self) -> io::Result<()> {
+            self.cleanup_attempts.fetch_add(1, Ordering::AcqRel);
+            if self.cleanup_allowed.load(Ordering::Acquire) {
+                Ok(())
+            } else {
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime");
+    let input = runtime.join("voicetype-app-input");
+    fs::create_dir_all(&input).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&input, fs::Permissions::from_mode(0o700)).unwrap();
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(input.join("lock"))
+        .unwrap();
+    fs::set_permissions(input.join("lock"), fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker.select_provider(Provider::Google).unwrap();
+    let cleanup_allowed = Arc::new(AtomicBool::new(false));
+    let cleanup_attempts = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let factory_allowed = cleanup_allowed.clone();
+    let factory_attempts = cleanup_attempts.clone();
+    let factory_dropped = dropped.clone();
+    assert!(worker
+        .activate_google(
+            runtime.clone(),
+            move || Ok(CreatedCli {
+                cleanup_allowed: factory_allowed.clone(),
+                cleanup_attempts: factory_attempts.clone(),
+                dropped: factory_dropped.clone(),
+            }),
+            Ok,
+            false,
+            None
+        )
+        .is_err());
+    assert_eq!(
+        worker.settings().unwrap().google_runtime,
+        GoogleRuntimeStatus::Cleaning
+    );
+    assert!(
+        worker.deactivate_google().is_err(),
+        "cleanup is not yet confirmed"
+    );
+    assert_eq!(
+        worker.settings().unwrap().google_runtime,
+        GoogleRuntimeStatus::Cleaning
+    );
+    let retry_opens = Arc::new(AtomicUsize::new(0));
+    let retry_count = retry_opens.clone();
+    assert!(worker
+        .activate_google(
+            runtime,
+            move || {
+                retry_count.fetch_add(1, Ordering::AcqRel);
+                Ok(ReadyCli::default())
+            },
+            Ok,
+            false,
+            None
+        )
+        .is_err());
+    assert_eq!(retry_opens.load(Ordering::Acquire), 0);
+    let until = Instant::now() + Duration::from_secs(2);
+    while cleanup_attempts.load(Ordering::Acquire) == 0 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(cleanup_attempts.load(Ordering::Acquire) > 0);
+    assert!(
+        !dropped.load(Ordering::Acquire),
+        "unconfirmed CLI owner was lost"
+    );
+    cleanup_allowed.store(true, Ordering::Release);
+    let released_by = Instant::now() + Duration::from_secs(2);
+    while !dropped.load(Ordering::Acquire) && Instant::now() < released_by {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(dropped.load(Ordering::Acquire));
+    let settled = Instant::now() + Duration::from_secs(2);
+    while worker.settings().unwrap().google_runtime == GoogleRuntimeStatus::Cleaning
+        && Instant::now() < settled
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        worker.settings().unwrap().google_runtime,
+        GoogleRuntimeStatus::Failed
+    );
+    assert_eq!(
+        worker.deactivate_google().unwrap().google_runtime,
+        GoogleRuntimeStatus::Inactive
+    );
+    worker.shutdown().unwrap();
+}
+
+#[test]
 fn selecting_google_only_saves_preference_and_explicit_activation_owns_input() {
     let root = tempfile::tempdir().unwrap();
     let settings = root.path().join("settings");

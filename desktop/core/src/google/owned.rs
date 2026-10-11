@@ -31,12 +31,12 @@ impl<B: GoogleBoundary + Send + 'static, L: Send + 'static> OwnedGoogleBoundary<
 
 /// Retire an authenticated CLI when hook installation fails before the
 /// provider can own it. Cleanup failure still preserves the process owner.
-pub(crate) fn retire_unpublished_boundary<B: GoogleBoundary + Send + 'static>(boundary: B) {
-    drop(OwnedGoogleBoundary::new(
-        boundary,
-        (),
-        Arc::new(AtomicBool::new(false)),
-    ));
+pub(crate) fn retire_unpublished_boundary<B: GoogleBoundary + Send + 'static>(
+    boundary: B,
+) -> Arc<AtomicBool> {
+    let released = Arc::new(AtomicBool::new(false));
+    drop(OwnedGoogleBoundary::new(boundary, (), released.clone()));
+    released
 }
 
 impl<B: GoogleBoundary + Send + 'static, L: Send + 'static> Drop for OwnedGoogleBoundary<B, L> {

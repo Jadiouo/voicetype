@@ -325,8 +325,20 @@ impl GoogleProvider {
     }
 
     pub fn spawn_with_text(
+        boundary: impl GoogleBoundary + Send + 'static,
+        format: impl Fn(String) -> io::Result<String> + Send + 'static,
+    ) -> io::Result<Self> {
+        Self::spawn_with_text_using(boundary, format, |run| {
+            thread::Builder::new()
+                .name("voicetype-google".into())
+                .spawn(move || run())
+        })
+    }
+
+    pub(crate) fn spawn_with_text_using(
         mut boundary: impl GoogleBoundary + Send + 'static,
         format: impl Fn(String) -> io::Result<String> + Send + 'static,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<JoinHandle<()>>,
     ) -> io::Result<Self> {
         let (requests, input) = mpsc::sync_channel(4);
         let (output, events) = mpsc::sync_channel(4);
@@ -339,146 +351,51 @@ impl GoogleProvider {
         let worker_review = review.clone();
         let warm_state = Arc::new(AtomicU8::new(0));
         let worker_warm_state = warm_state.clone();
-        let thread = thread::Builder::new()
-            .name("voicetype-google".into())
-            .spawn(move || {
-                let mut attempt: Option<GoogleAttempt> = None;
-                loop {
-                    if worker_shutdown.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let request = match input.recv_timeout(Duration::from_millis(25)) {
-                        Ok(request) => request,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
-                    match request {
-                        Request::Start(key) => {
-                            if attempt.is_some() {
-                                continue;
-                            }
-                            if worker_cancelled.load(Ordering::Acquire) {
-                                if boundary.cleanup().is_ok() {
-                                    release_and_prewarm(
-                                        &mut boundary,
-                                        &output,
-                                        &worker_shutdown,
-                                        &worker_warm_state,
-                                        key,
-                                    );
-                                } else {
-                                    let _ = emit_event(
-                                        &output,
-                                        &worker_shutdown,
-                                        (
-                                            key,
-                                            ProviderEvent::Failed(SessionFailure::ProviderFailed),
-                                        ),
-                                    );
-                                    attempt = Some(GoogleAttempt { finished: true });
-                                }
-                                continue;
-                            }
-                            match GoogleAttempt::start(&mut boundary) {
-                                Ok(started) if !worker_cancelled.load(Ordering::Acquire) => {
-                                    attempt = Some(started);
-                                    let _ = emit_event(
-                                        &output,
-                                        &worker_shutdown,
-                                        (key, ProviderEvent::Recording),
-                                    );
-                                }
-                                Ok(mut started) => {
-                                    if started.cancel(&mut boundary).is_ok() {
-                                        release_and_prewarm(
-                                            &mut boundary,
-                                            &output,
-                                            &worker_shutdown,
-                                            &worker_warm_state,
-                                            key,
-                                        );
-                                    } else {
-                                        attempt = Some(started);
-                                    }
-                                }
-                                Err(_) => {
-                                    let _ = emit_event(
-                                        &output,
-                                        &worker_shutdown,
-                                        (
-                                            key,
-                                            ProviderEvent::Failed(SessionFailure::ProviderFailed),
-                                        ),
-                                    );
-                                    if boundary.cleanup().is_ok() {
-                                        release_and_prewarm(
-                                            &mut boundary,
-                                            &output,
-                                            &worker_shutdown,
-                                            &worker_warm_state,
-                                            key,
-                                        );
-                                    } else {
-                                        attempt = Some(GoogleAttempt { finished: true });
-                                    }
-                                }
-                            }
+        let run = Box::new(move || {
+            let mut attempt: Option<GoogleAttempt> = None;
+            loop {
+                if worker_shutdown.load(Ordering::Acquire) {
+                    break;
+                }
+                let request = match input.recv_timeout(Duration::from_millis(25)) {
+                    Ok(request) => request,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
+                match request {
+                    Request::Start(key) => {
+                        if attempt.is_some() {
+                            continue;
                         }
-                        Request::Stop(key) => {
-                            if let Some(mut started) = attempt.take() {
-                                let prepared = started
-                                    .finish_with_cancel(&mut boundary, &worker_cancelled)
-                                    .and_then(|raw| {
-                                        let pcm = boundary.take_review_pcm();
-                                        let text = format(raw.clone())?;
-                                        Ok((text, raw, pcm))
-                                    });
-                                match prepared {
-                                    Ok((text, raw, pcm)) => {
-                                        if let Some(pcm) = pcm {
-                                            if let Ok(mut pending) = worker_review.lock() {
-                                                *pending = Some((key, raw, pcm));
-                                            }
-                                        }
-                                        if !emit_event(
-                                            &output,
-                                            &worker_shutdown,
-                                            (key, ProviderEvent::Final(text)),
-                                        ) {
-                                            if let Ok(mut pending) = worker_review.lock() {
-                                                *pending = None;
-                                            }
-                                        }
-                                    }
-                                    Err(_) if !worker_cancelled.load(Ordering::Acquire) => {
-                                        let _ = emit_event(
-                                            &output,
-                                            &worker_shutdown,
-                                            (
-                                                key,
-                                                ProviderEvent::Failed(
-                                                    SessionFailure::ProviderFailed,
-                                                ),
-                                            ),
-                                        );
-                                    }
-                                    Err(_) => {}
-                                }
-                                if boundary.cleanup().is_ok() {
-                                    release_and_prewarm(
-                                        &mut boundary,
-                                        &output,
-                                        &worker_shutdown,
-                                        &worker_warm_state,
-                                        key,
-                                    );
-                                } else {
-                                    attempt = Some(started);
-                                }
+                        if worker_cancelled.load(Ordering::Acquire) {
+                            if boundary.cleanup().is_ok() {
+                                release_and_prewarm(
+                                    &mut boundary,
+                                    &output,
+                                    &worker_shutdown,
+                                    &worker_warm_state,
+                                    key,
+                                );
+                            } else {
+                                let _ = emit_event(
+                                    &output,
+                                    &worker_shutdown,
+                                    (key, ProviderEvent::Failed(SessionFailure::ProviderFailed)),
+                                );
+                                attempt = Some(GoogleAttempt { finished: true });
                             }
+                            continue;
                         }
-                        Request::Cancel(key) => {
-                            if let Some(mut started) = attempt.take() {
+                        match GoogleAttempt::start(&mut boundary) {
+                            Ok(started) if !worker_cancelled.load(Ordering::Acquire) => {
+                                attempt = Some(started);
+                                let _ = emit_event(
+                                    &output,
+                                    &worker_shutdown,
+                                    (key, ProviderEvent::Recording),
+                                );
+                            }
+                            Ok(mut started) => {
                                 if started.cancel(&mut boundary).is_ok() {
                                     release_and_prewarm(
                                         &mut boundary,
@@ -488,6 +405,56 @@ impl GoogleProvider {
                                         key,
                                     );
                                 } else {
+                                    attempt = Some(started);
+                                }
+                            }
+                            Err(_) => {
+                                let _ = emit_event(
+                                    &output,
+                                    &worker_shutdown,
+                                    (key, ProviderEvent::Failed(SessionFailure::ProviderFailed)),
+                                );
+                                if boundary.cleanup().is_ok() {
+                                    release_and_prewarm(
+                                        &mut boundary,
+                                        &output,
+                                        &worker_shutdown,
+                                        &worker_warm_state,
+                                        key,
+                                    );
+                                } else {
+                                    attempt = Some(GoogleAttempt { finished: true });
+                                }
+                            }
+                        }
+                    }
+                    Request::Stop(key) => {
+                        if let Some(mut started) = attempt.take() {
+                            let prepared = started
+                                .finish_with_cancel(&mut boundary, &worker_cancelled)
+                                .and_then(|raw| {
+                                    let pcm = boundary.take_review_pcm();
+                                    let text = format(raw.clone())?;
+                                    Ok((text, raw, pcm))
+                                });
+                            match prepared {
+                                Ok((text, raw, pcm)) => {
+                                    if let Some(pcm) = pcm {
+                                        if let Ok(mut pending) = worker_review.lock() {
+                                            *pending = Some((key, raw, pcm));
+                                        }
+                                    }
+                                    if !emit_event(
+                                        &output,
+                                        &worker_shutdown,
+                                        (key, ProviderEvent::Final(text)),
+                                    ) {
+                                        if let Ok(mut pending) = worker_review.lock() {
+                                            *pending = None;
+                                        }
+                                    }
+                                }
+                                Err(_) if !worker_cancelled.load(Ordering::Acquire) => {
                                     let _ = emit_event(
                                         &output,
                                         &worker_shutdown,
@@ -496,22 +463,55 @@ impl GoogleProvider {
                                             ProviderEvent::Failed(SessionFailure::ProviderFailed),
                                         ),
                                     );
-                                    attempt = Some(started);
                                 }
+                                Err(_) => {}
+                            }
+                            if boundary.cleanup().is_ok() {
+                                release_and_prewarm(
+                                    &mut boundary,
+                                    &output,
+                                    &worker_shutdown,
+                                    &worker_warm_state,
+                                    key,
+                                );
+                            } else {
+                                attempt = Some(started);
+                            }
+                        }
+                    }
+                    Request::Cancel(key) => {
+                        if let Some(mut started) = attempt.take() {
+                            if started.cancel(&mut boundary).is_ok() {
+                                release_and_prewarm(
+                                    &mut boundary,
+                                    &output,
+                                    &worker_shutdown,
+                                    &worker_warm_state,
+                                    key,
+                                );
+                            } else {
+                                let _ = emit_event(
+                                    &output,
+                                    &worker_shutdown,
+                                    (key, ProviderEvent::Failed(SessionFailure::ProviderFailed)),
+                                );
+                                attempt = Some(started);
                             }
                         }
                     }
                 }
-                // Shutdown and sender disconnection share the same verified
-                // cleanup path. A disconnect can arrive after the final flag
-                // check if Drop's bounded wait expires before recv returns.
-                if let Some(mut started) = attempt.take() {
-                    let _ = started.cancel(&mut boundary);
-                }
-                while boundary.cleanup().is_err() {
-                    thread::sleep(Duration::from_millis(50));
-                }
-            })?;
+            }
+            // Shutdown and sender disconnection share the same verified
+            // cleanup path. A disconnect can arrive after the final flag
+            // check if Drop's bounded wait expires before recv returns.
+            if let Some(mut started) = attempt.take() {
+                let _ = started.cancel(&mut boundary);
+            }
+            while boundary.cleanup().is_err() {
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let thread = spawn(run)?;
         Ok(Self {
             requests,
             events,
