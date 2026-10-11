@@ -5,9 +5,26 @@ on:
     branches: [main, feat/desktop-app, feat/windows-dictation-work]
     paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "config/rust-vendor-sources.json", "scripts/build-desktop-*", "scripts/catalog-windows-installer-pe.py", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
+    inputs:
+      upgrade_new_run_id:
+        description: 'Successful Windows preview run ID for the new 0.2.1-alpha.1 package'
+        required: false
+        default: ''
+        type: string
+      upgrade_new_head_sha:
+        description: 'Full reviewed source commit SHA of that preview run'
+        required: false
+        default: ''
+        type: string
+      upgrade_new_setup_sha256:
+        description: 'Independently checked SHA-256 of its real NSIS setup'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: desktop-${{ github.ref }}
@@ -15,6 +32,7 @@ concurrency:
 
 jobs:
   preview:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.upgrade_new_run_id == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -221,3 +239,64 @@ jobs:
             desktop/target/installer-notices/plugin-origins.json
             desktop/target/installer-pe-audit.json
             desktop/target/rust-notices/
+  windows_upgrade:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.upgrade_new_run_id != '' }}
+    runs-on: windows-2022
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      NEW_RUN_ID: ${{ inputs.upgrade_new_run_id }}
+      NEW_HEAD_SHA: ${{ inputs.upgrade_new_head_sha }}
+      NEW_SETUP_SHA256: ${{ inputs.upgrade_new_setup_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.scratch/windows-upgrade-cargo-target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare isolated Windows upgrade scratch
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-upgrade-ci'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          "TEMP=$scratch" >> $env:GITHUB_ENV
+          "TMP=$scratch" >> $env:GITHUB_ENV
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Rust stable
+        run: rustup update stable --no-self-update
+      - name: Check both CI origins and pinned setup bytes
+        shell: pwsh
+        run: |
+          python tests/windows_upgrade_inputs.py --new-run-id "$env:NEW_RUN_ID" --new-head-sha "$env:NEW_HEAD_SHA" --new-setup-sha256 "$env:NEW_SETUP_SHA256"
+          if ($LASTEXITCODE -ne 0) { throw 'Two-package source or byte pin failed' }
+      - name: Install native UI driver
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: Install matching Windows WebView driver
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool --rev 8c4b34f51b45f5cf08013366d703de464ab871d1 --locked
+          if ($LASTEXITCODE -ne 0) { throw 'WebView driver installer failed' }
+          msedgedriver-tool
+          if ($LASTEXITCODE -ne 0) { throw 'WebView driver setup failed' }
+          $PWD.Path >> $env:GITHUB_PATH
+      - name: Exercise real NSIS upgrade, rollback and personal-data retention
+        shell: pwsh
+        run: |
+          $inputs = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-upgrade-inputs'
+          $old = Join-Path $inputs 'old/release/bundle/nsis/VoiceType Preview_0.2.0-alpha.1_x64-setup.exe'
+          $new = Join-Path $inputs 'new/release/bundle/nsis/VoiceType Preview_0.2.1-alpha.1_x64-setup.exe'
+          python tests/windows_upgrade_smoke.py --old-installer "$old" --old-sha256 6c1b78f27df2ea8cacd44ade67c8d0c02fa69cc0d0ad8c54a005794b45c52e41 --old-version 0.2.0-alpha.1 --new-installer "$new" --new-sha256 "$env:NEW_SETUP_SHA256" --new-version 0.2.1-alpha.1
+          if ($LASTEXITCODE -ne 0) { throw 'Real two-package Windows upgrade failed' }
+      - name: Upload upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voicetype-upgrade-windows-2022
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            .scratch/windows-upgrade-inputs/input-report.json
+            .scratch/windows-upgrade-smoke/evidence/
