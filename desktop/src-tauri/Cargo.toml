@@ -17,5 +17,6 @@ sha2 = "0.10.9"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 voicetype-app-core = { path = "../core" }
+voicetype-text = { path = "../text" }
 serde.workspace = true
 serde_json.workspace = true

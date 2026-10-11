@@ -4,6 +4,7 @@ pub mod assets;
 mod dictation;
 #[cfg(target_os = "linux")]
 pub mod dispatch;
+pub mod google;
 #[cfg(target_os = "linux")]
 pub mod input_install;
 #[cfg(target_os = "linux")]
@@ -15,12 +16,19 @@ pub mod local_install;
 #[cfg(unix)]
 mod providers;
 pub mod review;
+// Reuse the daemon's consent, daily-quota and retention implementation. The
+// App supplies its own isolated config/data paths; no daily service is touched.
+#[cfg(target_os = "linux")]
+#[path = "../../../voicetyped/src/review.rs"]
+pub mod review_collector;
 #[cfg(target_os = "linux")]
 pub mod runtime;
 pub mod setup;
 mod setup_worker;
 pub mod spelling_install;
 pub mod vocabulary;
+#[cfg(windows)]
+pub mod windows_job;
 pub mod worker;
 pub use dictation::{
     CommandRejected, DeliveryOutcome, DeliveryPort, DictationContext, DictationPhase,
@@ -120,6 +128,7 @@ pub struct Application {
     preferences: Preferences,
     original: Option<Vec<u8>>,
     local_status: Availability,
+    google_status: Availability,
     dictation: dictation::Coordinator,
 }
 
@@ -154,6 +163,7 @@ impl Application {
             preferences,
             original,
             local_status: Availability::NotConnected,
+            google_status: Availability::NotConnected,
             dictation: coordinator,
         })
     }
@@ -170,7 +180,7 @@ impl Application {
                     availability: if provider == Provider::Local {
                         self.local_status
                     } else {
-                        Availability::NotConnected
+                        self.google_status
                     },
                 })
                 .collect(),
@@ -197,19 +207,17 @@ impl Application {
         socket: &Path,
         budget: std::time::Duration,
     ) -> Snapshot {
-        self.local_status = match providers::ping(socket, budget) {
-            Ok(()) => Availability::ServiceAvailable,
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                Availability::TimedOut
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Availability::Incompatible,
-            Err(_) => Availability::Offline,
-        };
+        self.local_status = probe_local_provider(socket, budget);
+        self.snapshot()
+    }
+
+    pub(crate) fn set_local_availability(&mut self, status: Availability) {
+        self.local_status = status;
+    }
+
+    /// Native installation/preflight status; this never launches the CLI.
+    pub fn set_google_availability(&mut self, status: Availability) -> Snapshot {
+        self.google_status = status;
         self.snapshot()
     }
 
@@ -306,6 +314,23 @@ impl Application {
 
     pub fn dismiss_retained_text(&mut self, provider: Provider, session: u64) -> bool {
         self.dictation.dismiss_retained(provider, session)
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn probe_local_provider(socket: &Path, budget: std::time::Duration) -> Availability {
+    match providers::ping(socket, budget) {
+        Ok(()) => Availability::ServiceAvailable,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            Availability::TimedOut
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Availability::Incompatible,
+        Err(_) => Availability::Offline,
     }
 }
 

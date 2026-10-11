@@ -827,3 +827,9 @@ Google App 接線已推送 `2ada6f0`、`a5838a1`，錄音事件處理中的慢�
 後續 `04a35f3`、`f6cd75b` 已提交上述 PE 清單及模型分層診斷。[run 38126833695](https://github.com/Jadiouo/voicetype/actions/runs/38126833695) 在 AMD EPYC 7763 上，同一 tokenizer／輸入與 ONNX Runtime 下，原始、基本最佳化、融合後浮點模型皆產生正確候選（機率 0.987453），QInt8 的來源 Python 與封裝執行檔卻同樣失敗（期望字機率 0.000214）。問題因此定位到目前量化模型的執行結果，具體指令機制尚待對照；不再增加等待或放寬信心門檻。本機 U8U8 候選與原基線在公開合成測例 48 次執行的輸出、修改與狀態逐項相同，兩者皆 40/48 符合預期；這不是完整語音品質驗收，候選仍待失敗平台實測。
 
 同輪 Windows 已確認移除 44 個系統 UCRT 副本後，實際封裝校正器仍能啟動，固定句於第 1 次、9ms 改字成功。後續安裝建置在 Rust 依賴 notice 缺漏停止，尚未取得去 UCRT 新版 NSIS 安裝證據。已盤點 Windows App／daemon 合計 352 個依賴，缺漏集中於三個 WebView2 同源套件，接續補確切上游授權來源。Windows Nano 原生建置則已跨過來源雜湊檢查，正在修正 pinned Sherpa CMake 的 CPU DLL／import library 對應，仍須真正 MSVC 建置核對。
+
+### 同日進展：固定 CSC 量化精度並整合 Google 候選
+
+[run 38127430002](https://github.com/Jadiouo/voicetype/actions/runs/38127430002) 的 Windows 真 CPU 再現原三秒內 28 次不改字；同一合成輸入、同一 QInt8 模型檔與 ONNX Runtime 下，只把 session 的 `x64quantprecision` 設為 1，原本期望字機率 0.000214、未改字，變成 0.998715、15ms 改字成功。據此讓正常 CPU worker 固定使用這個精度模式，保留原模型雜湊、快取、保護規則與單次 100ms 失敗開放上限；診斷仍可明確比較舊模式。新 worker 的本機封裝實測經安裝器路徑第 1 次、6ms 改字成功，Python 回歸 17/17 通過。這只定位並修正量化執行差異，仍待新版本雙平台 CI、Windows NSIS 安裝後模型／UI、依賴來源及真人語音驗收。
+
+Google 已審的 `1896bd4` 以獨立 merge 納入 App 候選，包括兩個狹義 CLI helper、合成流程測試與 Linux Caps Lock 路徑；未帶入該工作樹尚未提交的遷移資料。原 CSC 失敗診斷、Rust notice 清單及 Windows PE 完整性旗標保留。新整合 CI 與實際安裝結果待跑，PR 維持草稿，日常服務未切換。

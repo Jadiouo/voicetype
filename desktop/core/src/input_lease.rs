@@ -18,6 +18,14 @@ pub(crate) struct InputLease {
 
 impl InputLease {
     pub fn acquire(runtime: &Path, socket: &Path) -> io::Result<Self> {
+        Self::acquire_mode(runtime, socket, false)
+    }
+
+    pub fn acquire_google(runtime: &Path, socket: &Path) -> io::Result<Self> {
+        Self::acquire_mode(runtime, socket, true)
+    }
+
+    fn acquire_mode(runtime: &Path, socket: &Path, google_toggle: bool) -> io::Result<Self> {
         private_directory(runtime)?;
         let directory = runtime.join("voicetype-app-input");
         match fs::DirBuilder::new().mode(0o700).create(&directory) {
@@ -47,11 +55,19 @@ impl InputLease {
             .ok_or(io::ErrorKind::InvalidInput)?;
         let record = directory.join("owner");
         let mut staged = tempfile::NamedTempFile::new_in(&directory)?;
-        writeln!(
-            staged,
-            "voicetype-input-v1\n{}\n{socket}",
-            std::process::id()
-        )?;
+        if google_toggle {
+            writeln!(
+                staged,
+                "voicetype-input-v2\n{}\n{socket}\ngoogle-toggle",
+                std::process::id()
+            )?;
+        } else {
+            writeln!(
+                staged,
+                "voicetype-input-v1\n{}\n{socket}",
+                std::process::id()
+            )?;
+        }
         staged.as_file().sync_all()?;
         staged.persist(&record).map_err(|e| e.error)?;
         Ok(Self {

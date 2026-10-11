@@ -18,6 +18,15 @@ use voicetype_app_core::{
     Provider,
 };
 
+#[cfg(target_os = "linux")]
+use voicetype_app_core::google::{
+    adapter::GoogleCliBoundary,
+    linux_audio::LinuxPcmAudio,
+    release::{inspect_linux_install, GoogleCliRelease},
+    terminal::TerminalLaunch,
+    GoogleInstallState, GoogleSetup, GoogleText,
+};
+
 struct DesktopState {
     worker: DesktopWorker,
     models: ModelSetup,
@@ -201,6 +210,159 @@ async fn unload_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
     with_desktop(app, DesktopWorker::deactivate_local).await
 }
 
+#[cfg(target_os = "linux")]
+fn official_google_path() -> Result<PathBuf, String> {
+    let home = PathBuf::from(std::env::var_os("HOME").ok_or("找不到登入者的主目錄")?);
+    if !home.is_absolute() {
+        return Err("登入者的主目錄無效".into());
+    }
+    Ok(home.join(".local/bin/agy"))
+}
+
+#[cfg(target_os = "linux")]
+fn bundled_google_helper(app: &tauri::AppHandle, name: &str) -> Result<(PathBuf, String), String> {
+    let catalog: voicetype_app_core::assets::AssetManifest = serde_json::from_str(include_str!(
+        concat!(env!("OUT_DIR"), "/google-catalog.json")
+    ))
+    .map_err(|_| "Google 輔助程式目錄無效")?;
+    if catalog.id != "google-helpers" || catalog.platform != "linux-x86_64" {
+        return Err("Google 輔助程式平台不相容".into());
+    }
+    let item = catalog
+        .files
+        .iter()
+        .find(|item| item.path == name && item.executable)
+        .ok_or("Google 輔助程式未封裝")?;
+    let path = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("google")
+        .join(name);
+    if GoogleSetup::new(path.clone(), item.sha256.clone()).inspect()
+        != GoogleInstallState::OfficialCheckRequired
+    {
+        return Err("Google 輔助程式未通過安裝包核對".into());
+    }
+    Ok((path, item.sha256.clone()))
+}
+
+#[tauri::command]
+async fn load_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let official = official_google_path()?;
+        let install = inspect_linux_install(&official);
+        if install.state != GoogleInstallState::OfficialCheckRequired {
+            return Err(
+                "請先依官方說明安裝相容的 Antigravity CLI；目前版本未通過核對，未開啟麥克風".into(),
+            );
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").ok_or("找不到登入者的主目錄")?);
+        let config_home = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"));
+        if !config_home.is_absolute() {
+            return Err("輸入法設定位置無效".into());
+        }
+        let legacy = config_home.join("fcitx5/conf/googlevoiceinput.conf");
+        if voicetype_app_core::google::legacy_config::ctrl_caps_conflict(&legacy)
+            .map_err(|_| "無法核對現有 Google 快捷鍵設定；未接管錄音".to_string())?
+        {
+            return Err("現有 Google 輸入法也使用 Ctrl＋CapsLock；為避免同時錄音，App 目前未接管。請保留現有設定，等待可回復的遷移操作。".into());
+        }
+        let release = match install.version {
+            Some("1.2.12") => GoogleCliRelease::Linux1212,
+            Some("1.3.1") => GoogleCliRelease::Linux131,
+            _ => return Err("Google CLI 版本尚未驗證".into()),
+        };
+        let (editor, _) = bundled_google_helper(&app, "voicetype-google-editor")?;
+        let (pcm, _) = bundled_google_helper(&app, "voicetype-google-pcm")?;
+        let state = app.state::<DesktopState>();
+        let config_dir = state.config_dir.clone();
+        let spelling = if state.worker.settings()?.settings.spelling_enabled {
+            state
+                .spelling_installer
+                .prepare(&state.spelling_resources)
+                .ok()
+                .and_then(|paths| paths.command().ok())
+                .and_then(|command| {
+                    voicetype_text::spelling::OwnedSpelling::start(
+                        command,
+                        std::time::Duration::from_secs(30),
+                    )
+                    .ok()
+                })
+        } else {
+            None
+        };
+        let spelling_ready = spelling.is_some();
+        let review = voicetype_app_core::review_collector::Collector::with_paths(
+            config_dir.join("review.json"),
+            config_dir.join("review"),
+        );
+        let runtime = PathBuf::from(
+            std::env::var_os("XDG_RUNTIME_DIR").ok_or("無法找到登入環境，請從桌面重新開啟 App")?,
+        );
+        let launch = TerminalLaunch {
+            executable: official,
+            sha256: release.reviewed_sha256().into(),
+            workspace: config_dir.clone(),
+            profile: runtime.clone(),
+            editor,
+        };
+        let vocab = config_dir.join("vocab.toml");
+        with_desktop(app, move |worker| {
+            let profile = runtime.clone();
+            worker.activate_google(
+                runtime,
+                move || {
+                    let audio = LinuxPcmAudio::new(
+                        &profile,
+                        std::path::Path::new("/usr/bin/pw-record"),
+                        "3874ae059c9eafdbd4d6fde4d4b7553aa83fe4149246e427a3208bdc4c712c64",
+                        &pcm,
+                    )?
+                    .with_review_config(config_dir.join("review.json"));
+                    GoogleCliBoundary::open(
+                        launch.clone(),
+                        audio,
+                        std::time::Duration::from_secs(18),
+                    )
+                },
+                move |raw| {
+                    GoogleText::open(&vocab)?.apply(&raw, |text, terms| {
+                        spelling
+                            .as_ref()
+                            .map_or_else(|| text.to_owned(), |worker| worker.correct(text, terms))
+                    })
+                },
+                spelling_ready,
+                review,
+            )
+        })
+        .await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err("此平台的 Google 錄音完整性尚未通過驗證。".into())
+    }
+}
+
+#[tauri::command]
+async fn unload_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(target_os = "linux")]
+    {
+        with_desktop(app, DesktopWorker::deactivate_google).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err("此平台的 Google 引擎尚未載入。".into())
+    }
+}
+
 #[tauri::command]
 async fn enable_local_input(app: tauri::AppHandle) -> Result<View, String> {
     with_desktop(app, |worker| {
@@ -299,6 +461,13 @@ async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
         #[cfg(target_os = "linux")]
         {
             use std::os::unix::fs::MetadataExt;
+            let current = worker.settings()?;
+            if current.settings.dictation.busy
+                || current.google_runtime
+                    == voicetype_app_core::worker::GoogleRuntimeStatus::Cleaning
+            {
+                return Err("錄音或清理進行中，請稍後重新檢查".into());
+            }
             let socket = match std::env::var_os("VOICETYPE_SOCKET") {
                 Some(path) => PathBuf::from(path),
                 None => match std::env::var_os("XDG_RUNTIME_DIR") {
@@ -311,7 +480,8 @@ async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
                     }
                 },
             };
-            worker.refresh_local(socket)
+            worker.refresh_local(socket)?;
+            worker.refresh_google_install(official_google_path()?)
         }
         #[cfg(not(target_os = "linux"))]
         worker.settings()
@@ -445,6 +615,8 @@ fn main() {
             cancel_model_setup,
             load_local_runtime,
             unload_local_runtime,
+            load_google_runtime,
+            unload_google_runtime,
             enable_local_input,
             configure_input_module,
             get_vocabulary,

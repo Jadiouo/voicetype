@@ -1,6 +1,6 @@
 //! Resident application worker. All process owners are created, polled and
 //! destroyed on this thread. Webview commands send work, never own a child.
-use crate::{AppError, Application, Provider, Snapshot};
+use crate::{AppError, Application, Availability, Provider, Snapshot};
 use serde::Serialize;
 use std::{
     io,
@@ -31,11 +31,24 @@ pub enum SpellingRuntimeStatus {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoogleRuntimeStatus {
+    Inactive,
+    WaitingForInput,
+    Ready,
+    Prewarming,
+    Cleaning,
+    Failed,
+}
+
 #[derive(Serialize)]
 pub struct DesktopSnapshot {
     pub settings: Snapshot,
     pub local_runtime: LocalRuntimeStatus,
     pub spelling_runtime: SpellingRuntimeStatus,
+    pub google_runtime: GoogleRuntimeStatus,
+    pub google_install: crate::google::release::GoogleInstallInfo,
     pub input_requested: bool,
 }
 
@@ -68,6 +81,22 @@ impl DesktopWorker {
         let thread = thread::Builder::new()
             .name("voicetype-desktop".into())
             .spawn(move || {
+                #[cfg(target_os = "linux")]
+                let google_install = std::env::var_os("HOME")
+                    .map(|home| {
+                        crate::google::release::inspect_linux_install(
+                            &PathBuf::from(home).join(".local/bin/agy"),
+                        )
+                    })
+                    .unwrap_or(crate::google::release::GoogleInstallInfo {
+                        state: crate::google::GoogleInstallState::Missing,
+                        version: None,
+                    });
+                #[cfg(not(target_os = "linux"))]
+                let google_install = crate::google::release::GoogleInstallInfo {
+                    state: crate::google::GoogleInstallState::Missing,
+                    version: None,
+                };
                 let mut desktop = Desktop {
                     app: Application::open(&config_dir),
                     config_dir,
@@ -75,7 +104,12 @@ impl DesktopWorker {
                     spelling_status: SpellingRuntimeStatus::Inactive,
                     #[cfg(target_os = "linux")]
                     local: None,
+                    #[cfg(target_os = "linux")]
+                    google: None,
+                    google_status: GoogleRuntimeStatus::Inactive,
+                    google_install,
                 };
+                desktop.sync_google_availability();
                 loop {
                     match receiver.recv_timeout(Duration::from_millis(10)) {
                         Ok(Message::Call(job)) => job(&mut desktop),
@@ -150,7 +184,7 @@ impl DesktopWorker {
             if desktop.app()?.snapshot().dictation.busy {
                 return Err(AppError::DictationBusy.to_string());
             }
-            if provider != Provider::Local {
+            if provider != desktop.app()?.snapshot().selected_provider {
                 desktop.deactivate()?;
             }
             desktop
@@ -168,7 +202,9 @@ impl DesktopWorker {
             }
             // The owned worker's configuration is frozen for its lifetime.
             // Keep a loaded/input-routed engine running until explicit unload.
-            if desktop.local_status != LocalRuntimeStatus::Inactive {
+            if desktop.local_status != LocalRuntimeStatus::Inactive
+                || desktop.google_status != GoogleRuntimeStatus::Inactive
+            {
                 return Err("請先停用並卸載引擎，再變更校正設定".into());
             }
             desktop
@@ -181,7 +217,9 @@ impl DesktopWorker {
 
     pub fn reload(&self) -> Result<DesktopSnapshot, String> {
         self.call(|desktop| {
-            if desktop.local_status != LocalRuntimeStatus::Inactive {
+            if desktop.local_status != LocalRuntimeStatus::Inactive
+                || desktop.google_status != GoogleRuntimeStatus::Inactive
+            {
                 return Err("請先停用並卸載引擎，再重新載入設定".into());
             }
             match desktop.app.as_mut() {
@@ -201,13 +239,58 @@ impl DesktopWorker {
 
     #[cfg(unix)]
     pub fn refresh_local(&self, socket: PathBuf) -> Result<DesktopSnapshot, String> {
+        if !socket.is_absolute() {
+            return Err("本機服務位置必須是完整路徑".into());
+        }
+        let before = self.settings()?;
+        if before.settings.dictation.busy || before.google_runtime == GoogleRuntimeStatus::Cleaning
+        {
+            return Err(AppError::DictationBusy.to_string());
+        }
+        // The socket may spend its full timeout waiting for pong. Keep that IO
+        // outside the resident thread so a hotkey can Start, Stop or Cancel.
+        let availability = crate::probe_local_provider(&socket, Duration::from_millis(300));
         self.call(move |desktop| {
-            if !socket.is_absolute() {
-                return Err("本機服務位置必須是完整路徑".into());
+            if desktop.app()?.snapshot().dictation.busy
+                || desktop.google_status == GoogleRuntimeStatus::Cleaning
+            {
+                return desktop.snapshot();
             }
-            desktop
-                .app_mut()?
-                .refresh_local_provider(&socket, Duration::from_millis(300));
+            desktop.app_mut()?.set_local_availability(availability);
+            desktop.snapshot()
+        })
+    }
+
+    /// Read-only exact-image inspection. Login and audio remain unchecked.
+    #[cfg(target_os = "linux")]
+    pub fn refresh_google_install(&self, executable: PathBuf) -> Result<DesktopSnapshot, String> {
+        self.refresh_google_install_with(executable, crate::google::release::inspect_linux_install)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn refresh_google_install_with(
+        &self,
+        executable: PathBuf,
+        inspect: impl FnOnce(&std::path::Path) -> crate::google::release::GoogleInstallInfo,
+    ) -> Result<DesktopSnapshot, String> {
+        // The image is hundreds of MB. Never read or hash it on the resident
+        // thread, where Fcitx Stop/Cancel and recorder polling must progress.
+        let before = self.settings()?;
+        if before.settings.dictation.busy || before.google_runtime == GoogleRuntimeStatus::Cleaning
+        {
+            return Err(AppError::DictationBusy.to_string());
+        }
+        let inspected = inspect(&executable);
+        self.call(move |desktop| {
+            // A hotkey may have started a session while inspection ran. Keep
+            // its current status and let the user refresh again when idle.
+            if desktop.app()?.snapshot().dictation.busy
+                || desktop.google_status == GoogleRuntimeStatus::Cleaning
+            {
+                return desktop.snapshot();
+            }
+            desktop.google_install = inspected;
+            desktop.sync_google_availability();
             desktop.snapshot()
         })
     }
@@ -225,6 +308,9 @@ impl DesktopWorker {
             }
             if desktop.app()?.snapshot().selected_provider != Provider::Local {
                 return Err("請先選擇本機離線辨識".into());
+            }
+            if desktop.google.is_some() {
+                return Err("請先確認 Google 錄音完全停止，再載入本機引擎".into());
             }
             if desktop.local.is_none() {
                 let spelling_enabled = desktop.app()?.snapshot().spelling_enabled;
@@ -271,6 +357,76 @@ impl DesktopWorker {
         })
     }
 
+    /// The factory runs on the resident thread. It must authenticate the
+    /// reviewed official CLI and empty editor before publishing an input route.
+    #[cfg(target_os = "linux")]
+    pub fn activate_google<B, F, M>(
+        &self,
+        runtime_dir: PathBuf,
+        create: F,
+        format: M,
+        spelling_ready: bool,
+        review: Option<std::sync::Arc<crate::review_collector::Collector>>,
+    ) -> Result<DesktopSnapshot, String>
+    where
+        B: crate::google::GoogleBoundary + Send + 'static,
+        F: FnMut() -> io::Result<B> + Send + 'static,
+        M: Fn(String) -> io::Result<String> + Send + 'static,
+    {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            if desktop.app()?.snapshot().selected_provider != Provider::Google {
+                return Err("請先選擇 Google 官方辨識".into());
+            }
+            if desktop.local.is_some() || desktop.google.is_some() {
+                return Err("請先卸載目前的聽寫引擎".into());
+            }
+            match GoogleHost::start(&runtime_dir, create, format, review) {
+                Ok(host) => {
+                    desktop.google = Some(host);
+                    desktop.google_status = GoogleRuntimeStatus::WaitingForInput;
+                    desktop.spelling_status = if !desktop.app()?.snapshot().spelling_enabled {
+                        SpellingRuntimeStatus::Disabled
+                    } else if spelling_ready {
+                        SpellingRuntimeStatus::Ready
+                    } else {
+                        SpellingRuntimeStatus::Unavailable
+                    };
+                    desktop.sync_google_availability();
+                }
+                Err(_) => {
+                    desktop.google_status = GoogleRuntimeStatus::Failed;
+                    desktop.sync_google_availability();
+                    return Err("Google 官方 CLI、登入或輸入環境尚未通過檢查；未啟動錄音".into());
+                }
+            }
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn google_endpoint(&self) -> Result<Option<PathBuf>, String> {
+        self.call(|desktop| {
+            Ok(desktop
+                .google
+                .as_ref()
+                .map(|host| host.endpoint.path().join("frontend.sock")))
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn deactivate_google(&self) -> Result<DesktopSnapshot, String> {
+        self.call(|desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            desktop.deactivate()?;
+            desktop.snapshot()
+        })
+    }
+
     /// Explicit native input opt-in. The shell supplies its login runtime
     /// directory; the webview cannot choose a socket, executable or file path.
     #[cfg(target_os = "linux")]
@@ -307,6 +463,7 @@ impl DesktopWorker {
                     .local
                     .as_ref()
                     .is_some_and(|local| local.input.is_some())
+                || desktop.google.is_some()
             {
                 return Err("請先停用 App 聽寫，再變更輸入法模組".into());
             }
@@ -337,6 +494,10 @@ impl DesktopWorker {
                 if let Some(EngineOwner::Connected(session)) = local.owner.as_mut() {
                     session.cancel(app);
                 }
+            }
+            #[cfg(target_os = "linux")]
+            if let (Some(google), Ok(app)) = (&mut desktop.google, &mut desktop.app) {
+                google.cancel(app);
             }
             desktop.snapshot()
         })
@@ -378,11 +539,33 @@ struct Desktop {
     app: Result<Application, AppError>,
     local_status: LocalRuntimeStatus,
     spelling_status: SpellingRuntimeStatus,
+    google_status: GoogleRuntimeStatus,
+    google_install: crate::google::release::GoogleInstallInfo,
     #[cfg(target_os = "linux")]
     local: Option<LocalHost>,
+    #[cfg(target_os = "linux")]
+    google: Option<GoogleHost>,
 }
 
 impl Desktop {
+    fn sync_google_availability(&mut self) {
+        use crate::google::GoogleInstallState;
+        let availability = match self.google_status {
+            GoogleRuntimeStatus::Ready => Availability::ServiceAvailable,
+            GoogleRuntimeStatus::Failed => Availability::Offline,
+            GoogleRuntimeStatus::WaitingForInput
+            | GoogleRuntimeStatus::Prewarming
+            | GoogleRuntimeStatus::Cleaning => Availability::NotConnected,
+            GoogleRuntimeStatus::Inactive => match self.google_install.state {
+                GoogleInstallState::Missing => Availability::Offline,
+                GoogleInstallState::Incompatible => Availability::Incompatible,
+                GoogleInstallState::OfficialCheckRequired => Availability::NotConnected,
+            },
+        };
+        if let Ok(app) = self.app.as_mut() {
+            app.set_google_availability(availability);
+        }
+    }
     fn app(&self) -> Result<&Application, String> {
         self.app.as_ref().map_err(ToString::to_string)
     }
@@ -394,12 +577,15 @@ impl Desktop {
             settings: self.app()?.snapshot(),
             local_runtime: self.local_status,
             spelling_runtime: self.spelling_status,
+            google_runtime: self.google_status,
+            google_install: self.google_install,
             input_requested: {
                 #[cfg(target_os = "linux")]
                 {
                     self.local
                         .as_ref()
                         .is_some_and(|local| local.input.is_some())
+                        || self.google.is_some()
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
@@ -410,6 +596,15 @@ impl Desktop {
     }
     fn deactivate(&mut self) -> Result<(), String> {
         #[cfg(target_os = "linux")]
+        if let Some(google) = self.google.as_mut() {
+            let app = self.app.as_mut().map_err(|e| e.to_string())?;
+            google.shutdown(app).map_err(|_| {
+                self.google_status = GoogleRuntimeStatus::Cleaning;
+                "Google 錄音尚未確認停止，麥克風仍保留；請稍後再試".to_string()
+            })?;
+            self.google = None;
+        }
+        #[cfg(target_os = "linux")]
         if let Some(local) = self.local.as_mut() {
             let app = self.app.as_mut().map_err(|e| e.to_string())?;
             local
@@ -419,6 +614,8 @@ impl Desktop {
         }
         self.local_status = LocalRuntimeStatus::Inactive;
         self.spelling_status = SpellingRuntimeStatus::Inactive;
+        self.google_status = GoogleRuntimeStatus::Inactive;
+        self.sync_google_availability();
         Ok(())
     }
     fn poll(&mut self) {
@@ -445,6 +642,24 @@ impl Desktop {
                 }
             }
         }
+        #[cfg(target_os = "linux")]
+        if let (Some(google), Ok(app)) = (&mut self.google, &mut self.app) {
+            self.google_status = match google.poll(app) {
+                Ok(status) => status,
+                Err(_) => {
+                    let _ = google.shutdown(app);
+                    if google.released.load(Ordering::Acquire) {
+                        GoogleRuntimeStatus::Failed
+                    } else {
+                        GoogleRuntimeStatus::Cleaning
+                    }
+                }
+            };
+            if google.released.load(Ordering::Acquire) && google.owner.is_none() {
+                self.google = None;
+            }
+        }
+        self.sync_google_availability();
     }
 }
 
@@ -570,6 +785,258 @@ impl Drop for LocalHost {
     fn drop(&mut self) {
         if let Some(probe) = self.spelling_probe.take() {
             let _ = probe.join();
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn blocked_image_inspection_does_not_block_resident_worker() {
+        use crate::google::{release::GoogleInstallInfo, GoogleInstallState};
+
+        let root = tempfile::tempdir().unwrap();
+        let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let executable = root.path().join("cli");
+            let worker_ref = &worker;
+            let inspection = scope.spawn(move || {
+                worker_ref.refresh_google_install_with(executable, move |_| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    GoogleInstallInfo {
+                        state: GoogleInstallState::Incompatible,
+                        version: None,
+                    }
+                })
+            });
+            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let (reply_tx, reply_rx) = mpsc::channel();
+            scope.spawn(move || {
+                reply_tx
+                    .send(worker_ref.settings().map(|s| s.google_runtime))
+                    .unwrap();
+            });
+            let observed = reply_rx.recv_timeout(Duration::from_secs(2));
+            release_tx.send(()).unwrap();
+            assert_eq!(observed.unwrap().unwrap(), GoogleRuntimeStatus::Inactive);
+            inspection.join().unwrap().unwrap();
+        });
+        worker.shutdown().unwrap();
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct LeasedGoogle<B: crate::google::GoogleBoundary, F: FnMut() -> io::Result<B>> {
+    boundary: B,
+    reopen: F,
+    closed: bool,
+    cancellation: Option<std::sync::Arc<AtomicBool>>,
+    lease: Option<crate::input_lease::InputLease>,
+    released: std::sync::Arc<AtomicBool>,
+}
+
+#[cfg(target_os = "linux")]
+impl<B: crate::google::GoogleBoundary, F: FnMut() -> io::Result<B>> Drop for LeasedGoogle<B, F> {
+    fn drop(&mut self) {
+        // The worker drops this only after verified cleanup. Keep the route
+        // lock through every failed retry, including a detached worker.
+        drop(self.lease.take());
+        self.released.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<B: crate::google::GoogleBoundary, F: FnMut() -> io::Result<B>> crate::google::GoogleBoundary
+    for LeasedGoogle<B, F>
+{
+    fn set_cancellation(&mut self, flag: std::sync::Arc<AtomicBool>) {
+        self.boundary.set_cancellation(flag.clone());
+        self.cancellation = Some(flag);
+    }
+    fn start_capture(&mut self) -> io::Result<()> {
+        self.prewarm_next()?;
+        self.boundary.start_capture()
+    }
+    fn stop_capture_and_drain(&mut self) -> io::Result<()> {
+        self.boundary.stop_capture_and_drain()
+    }
+    fn stop_official_voice(&mut self) -> io::Result<()> {
+        self.boundary.stop_official_voice()
+    }
+    fn wait_official_recorder(&mut self) -> io::Result<()> {
+        self.boundary.wait_official_recorder()
+    }
+    fn capture_editor(&mut self) -> io::Result<String> {
+        self.boundary.capture_editor()
+    }
+    fn settle(&mut self, duration: Duration) -> io::Result<()> {
+        self.boundary.settle(duration)
+    }
+    fn reject_known_voice_errors(&mut self) -> io::Result<()> {
+        self.boundary.reject_known_voice_errors()
+    }
+    fn cleanup(&mut self) -> io::Result<()> {
+        self.boundary.cleanup()?;
+        self.closed = true;
+        Ok(())
+    }
+    fn take_review_pcm(&mut self) -> Option<Vec<u8>> {
+        self.boundary.take_review_pcm()
+    }
+    fn prewarm_next(&mut self) -> io::Result<()> {
+        if self.closed {
+            let mut replacement = (self.reopen)()?;
+            if let Some(flag) = &self.cancellation {
+                replacement.set_cancellation(flag.clone());
+            }
+            self.boundary = replacement;
+            self.closed = false;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct GoogleHost {
+    owner: Option<GoogleOwner>,
+    listener: std::os::unix::net::UnixListener,
+    endpoint: tempfile::TempDir,
+    released: std::sync::Arc<AtomicBool>,
+    pending_release: Option<crate::SessionKey>,
+    review: Option<std::sync::Arc<crate::review_collector::Collector>>,
+}
+
+#[cfg(target_os = "linux")]
+enum GoogleOwner {
+    Waiting(crate::google::GoogleProvider),
+    Connected(crate::dispatch::GoogleDispatcher),
+}
+
+#[cfg(target_os = "linux")]
+struct NoDelivery;
+#[cfg(target_os = "linux")]
+impl crate::DeliveryPort for NoDelivery {
+    fn commit_if_focused(&mut self, _: &crate::TargetLease, _: &str) -> crate::DeliveryOutcome {
+        crate::DeliveryOutcome::FocusChanged
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl GoogleHost {
+    fn start<B, F, M>(
+        runtime_dir: &std::path::Path,
+        mut create: F,
+        format: M,
+        review: Option<std::sync::Arc<crate::review_collector::Collector>>,
+    ) -> io::Result<Self>
+    where
+        B: crate::google::GoogleBoundary + Send + 'static,
+        F: FnMut() -> io::Result<B> + Send + 'static,
+        M: Fn(String) -> io::Result<String> + Send + 'static,
+    {
+        let endpoint = tempfile::Builder::new()
+            .prefix("voicetype-google-input-")
+            .tempdir_in(std::env::temp_dir())?;
+        let listener =
+            std::os::unix::net::UnixListener::bind(endpoint.path().join("frontend.sock"))?;
+        listener.set_nonblocking(true)?;
+        let boundary = create()?;
+        let lease = crate::input_lease::InputLease::acquire_google(
+            runtime_dir,
+            &endpoint.path().join("frontend.sock"),
+        )?;
+        let released = std::sync::Arc::new(AtomicBool::new(false));
+        let provider = crate::google::GoogleProvider::spawn_with_text(
+            LeasedGoogle {
+                boundary,
+                reopen: create,
+                closed: false,
+                cancellation: None,
+                lease: Some(lease),
+                released: released.clone(),
+            },
+            format,
+        )?;
+        Ok(Self {
+            owner: Some(GoogleOwner::Waiting(provider)),
+            listener,
+            endpoint,
+            released,
+            pending_release: None,
+            review,
+        })
+    }
+
+    fn poll(&mut self, app: &mut Application) -> io::Result<GoogleRuntimeStatus> {
+        match self.owner.as_mut() {
+            Some(GoogleOwner::Waiting(_)) => match self.listener.accept() {
+                Ok((peer, _)) => {
+                    let Some(GoogleOwner::Waiting(provider)) = self.owner.take() else {
+                        unreachable!()
+                    };
+                    let dispatcher = crate::dispatch::GoogleDispatcher::accept(
+                        peer,
+                        provider,
+                        Duration::from_millis(300),
+                        self.review.clone(),
+                    )?;
+                    self.owner = Some(GoogleOwner::Connected(dispatcher));
+                    Ok(GoogleRuntimeStatus::Ready)
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    Ok(GoogleRuntimeStatus::WaitingForInput)
+                }
+                Err(error) => Err(error),
+            },
+            Some(GoogleOwner::Connected(dispatcher)) => {
+                dispatcher.step(app, Duration::from_millis(10))?;
+                Ok(match dispatcher.warm_state() {
+                    1 => GoogleRuntimeStatus::Prewarming,
+                    2 => GoogleRuntimeStatus::Failed,
+                    _ => GoogleRuntimeStatus::Ready,
+                })
+            }
+            None if self.released.load(Ordering::Acquire) => {
+                self.release_pending(app);
+                Ok(GoogleRuntimeStatus::Inactive)
+            }
+            None => Ok(GoogleRuntimeStatus::Cleaning),
+        }
+    }
+
+    fn cancel(&mut self, app: &mut Application) {
+        if let Some(GoogleOwner::Connected(dispatcher)) = self.owner.as_mut() {
+            dispatcher.cancel(app);
+        }
+    }
+
+    fn release_pending(&mut self, app: &mut Application) {
+        if let Some(key) = self.pending_release.take() {
+            app.provider_event(key, crate::ProviderEvent::Released, &mut NoDelivery);
+        }
+    }
+
+    fn shutdown(&mut self, app: &mut Application) -> io::Result<()> {
+        if let Some(owner) = self.owner.take() {
+            match owner {
+                GoogleOwner::Waiting(provider) => drop(provider),
+                GoogleOwner::Connected(mut dispatcher) => {
+                    dispatcher.cancel(app);
+                    self.pending_release = dispatcher.active_key();
+                    drop(dispatcher);
+                }
+            }
+        }
+        if self.released.load(Ordering::Acquire) {
+            self.release_pending(app);
+            Ok(())
+        } else {
+            Err(io::ErrorKind::WouldBlock.into())
         }
     }
 }

@@ -2,6 +2,7 @@
 //! owns daily service endpoints: the caller supplies an exclusively owned local
 //! engine connection and a peer accepted on the app's private frontend endpoint.
 use crate::{
+    google::GoogleProvider,
     local::{deadline, invalid, CorrectionResult, LocalConnection, Wire},
     Application, DeliveryOutcome, DeliveryPort, DictationContext, ProviderEvent, SessionFailure,
     SessionKey, TargetLease,
@@ -12,7 +13,10 @@ use std::{
     collections::VecDeque,
     io,
     os::unix::net::UnixStream,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -46,6 +50,215 @@ enum InputCommand {
     },
 }
 
+/// Google uses the same authenticated Fcitx target and Coordinator as Local.
+/// Only the provider command/event port differs; terminal text never reaches
+/// this route until the owned Google worker has finished drain and cleanup.
+pub struct GoogleDispatcher {
+    input: FcitxConnection,
+    provider: GoogleProvider,
+    active: Option<RouteSession>,
+    last_session: u64,
+    failed: bool,
+    review: Option<Arc<crate::review_collector::Collector>>,
+    latest_review: Arc<AtomicU64>,
+}
+
+impl GoogleDispatcher {
+    pub fn warm_state(&self) -> u8 {
+        self.provider.warm_state()
+    }
+    pub fn accept(
+        peer: UnixStream,
+        provider: GoogleProvider,
+        budget: Duration,
+        review: Option<Arc<crate::review_collector::Collector>>,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            input: FcitxConnection::accept(peer, budget, "voicetype.fcitx.google-toggle.v2")?,
+            provider,
+            active: None,
+            last_session: 0,
+            failed: false,
+            review,
+            latest_review: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    pub fn step(&mut self, app: &mut Application, budget: Duration) -> io::Result<()> {
+        if self.failed {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
+        let result = self.step_inner(app, budget.min(Duration::from_millis(10)));
+        if result.is_err() {
+            self.fail(app);
+        }
+        result
+    }
+
+    fn step_inner(&mut self, app: &mut Application, budget: Duration) -> io::Result<()> {
+        self.enforce_deadline(app)?;
+        let mut input_budget = budget / 2;
+        let mut drained = false;
+        for _ in 0..32 {
+            let Some(command) = self.input.poll(input_budget)? else {
+                drained = true;
+                break;
+            };
+            input_budget = Duration::from_millis(1);
+            match command {
+                InputCommand::Start {
+                    session,
+                    context_id,
+                    is_password,
+                    context,
+                } => {
+                    if session == 0 || session <= self.last_session {
+                        continue;
+                    }
+                    self.last_session = session;
+                    if self.active.is_some() || app.snapshot().dictation.busy {
+                        self.input.error(session, "請等待目前工作結束後再錄音")?;
+                    } else if is_password
+                        || context_id.is_empty()
+                        || context_id.len() > 640
+                        || context_id.contains('\0')
+                        || context.program.len() > 512
+                        || context.context_text.len() > 16384
+                        || context.selected_text.len() > 2048
+                    {
+                        self.input.error(session, "此欄位無法使用語音輸入")?;
+                    } else {
+                        let target = TargetLease::new(context_id, session);
+                        match app.start_dictation_with_context(
+                            target.clone(),
+                            context,
+                            &mut self.provider,
+                        ) {
+                            Ok(key) => {
+                                self.latest_review.store(key.id(), Ordering::SeqCst);
+                                self.input.target = Some(target.clone());
+                                self.active = Some(RouteSession {
+                                    frontend: session,
+                                    key,
+                                    target,
+                                    program: String::new(),
+                                });
+                            }
+                            Err(_) => self.input.error(session, "所選辨識引擎尚未就緒")?,
+                        }
+                    }
+                }
+                InputCommand::Stop { session } if self.matches(session) => {
+                    app.stop_dictation(&mut self.provider)
+                        .map_err(io::Error::other)?;
+                }
+                InputCommand::Cancel { session } if self.matches(session) => {
+                    self.latest_review.store(0, Ordering::SeqCst);
+                    self.input.target = None;
+                    app.cancel_dictation(&mut self.provider)
+                        .map_err(io::Error::other)?;
+                }
+                InputCommand::Correction { session, .. } => {
+                    // Google correction is explicit through the shared review UI;
+                    // this route does not attribute a daemon-local learning rule.
+                    self.input.state(session, "correction_rejected")?;
+                }
+                _ => {}
+            }
+        }
+        if !drained {
+            return Err(invalid("frontend command burst too large"));
+        }
+        self.enforce_deadline(app)?;
+        if let Some((key, event)) = self.provider.try_event() {
+            if let Some(active) = self.active.as_ref().filter(|active| active.key == key) {
+                let session = active.frontend;
+                let released = matches!(event, ProviderEvent::Released);
+                let recording = matches!(event, ProviderEvent::Recording);
+                let failed = matches!(event, ProviderEvent::Failed(_));
+                let output = match &event {
+                    ProviderEvent::Final(text) => Some(text.clone()),
+                    _ => None,
+                };
+                let review_sample = output
+                    .as_ref()
+                    .and_then(|_| self.provider.take_review_sample(key));
+                self.input.last_committed = None;
+                app.provider_event(key, event, &mut self.input);
+                if let (Some(collector), Some(output), Some((raw, pcm))) =
+                    (self.review.as_ref(), output, review_sample)
+                {
+                    if self.input.last_committed.as_ref() == Some(&active.target)
+                        && pcm.len() % 2 == 0
+                        && (16_000 * 2 * 8..=16_000 * 2 * 61).contains(&pcm.len())
+                        && collector.wants(pcm.len() as f32 / 32_000.0)
+                    {
+                        let audio = pcm
+                            .chunks_exact(2)
+                            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0)
+                            .collect();
+                        collector.submit(crate::review_collector::Sample {
+                            audio,
+                            asr_text: raw,
+                            output_text: output,
+                            session: key.id(),
+                            latest: self.latest_review.clone(),
+                        });
+                    }
+                }
+                if recording {
+                    self.input.state(session, "recording")?;
+                }
+                if failed {
+                    self.input.error(session, "辨識失敗，這次沒有送出文字")?;
+                }
+                if released {
+                    self.active = None;
+                    self.input.target = None;
+                    self.input.state(session, "idle")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn enforce_deadline(&mut self, app: &mut Application) -> io::Result<()> {
+        if self.active.is_some() && app.expire_dictation(&mut self.provider) {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn cancel(&mut self, app: &mut Application) {
+        self.latest_review.store(0, Ordering::SeqCst);
+        self.input.target = None;
+        if self.active.is_some() {
+            let _ = app.cancel_dictation(&mut self.provider);
+        }
+    }
+
+    pub(crate) fn fail(&mut self, app: &mut Application) {
+        self.latest_review.store(0, Ordering::SeqCst);
+        self.failed = true;
+        self.input.target = None;
+        if let Some(active) = &self.active {
+            app.provider_event(
+                active.key,
+                ProviderEvent::Failed(SessionFailure::ProviderFailed),
+                &mut self.input,
+            );
+            let _ = app.cancel_dictation(&mut self.provider);
+        }
+    }
+
+    pub(crate) fn active_key(&self) -> Option<SessionKey> {
+        self.active.as_ref().map(|a| a.key)
+    }
+    fn matches(&self, session: u64) -> bool {
+        self.active.as_ref().is_some_and(|a| a.frontend == session)
+    }
+}
+
 struct RouteSession {
     frontend: u64,
     key: SessionKey,
@@ -67,7 +280,7 @@ impl LocalDispatcher {
     /// the actual child handle; an error is never proof of microphone release.
     pub fn accept(peer: UnixStream, engine: LocalConnection, budget: Duration) -> io::Result<Self> {
         Ok(Self {
-            input: FcitxConnection::accept(peer, budget)?,
+            input: FcitxConnection::accept(peer, budget, "voicetype.fcitx.v1")?,
             engine,
             active: None,
             last_session: 0,
@@ -298,16 +511,14 @@ struct FcitxConnection {
 }
 
 impl FcitxConnection {
-    fn accept(peer: UnixStream, budget: Duration) -> io::Result<Self> {
+    fn accept(peer: UnixStream, budget: Duration, capability: &str) -> io::Result<Self> {
         let mut wire = Wire::authenticated(peer, None)?;
         let nonce = NEXT_HELLO
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| invalid("frontend handshake IDs exhausted"))?;
         let until = deadline(budget);
         wire.send(&json!({"type":"desktop_hello","session":nonce}), until)?;
-        if wire.read(until)?
-            != json!({"type":"desktop_hello","session":nonce,"value":"voicetype.fcitx.v1"})
-        {
+        if wire.read(until)? != json!({"type":"desktop_hello","session":nonce,"value":capability}) {
             return Err(invalid("incompatible input frontend"));
         }
         Ok(Self {

@@ -17,6 +17,8 @@ const recoveryText = document.querySelector('#recovery-text');
 const dismissRecovery = document.querySelector('#dismiss-recovery');
 const loadRuntime = document.querySelector('#load-local-runtime');
 const unloadRuntime = document.querySelector('#unload-local-runtime');
+const loadGoogle = document.querySelector('#load-google-runtime');
+const unloadGoogle = document.querySelector('#unload-google-runtime');
 const enableInput = document.querySelector('#enable-local-input');
 const spellingEnabled = document.querySelector('#spelling-enabled');
 spellingEnabled.addEventListener('change', () => command('set_spelling_enabled', { enabled: spellingEnabled.checked }));
@@ -25,7 +27,8 @@ const installModule = document.querySelector('#install-input-module');
 const restoreModule = document.querySelector('#restore-input-module');
 
 function runtimeControls(view) {
-  spellingEnabled.disabled = commandBusy || !view || view.local_runtime !== 'inactive' || view.settings.dictation.busy;
+  spellingEnabled.disabled = commandBusy || !view || view.local_runtime !== 'inactive'
+    || view.google_runtime !== 'inactive' || view.settings.dictation.busy;
   if (view) spellingEnabled.checked = view.settings.spelling_enabled;
   const spellingNotes = {
     inactive: view?.settings.spelling_enabled ? '校正已選取；載入引擎時會核對。' : '校正已關閉。',
@@ -50,6 +53,22 @@ function runtimeControls(view) {
     : view.input_requested ? '等待 Fcitx 接管：原聽寫結束後才切換。若持續等待，請確認已載入本版 Fcitx 模組；舊的使用者模組可能遮住安裝包版本。'
     : loaded ? '引擎已載入。按「啟用本機聽寫」後，Fcitx 才會在空閒時接管快捷鍵。'
     : '載入時會核對完整模型並使用 CPU。這一步不會開始錄音。';
+  const googleLoaded = ['waiting_for_input', 'ready', 'prewarming', 'cleaning'].includes(view?.google_runtime);
+  loadGoogle.disabled = commandBusy || !view || !view.local_runtime_bundled || view.google_runtime !== 'inactive'
+    || view.google_install.state !== 'official_check_required'
+    || view.settings.selected_provider !== 'google' || view.settings.dictation.busy;
+  unloadGoogle.hidden = !googleLoaded && view?.google_runtime !== 'failed';
+  unloadGoogle.disabled = commandBusy || !!view?.settings.dictation.busy || view?.google_runtime === 'cleaning';
+  const installNote = view?.google_install.state === 'missing' ? '找不到官方 CLI。請依官方安裝說明安裝，再按「檢查服務」。'
+    : view?.google_install.state === 'incompatible' ? 'CLI 版本或檔案未通過核對，未開放錄音。'
+    : `官方 CLI ${view?.google_install.version || ''} 已通過檔案核對，仍需登入與空草稿預檢。`;
+  document.querySelector('#google-runtime-note').textContent = view?.google_runtime === 'ready'
+    ? '官方 CLI 空草稿與 Fcitx 路由已連接；真實麥克風及送字仍待驗收。'
+    : view?.google_runtime === 'waiting_for_input' ? 'CLI 預檢通過，等待 Fcitx 路由 v2 連接。尚未錄音。'
+    : view?.google_runtime === 'prewarming' ? '上一句已完成；正在預備下一個官方 CLI，下一句可能需要等待。'
+    : view?.google_runtime === 'cleaning' ? '正在確認錄音程序完全結束；麥克風仍由 App 保留。'
+    : view?.google_runtime === 'failed' ? 'Google 引擎未完成預檢或已中斷；未確認可用。'
+    : installNote;
 }
 
 async function refreshRecovery() {
@@ -84,7 +103,18 @@ function render(view) {
   };
   for (const provider of view.settings.providers) {
     const label = document.querySelector(`#${provider.provider}-availability`);
-    if (label) label.textContent = labels[provider.availability] || '尚未檢查服務';
+    if (label) {
+      const googleMissing = provider.provider === 'google' && view.google_runtime === 'inactive'
+        && view.google_install.state === 'missing';
+      const googleIncompatible = provider.provider === 'google' && view.google_runtime === 'inactive'
+        && view.google_install.state === 'incompatible';
+      label.textContent = googleMissing ? '找不到官方 CLI · 尚未連接辨識引擎'
+        : googleIncompatible ? '官方 CLI 版本不相容 · 未開放錄音'
+        : labels[provider.availability] || '尚未檢查服務';
+    }
+  }
+  if (view.google_runtime === 'ready') {
+    document.querySelector('#google-availability').textContent = 'CLI 與輸入路由已連接 · 真實語音待驗收';
   }
   if (view.local_runtime !== 'inactive') {
     const runtimeLabels = {
@@ -112,6 +142,8 @@ async function command(name, args = {}) {
   error.hidden = true;
   status.textContent = name === 'select_provider' ? '正在儲存…'
     : name === 'load_local_runtime' ? '正在核對模型並載入本機引擎，首次載入可能需要一些時間…'
+    : name === 'load_google_runtime' ? '正在核對官方 CLI、登入與空草稿；這一步不錄音…'
+    : name === 'unload_google_runtime' ? '正在卸載 Google 引擎並確認錄音程序結束…'
     : name === 'unload_local_runtime' ? '正在卸載本機引擎…'
     : name === 'enable_local_input' ? '正在要求 Fcitx 接管…'
     : name === 'cancel_dictation' ? '正在取消聽寫…'
@@ -127,6 +159,8 @@ async function command(name, args = {}) {
         ? '本機辨識引擎已載入；CPU 校正器本次不可用。仍可啟用本機聽寫。'
         : '引擎已載入，可啟用本機聽寫。尚未開始錄音。')
       : name === 'enable_local_input' ? '已要求接管，請等待顯示「本機引擎與輸入法已連接」。'
+      : name === 'load_google_runtime' ? 'Google CLI 預檢完成；等待輸入法路由連接。尚未開始錄音。'
+      : name === 'unload_google_runtime' ? 'Google 引擎已卸載。'
       : name === 'unload_local_runtime' ? '本機引擎已卸載。'
       : name === 'cancel_dictation' ? '已要求取消，正在等待引擎停止。'
       : name === 'refresh_providers' ? '已檢查服務。此操作不會啟動錄音。'
@@ -215,6 +249,8 @@ cancel.addEventListener('click', () => command('cancel_dictation'));
 loadRuntime.addEventListener('click', () => command('load_local_runtime'));
 unloadRuntime.addEventListener('click', () => command('unload_local_runtime'));
 enableInput.addEventListener('click', () => command('enable_local_input'));
+loadGoogle.addEventListener('click', () => command('load_google_runtime'));
+unloadGoogle.addEventListener('click', () => command('unload_google_runtime'));
 async function configureModule(restore) {
   if (moduleBusy || commandBusy) return;
   moduleBusy = true;

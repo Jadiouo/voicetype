@@ -27,6 +27,10 @@ set_tests_properties(input_handshake_timeout PROPERTIES TIMEOUT 10)
 add_test(NAME input_pid_mismatch COMMAND test_input_handoff pid_mismatch)
 set_tests_properties(input_pid_mismatch PROPERTIES TIMEOUT 10)
 
+add_executable(test_google_route test_google_route.cpp)
+target_link_libraries(test_google_route PRIVATE voicetype-ipc)
+add_test(NAME google_route_v2 COMMAND test_google_route)
+
 add_executable(test_app_frontend test_app_frontend.cpp)
 target_link_libraries(test_app_frontend PRIVATE Fcitx5::Core Fcitx5::Utils)
 
