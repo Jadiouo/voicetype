@@ -1,5 +1,13 @@
 # VoiceType Desktop — Test Design and TDD Plan
 
+Scope override (2026-10-11): the user withdrew Google recognition from this App.
+The Local-only merge checks startup/reload fallback from saved Google selection,
+preservation of other settings, absence of Google helper packaging and an explicit
+recovery-only path for any unfinished Linux shortcut transfer. Historical Google
+capture, login, provider selection and helper tests below are not gates for this
+merge. Windows live microphone and original-field delivery remain unaccepted;
+the merge does not claim those behaviors pass.
+
 Status: user confirmed all four public test boundaries on 2026-10-07.
 Existing Linux behavior was already tested before PR #1 merged. Do not rerun that
 entire suite merely to merge or create this shell.

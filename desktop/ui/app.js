@@ -7,6 +7,9 @@ const cancel = document.querySelector('#cancel-dictation');
 const choices = [...document.querySelectorAll('input[name="provider"]')];
 const shortcutChoice = document.querySelector('#shortcut-choice');
 const shortcutNote = document.querySelector('#shortcut-note');
+const legacyShortcutRecovery = document.querySelector('#legacy-shortcut-recovery');
+const legacyShortcutNote = document.querySelector('#legacy-shortcut-note');
+const restoreLegacyShortcut = document.querySelector('#restore-legacy-shortcut');
 let renderedShortcutProvider;
 let renderedShortcutRequested;
 let lastView;
@@ -23,14 +26,6 @@ const loadRuntime = document.querySelector('#load-local-runtime');
 const unloadRuntime = document.querySelector('#unload-local-runtime');
 const repairRuntime = document.querySelector('#repair-local-runtime');
 const rollbackRuntime = document.querySelector('#rollback-local-runtime');
-const loadGoogle = document.querySelector('#load-google-runtime');
-const unloadGoogle = document.querySelector('#unload-google-runtime');
-const stageGoogle = document.querySelector('#stage-google-shortcut');
-const switchGoogle = document.querySelector('#switch-google-shortcut');
-const restoreGoogle = document.querySelector('#restore-google-shortcut');
-const googleTransferNote = document.querySelector('#google-transfer-note');
-let googleTransferPhase = 'unknown';
-
 function shortcutLabel(view, provider, choice) {
   if (choice === 'ctrl_shift_f9') return `Ctrl＋Shift＋F9（${!view.windows_input && provider === 'local' ? '按住說話、放開結束' : '按一次開始、再按一次結束'}）`;
   return !view.windows_input && provider === 'local'
@@ -45,11 +40,10 @@ const installModule = document.querySelector('#install-input-module');
 const restoreModule = document.querySelector('#restore-input-module');
 
 function runtimeControls(view) {
-  const provider = view?.settings.selected_provider;
-  const binding = provider ? view.settings.shortcuts[provider] : null;
+  const provider = 'local';
+  const binding = view?.settings.shortcuts.local;
   shortcutChoice.disabled = commandBusy || !view || view.settings.dictation.busy
-    || view.local_runtime !== 'inactive' || view.google_runtime !== 'inactive'
-    || view.input_requested || googleTransferPhase !== null;
+    || view.local_runtime !== 'inactive' || view.input_requested;
   if (binding) {
     // Polling must not reset a native select while its menu is being operated.
     // Sync only when the authoritative provider or requested binding changes.
@@ -71,7 +65,7 @@ function runtimeControls(view) {
     shortcutNote.textContent = '正在讀取快捷鍵設定…';
   }
   spellingEnabled.disabled = commandBusy || !view || view.local_runtime !== 'inactive'
-    || view.google_runtime !== 'inactive' || view.settings.dictation.busy;
+    || view.settings.dictation.busy;
   if (view) spellingEnabled.checked = view.settings.spelling_enabled;
   const spellingNotes = {
     inactive: view?.settings.spelling_enabled ? '校正已選取；載入引擎時會核對。' : '校正已關閉。',
@@ -85,7 +79,7 @@ function runtimeControls(view) {
     || !view?.local_runtime_bundled || view.input_requested || view.settings.dictation.busy;
   const loaded = ['waiting_for_input', 'ready'].includes(view?.local_runtime);
   const runtimeAssetsIdle = !!view?.local_runtime_bundled && view.local_runtime === 'inactive'
-    && view.google_runtime === 'inactive' && !view.input_requested && !view.settings.dictation.busy;
+    && !view.input_requested && !view.settings.dictation.busy;
   loadRuntime.disabled = commandBusy || !runtimeAssetsIdle || view.settings.selected_provider !== 'local';
   repairRuntime.disabled = rollbackRuntime.disabled = commandBusy || !runtimeAssetsIdle;
   unloadRuntime.hidden = !loaded && view?.local_runtime !== 'failed';
@@ -101,51 +95,7 @@ function runtimeControls(view) {
     : view.input_requested ? '等待 Fcitx 接管：原聽寫結束後才切換。若持續等待，請確認已載入本版 Fcitx 模組；舊的使用者模組可能遮住安裝包版本。'
     : loaded ? '引擎已載入。按「啟用本機聽寫」後，Fcitx 才會在空閒時接管快捷鍵。'
     : '載入引擎時會核對完整模型並使用 CPU。這一步不會開始錄音。';
-  const googleLoaded = ['waiting_for_input', 'transfer_pending', 'ready', 'prewarming', 'cleaning'].includes(view?.google_runtime);
-  loadGoogle.disabled = commandBusy || !view || !view.local_runtime_bundled || view.google_runtime !== 'inactive'
-    || view.google_install.state !== 'official_check_required'
-    || view.settings.selected_provider !== 'google' || view.settings.dictation.busy
-    || googleTransferPhase !== null;
-  unloadGoogle.hidden = !googleLoaded && view?.google_runtime !== 'failed';
-  unloadGoogle.disabled = commandBusy || !!view?.settings.dictation.busy || view?.google_runtime === 'cleaning';
-  const showTransfer = !!view?.local_runtime_bundled && !view?.windows_input;
-  document.querySelector('#google-transfer-setup').hidden = !showTransfer;
-  stageGoogle.hidden = !showTransfer || view?.settings.selected_provider !== 'google' || googleTransferPhase !== null;
-  switchGoogle.hidden = !showTransfer || googleTransferPhase !== 'disable_staged';
-  restoreGoogle.hidden = !showTransfer || !['disable_staged', 'app_owned', 'restore_staged'].includes(googleTransferPhase);
-  restoreGoogle.textContent = googleTransferPhase === 'restore_staged' ? '完成還原' : '還原舊 Google 服務';
-  stageGoogle.disabled = commandBusy || !view || view.settings.dictation.busy
-    || view.local_runtime !== 'inactive' || view.google_runtime !== 'inactive'
-    || view.google_install.state !== 'official_check_required';
-  switchGoogle.disabled = commandBusy || !view || view.settings.dictation.busy
-    || view.settings.selected_provider !== 'google'
-    || !['inactive', 'transfer_pending', 'waiting_for_input'].includes(view.google_runtime);
-  restoreGoogle.disabled = commandBusy || !view || view.settings.dictation.busy
-    || view.google_runtime === 'cleaning';
-  googleTransferNote.textContent = googleTransferPhase === 'disable_staged'
-    ? '舊快捷鍵已暫停。請自行重新載入 Fcitx，確認舊句已結束，再完成切換；此時 App 錄音仍鎖定。'
-    : googleTransferPhase === 'app_owned'
-      ? 'App 已取得舊服務的跨產品鎖；可明確還原。若錄音未完全停止，還原會拒絕。'
-      : googleTransferPhase === 'restore_staged'
-        ? '原設定已寫回。請自行重新載入 Fcitx，再按「完成還原」核對身分與服務狀態。'
-        : googleTransferPhase === null ? '沒有待完成的舊 Google 快捷鍵交接。'
-          : '無法核對交接狀態；切換與錄音未開放。';
-  const installNote = view?.google_install.state === 'missing' ? '找不到官方 CLI。請依官方安裝說明安裝，再按「檢查服務」。'
-    : view?.google_install.state === 'incompatible' ? 'CLI 版本或檔案未通過核對，未開放錄音。'
-    : `官方 CLI ${view?.google_install.version || ''} 已通過檔案核對，仍需登入與空草稿預檢。`;
-  document.querySelector('#google-runtime-note').textContent = view?.google_runtime === 'ready'
-    ? (view.windows_input
-      ? '官方 CLI 空草稿與 Windows 快捷鍵已就緒；每句開始仍須等待 CLI 回報錄音狀態。真實麥克風及送字待驗收。'
-      : '官方 CLI 空草稿與 Fcitx 路由已連接；真實麥克風及送字仍待驗收。')
-    : view?.google_runtime === 'waiting_for_input' ? 'CLI 預檢通過，等待 Fcitx 路由握手。尚未錄音。'
-    : view?.google_runtime === 'transfer_pending' ? 'Google 快捷鍵切換中；舊服務與跨產品鎖尚未完成確認，錄音已鎖定。可停用引擎後還原。'
-    : view?.google_runtime === 'prewarming' ? '上一句已完成；正在預備下一個官方 CLI，下一句可能需要等待。'
-    : view?.google_runtime === 'cleaning' ? '正在確認錄音程序完全結束；麥克風仍由 App 保留。'
-    : view?.google_runtime === 'failed' ? 'Google 引擎未完成預檢或已中斷；未確認可用。'
-    : installNote;
-  document.querySelector('#google-capture-note').textContent = view?.windows_input
-    ? 'Windows Google 使用官方 CLI 原生錄音；App 目前無法取得抽樣音訊供校對。辨識文字會保留供手動複製，尾字完整性仍待實機驗收。'
-    : '';
+
 }
 
 async function refreshRecovery() {
@@ -164,13 +114,20 @@ async function refreshRecovery() {
     : '輸入位置已變更，完整文字保留在這裡。';
 }
 
-async function refreshGoogleTransferPhase() {
+async function refreshLegacyShortcut() {
   try {
-    googleTransferPhase = await window.__TAURI__.core.invoke('google_shortcut_phase');
-  } catch (_) {
-    googleTransferPhase = 'unknown';
+    const phase = await window.__TAURI__.core.invoke('google_shortcut_phase');
+    legacyShortcutRecovery.hidden = !phase;
+    restoreLegacyShortcut.disabled = commandBusy || !phase;
+    legacyShortcutNote.textContent = phase === 'restore_staged'
+      ? '舊快捷鍵仍待 Fcitx 重新載入；重新載入後再按「還原舊快捷鍵」。'
+      : phase ? '舊快捷鍵交接尚未完成；請按「還原舊快捷鍵」處理。' : '';
+  } catch (reason) {
+    // An unreadable journal must remain visible; never clear it silently.
+    legacyShortcutRecovery.hidden = false;
+    restoreLegacyShortcut.disabled = true;
+    legacyShortcutNote.textContent = `無法核對舊快捷鍵交接：${String(reason)}`;
   }
-  runtimeControls(lastView);
 }
 
 function render(view) {
@@ -191,19 +148,8 @@ function render(view) {
   for (const provider of view.settings.providers) {
     const label = document.querySelector(`#${provider.provider}-availability`);
     if (label) {
-      const googleMissing = provider.provider === 'google' && view.google_runtime === 'inactive'
-        && view.google_install.state === 'missing';
-      const googleIncompatible = provider.provider === 'google' && view.google_runtime === 'inactive'
-        && view.google_install.state === 'incompatible';
-      label.textContent = googleMissing ? '找不到官方 CLI · 尚未連接辨識引擎'
-        : googleIncompatible ? '官方 CLI 版本不相容 · 未開放錄音'
-        : labels[provider.availability] || '尚未檢查服務';
+      label.textContent = labels[provider.availability] || '尚未檢查服務';
     }
-  }
-  if (view.google_runtime === 'ready') {
-    document.querySelector('#google-availability').textContent = view.windows_input
-      ? 'CLI 與 Windows 快捷鍵已連接 · 麥克風及送字待驗收'
-      : 'CLI 與輸入路由已連接 · 真實語音待驗收';
   }
   if (view.local_runtime !== 'inactive') {
     const runtimeLabels = {
@@ -229,16 +175,10 @@ async function command(name, args = {}) {
   check.disabled = true;
   cancel.disabled = true;
   error.hidden = true;
-  status.textContent = name === 'select_provider' ? '正在儲存…'
-    : name === 'set_shortcut' ? '正在保存快捷鍵要求；尚未註冊按鍵…'
+  status.textContent = name === 'set_shortcut' ? '正在保存快捷鍵要求；尚未註冊按鍵…'
     : name === 'load_local_runtime' ? '正在核對模型並載入本機引擎，首次載入可能需要一些時間…'
     : name === 'repair_local_runtime' ? '正在核對安裝包並修復本機引擎…'
     : name === 'rollback_local_runtime' ? '正在核對上一版並保存回復選擇…'
-    : name === 'load_google_runtime' ? '正在核對官方 CLI、登入與空草稿；這一步不錄音…'
-    : name === 'stage_google_shortcut' ? '正在保存舊設定並暫停舊快捷鍵…'
-    : name === 'switch_google_shortcut' ? '正在核對 Fcitx 路由、停止舊服務並取得跨產品鎖…'
-    : name === 'restore_google_shortcut' ? '正在確認 App 錄音程序已結束並還原舊服務…'
-    : name === 'unload_google_runtime' ? '正在卸載 Google 引擎並確認錄音程序結束…'
     : name === 'unload_local_runtime' ? '正在卸載本機引擎…'
     : name === 'enable_local_input' ? (lastView?.windows_input ? '正在啟用 Windows 快捷鍵…' : '正在要求 Fcitx 接管…')
     : name === 'cancel_dictation' ? '正在取消聽寫…'
@@ -248,47 +188,43 @@ async function command(name, args = {}) {
     const view = await window.__TAURI__.core.invoke(name, args);
     if (name === 'set_shortcut' || name === 'reload_settings') renderedShortcutRequested = undefined;
     render(view);
-    await refreshGoogleTransferPhase();
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
-    status.textContent = name === 'select_provider'
-      ? '偏好已儲存。請確認所選方式的就緒狀態。'
-      : name === 'set_shortcut' ? '快捷鍵要求已保存；停用狀態不代表按鍵已生效，下一次啟用時會驗證。'
+    if (name === 'get_settings' || name === 'reload_settings' || name === 'restore_google_shortcut') {
+      await refreshLegacyShortcut();
+    }
+    status.textContent = name === 'set_shortcut' ? '快捷鍵要求已保存；停用狀態不代表按鍵已生效，下一次啟用時會驗證。'
       : name === 'load_local_runtime' ? (view.spelling_runtime === 'unavailable'
         ? '本機辨識引擎已載入；CPU 校正器本次不可用。仍可啟用本機聽寫。'
         : '引擎已載入，可啟用本機聽寫。尚未開始錄音。')
       : name === 'repair_local_runtime' ? '本機引擎已用目前安裝包修復。個人資料保留；按「載入本機引擎」後才會啟動。'
       : name === 'rollback_local_runtime' ? '已選擇並核對上一版引擎，重新開啟 App 仍沿用。個人資料保留；按「載入本機引擎」後才會啟動。'
       : name === 'enable_local_input' ? '已要求接管，請等待顯示「本機引擎與輸入法已連接」。'
-      : name === 'load_google_runtime' ? (view.windows_input
-        ? 'Google CLI 與 Windows 快捷鍵已準備；尚未開始錄音，結果暫保留供手動複製。'
-        : 'Google CLI 預檢完成；等待輸入法路由連接。尚未開始錄音。')
-      : name === 'stage_google_shortcut' ? '舊快捷鍵設定已保存並暫停；請自行重新載入 Fcitx 後完成切換。'
-      : name === 'switch_google_shortcut' ? '舊服務已停止且跨產品鎖由 App 持有；Google 路由已開放。'
-      : name === 'restore_google_shortcut' ? (googleTransferPhase === null
-        ? '原服務與快捷鍵已確認還原。' : '原設定已寫回；請自行重新載入 Fcitx 後按「完成還原」。')
-      : name === 'unload_google_runtime' ? 'Google 引擎已卸載。'
       : name === 'unload_local_runtime' ? '本機引擎已卸載。'
       : name === 'cancel_dictation' ? '已要求取消，正在等待引擎停止。'
       : name === 'refresh_providers' ? '已檢查服務。此操作不會啟動錄音。'
+      : name === 'restore_google_shortcut' ? '已處理舊版快捷鍵交接；若仍提示 Fcitx 重新載入，請完成後再按一次。'
       : '已讀取你的偏好設定。';
   } catch (reason) {
-    await refreshGoogleTransferPhase();
     renderedShortcutRequested = undefined;
     if (lastView) render(lastView);
     error.textContent = String(reason);
     error.hidden = false;
     status.textContent = '尚未套用變更。請處理上方問題後重新載入。';
+    if (name === 'restore_google_shortcut') await refreshLegacyShortcut();
     if (!(name === 'reload_settings' && String(reason).includes('請先停用並卸載引擎'))) {
       lastView = undefined;
     }
   } finally {
     commandBusy = false;
+    restoreLegacyShortcut.disabled = legacyShortcutRecovery.hidden || legacyShortcutNote.textContent.startsWith('無法核對');
     runtimeControls(lastView);
     fieldset.disabled = !lastView || lastView.settings.dictation.busy;
     reload.disabled = !!lastView?.settings.dictation.busy;
     check.disabled = !lastView || lastView.settings.dictation.busy;
   }
 }
+
+restoreLegacyShortcut.addEventListener('click', () => command('restore_google_shortcut'));
 
 document.querySelector('#select-recovery').addEventListener('click', () => {
   recoveryText.focus();
@@ -348,13 +284,10 @@ setInterval(async () => {
   }
 }, 1000);
 
-for (const choice of choices) {
-  choice.addEventListener('change', () => command('select_provider', { provider: choice.value }));
-}
 shortcutChoice.addEventListener('change', () => {
   if (!lastView) return;
   command('set_shortcut', {
-    provider: lastView.settings.selected_provider,
+    provider: 'local',
     choice: shortcutChoice.value,
   });
 });
@@ -366,11 +299,6 @@ repairRuntime.addEventListener('click', () => command('repair_local_runtime'));
 rollbackRuntime.addEventListener('click', () => command('rollback_local_runtime'));
 unloadRuntime.addEventListener('click', () => command('unload_local_runtime'));
 enableInput.addEventListener('click', () => command('enable_local_input'));
-loadGoogle.addEventListener('click', () => command('load_google_runtime'));
-unloadGoogle.addEventListener('click', () => command('unload_google_runtime'));
-stageGoogle.addEventListener('click', () => command('stage_google_shortcut'));
-switchGoogle.addEventListener('click', () => command('switch_google_shortcut'));
-restoreGoogle.addEventListener('click', () => command('restore_google_shortcut'));
 async function configureModule(restore) {
   if (moduleBusy || commandBusy) return;
   moduleBusy = true;

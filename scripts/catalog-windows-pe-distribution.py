@@ -198,22 +198,18 @@ def audit(extracted, installed, setup, target, repo, source_commit):
     csc_rows, csc = check_csc_origins(extracted)
     expected.extend(csc_rows)
     catalogs = {}
-    for scope, extracted_name in (("google", "google/manifest.json"),
-                                  ("runtime", "runtime/manifest.json"),
+    for scope, extracted_name in (("runtime", "runtime/manifest.json"),
                                   ("opencc", "opencc-manifest.json")):
         file = target / scope / "manifest.json"
         unpacked = extracted / extracted_name
         require(file.is_file() and unpacked.is_file() and file.read_bytes() == unpacked.read_bytes(),
                 scope + " installed source catalog differs")
         catalogs[scope] = read_json(file)
-    require(catalogs["google"]["id"] == "google-helpers" and
-            catalogs["opencc"]["id"] == "opencc" and
+    require(catalogs["opencc"]["id"] == "opencc" and
             catalogs["runtime"]["id"] == "nano-runtime", "non-CSC source catalog differs")
-    for name, root in (("google", extracted / "google"),
-                       ("runtime", extracted / "runtime"), ("opencc", extracted)):
+    for name, root in (("runtime", extracted / "runtime"), ("opencc", extracted)):
         verify_manifest_files(catalogs[name], root,
                               opencc_installed_path if name == "opencc" else None)
-    expected.extend(manifest_pe_rows(catalogs["google"], "google/"))
     expected.extend(manifest_pe_rows(catalogs["runtime"], "runtime/"))
     expected.extend(manifest_pe_rows(catalogs["opencc"], ""))
     rust = read_json(target / "rust-notices/manifest.json")
@@ -223,11 +219,7 @@ def audit(extracted, installed, setup, target, repo, source_commit):
             and rust["locks"]["owned-daemon"] == sha256(repo / "voicetyped/Cargo.lock"),
             "Rust notice source locks differ")
     native = {row["name"]: row for row in rust["native_components"]}
-    for name in ("google", "runtime", "opencc", "spelling"):
-        if name == "google":
-            require(any(row["path"] == "LICENSE.txt" for row in catalogs["google"]["files"]),
-                    "Google helper license record missing")
-            continue
+    for name in ("runtime", "opencc", "spelling"):
         require(name in native and native[name]["catalog_sha256"] == sha256(target / name / "manifest.json")
                 and native[name]["notice_count"] > 0, "native source/notice link differs: " + name)
     native_recipe = read_json(target / "runtime/build-provenance.json")
@@ -244,7 +236,7 @@ def audit(extracted, installed, setup, target, repo, source_commit):
     extracted_uninstaller = extracted_generated_uninstaller(actual, uninstallers[0])
     expected.extend(extracted_uninstaller)
     compare_inventory(actual, expected)
-    require(len(actual) == 60 + len(extracted_uninstaller),
+    require(len(actual) == 58 + len(extracted_uninstaller),
             "Windows inner PE count differs from reviewed scopes")
     archive = target / "installer-source-cache/nsis-3.11.zip"
     require(archive.is_file() and sha256(archive) == NSIS_SHA256,
@@ -265,7 +257,7 @@ def audit(extracted, installed, setup, target, repo, source_commit):
         "desktop/Cargo.lock", "voicetyped/Cargo.lock", "desktop/package-lock.json",
         "desktop/src-tauri/tauri.conf.json", "desktop/src-tauri/tauri.windows.conf.json",
         "desktop/src-tauri/windows/upgrade-legacy-ucrt.nsh",
-        "scripts/build-desktop-google.py", "scripts/build-desktop-opencc.py",
+        "scripts/build-desktop-opencc.py",
         "scripts/build-desktop-native-windows.py", ".github/workflows/desktop-preview.yml")}
     return {"schema_version": 1, "scope": "Windows NSIS setup and installed generated uninstaller",
             "source_commit": source_commit, "complete": True,
@@ -273,13 +265,12 @@ def audit(extracted, installed, setup, target, repo, source_commit):
             "inner_pe_count": len(actual), "pe_count_including_outer_setup": len(actual) + 1,
             "inner_pe": [dict(actual[name], scope=("plugin" if name.startswith("$PLUGINSDIR/") else
                                                         "spelling" if name.startswith("spelling/") else
-                                                        "google" if name.startswith("google/") else
                                                         "runtime" if name.startswith("runtime/") else
                                                         "generated_uninstaller" if name == "uninstall.exe" else
                                                         "desktop" if name == "voicetype-desktop.exe" else "opencc"))
                          for name in sorted(actual)],
             "source_catalogs": {name: sha256(target / name / "manifest.json")
-                                for name in ("google", "runtime", "opencc", "spelling")},
+                                for name in ("runtime", "opencc", "spelling")},
             "csc_binary_origins_sha256": sha256(extracted / "spelling/provenance/binary-origins.json"),
             "plugin_origins_sha256": sha256(target / "installer-notices/plugin-origins.json"),
             "rust_notices_sha256": sha256(target / "rust-notices/manifest.json"),
@@ -287,9 +278,6 @@ def audit(extracted, installed, setup, target, repo, source_commit):
             "generated_desktop": {"path": main.name, "bytes": main.stat().st_size,
                                   "sha256": sha256(main), "source_commit": source_commit,
                                   "cargo_lock_sha256": rust["locks"]["desktop"]},
-            "generated_google_helpers": {"source_commit": source_commit,
-                                         "cargo_lock_sha256": rust["locks"]["desktop"],
-                                         "output_paths": [row["path"] for row in manifest_pe_rows(catalogs["google"], "google/")]},
             "generated_setup": {"path": setup.name, "bytes": setup.stat().st_size,
                                 "sha256": sha256(setup), "source_artifact": NSIS_SOURCE,
                                 "source_sha256": NSIS_SHA256, "source_member": SETUP_STUB,

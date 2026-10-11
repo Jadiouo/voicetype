@@ -1,22 +1,24 @@
 # VoiceType Desktop — Software Design Document
 
-Status: approved product scope; implementation in stages. This document describes
-the intended product, not a claim that Windows dictation already works.
+Status: revised local-only preview scope (2026-10-11). The user withdrew Google
+from the desktop App. Historical Google adapter discussion below records earlier
+design work and is not a release requirement or a shipped activation path. Windows
+dictation and automatic delivery are not yet accepted.
 
 ## 1. Product and acceptance requirements
 
 VoiceType becomes a tray application with an installer, rather than requiring a
-user to assemble services and edit files. Both platforms offer the same choices:
+user to assemble services and edit files. Both platforms offer the same Local CPU path:
 
 | ID | Requirement |
 | --- | --- |
-| APP-01 | Choose Local (offline Nano) or Google (official Antigravity CLI); persist the preference across restarts. Both choices remain visible with honest setup status. |
+| APP-01 | Use Local offline Nano CPU. A saved Google preview selection returns to Local at startup or reload while preserving other settings and user data. No Google activation or helper is shipped; a pending old shortcut transfer has an explicit recovery-only action. |
 | APP-02 | Local inference defaults to CPU. Never silently use CUDA or switch from Local to a network provider. |
 | APP-03 | One active recording, bound to its original provider and input target. Busy provider changes are rejected. Cancelled, stale and duplicate results are never delivered. |
 | APP-04 | Preserve traditional Chinese, English, pauses, protected names and explicit vocabulary rules. Keep the existing bounded spelling policy; no generative rewriting. |
 | APP-05 | Shared vocabulary/settings and optional local review: up to 5 samples/day, 8+ seconds, 7-day expiry; user explicitly approves permanent rules. No surprise review popups. |
 | APP-06 | Easy installation, repair and upgrade; preserve existing vocabulary, learning data, review choices and samples. App installation and user data have separate lifetimes. |
-| APP-07 | First-run guidance accurately distinguishes missing runtime, missing models, login required, ready and error. Selecting a provider does not download, log in or record. |
+| APP-07 | First-run guidance accurately distinguishes missing runtime, missing models, ready and error. Opening settings does not download or record. |
 | APP-08 | Linux and Windows share the application logic and UI. Platform integrations are tested on their actual OS before release. |
 | APP-09 | App shell must not add a text-stability delay or model to the dictation path. Record capture-ready, stop/drain, inference, correction and delivery timings without transcript/audio in diagnostic logs. |
 | APP-10 | Failure is visible. Never advertise a shell-only build as a working dictation installer, or acknowledge an unverified install as successful. |
@@ -33,7 +35,7 @@ code has separate acceptance gates in [TDD.md](TDD.md).
 | Installer | `.deb`, declared system dependencies, desktop entry | NSIS per-user `setup.exe`, WebView2 bootstrap if absent |
 | Shell | Tauri 2, Rust commands, bundled local HTML/CSS/JS | Same |
 | Local engine | Existing Nano CPU adapter and pinned native patch | Same model/policy, Windows CPU DLLs built from the reviewed native source |
-| Google | Official CLI via existing interactive terminal adapter | Official CLI via ConPTY; voice and editor capture must pass real Windows validation |
+| Google | Withdrawn from this App preview; no CLI helper or control is packaged | Withdrawn from this App preview |
 | Input integration | Fcitx5 owns focus and text commit | TSF service targeting the original text context; activation and desktop acceptance remain pending |
 | IPC | Existing private Unix socket behind a platform adapter | Inherited child stdio or per-user restricted named pipe; never an unauthenticated TCP command server |
 
@@ -52,10 +54,8 @@ Tray / settings / first-run setup (Tauri, bundled local UI)
              |                 |                |
       Session coordinator   Vocabulary/review   Runtime setup
              |                 |                |
-       Provider adapter     Shared policies   Verified artifacts
-         /         \
-   Local Nano     Google official CLI
-         \         /
+       Local Nano CPU      Shared policies   Verified artifacts
+             |
         Platform capture / process / IPC adapters
                           |
          Focus-checked delivery (Fcitx5 / Windows)
@@ -71,9 +71,10 @@ the microphone; merely opening settings never starts recording.
 1. **Tauri 2 + Rust core.** Reuse the Rust investment and keep UI state portable.
    Avoid a wholesale rewrite of validated recognition. A plain bundled frontend
    needs no network resources or remote web content at runtime.
-2. **Preferences are separate from readiness.** A user may choose Google before
-   logging in or Local before downloading models. This saves a preference but
-   cannot start a session until that provider is ready. Never silently fall back.
+2. **Preferences are separate from readiness.** Local remains selected while
+   its model/runtime is missing. Retired Google preview preferences are explicitly
+   migrated to Local; this is a user-requested scope change, not an inference
+   fallback during a recording session.
 3. **A separate desktop configuration file.** Linux keeps existing `voicetype/`
    user data paths; Windows uses per-user app data. `desktop.json` owns only the
    desktop schema. Old vocabulary and learning files are not rewritten on startup.
@@ -87,7 +88,7 @@ the microphone; merely opening settings never starts recording.
    GTK front end gradually; port storage locking, atomic replacement and OpenCC
    paths explicitly. Do not run Unix `fcntl` code on Windows or silently downgrade
    traditional conversion when data is missing.
-6. **Google stays official.** User installs/logs into Antigravity with its official
+6. **Superseded historical Google design.** User installs/logs into Antigravity with its official
    flow. Voice is interactive (not `--print`); never send Enter to submit the
    dictated prompt to its agent. Keep complete PCM drain, one stop, two captures,
    errors and focus checks. PCM catchup remains an optional, separately validated

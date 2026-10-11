@@ -813,6 +813,37 @@ fn staged_handoff_can_be_aborted_without_stopping_old_service() {
 }
 
 #[test]
+fn retired_staged_handoff_keeps_local_blocked_until_explicit_restore_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let (transfer, config, _) = fixture(root.path());
+    fs::write(&config, b"Enabled=True\n").unwrap();
+    let service = FakeService::new();
+    transfer
+        .stage_disable(old_fcitx(), service.snapshot().unwrap())
+        .unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("profile")).unwrap();
+    assert!(worker
+        .set_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .is_err());
+
+    transfer.abort_staged(old_fcitx(), true, &service).unwrap();
+    assert_eq!(
+        transfer.phase().unwrap(),
+        Some(TransferPhase::RestoreStaged)
+    );
+    assert!(worker
+        .set_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .is_err());
+
+    transfer.finish_restore(new_fcitx(), &service).unwrap();
+    worker.finish_google_transfer_setup(transfer).unwrap();
+    worker
+        .set_shortcut(Provider::Local, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    worker.shutdown().unwrap();
+}
+
+#[test]
 fn failed_claim_after_stop_can_explicitly_restore_original_service() {
     let root = tempfile::tempdir().unwrap();
     let (transfer, config, bridge) = fixture(root.path());

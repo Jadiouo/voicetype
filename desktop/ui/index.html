@@ -18,8 +18,8 @@
       <span class="version" id="version">開發預覽</span>
     </aside>
     <main id="recognition">
-      <header><span class="eyebrow">語音輸入</span><h1>選擇適合你的辨識方式</h1><p>離線處理，或使用你的 Google 帳號。</p></header>
-      <div class="notice"><strong>開發預覽</strong><p>Linux 可明確載入本機或 Google 引擎；Google 真實帳號、麥克風與送字仍需候選版驗收。Windows 語音仍在整合中。開啟設定不會切換現有語音輸入。</p></div>
+      <header><span class="eyebrow">語音輸入</span><h1>本機離線辨識</h1><p>在你的電腦上處理語音，不需要雲端帳號。</p></header>
+      <div class="notice"><strong>開發預覽</strong><p>本預覽版只提供本機 CPU 辨識。Windows 自動送字與真人語音仍待驗收；開啟設定不會切換現有語音輸入。</p></div>
       <div id="error" class="error" role="alert" hidden></div>
       <fieldset id="providers" disabled>
         <legend class="sr-only">辨識方式</legend>
@@ -30,23 +30,22 @@
           <span class="detail">首次使用需下載模型；之後可離線使用。</span>
           <span class="availability" id="local-availability">尚未檢查本機服務</span>
         </label>
-        <label class="provider-card" id="google-card">
-          <input type="radio" name="provider" value="google" id="provider-google">
-          <span class="card-title">Google<span class="tag">需連線</span></span>
-          <span class="description">使用官方 Antigravity 語音辨識與你的登入帳號。</span>
-          <span class="detail">首次使用需安裝官方程式並登入。</span>
-          <span class="availability" id="google-availability">準備中 · 尚未連接辨識引擎</span>
-        </label>
       </fieldset>
       <section class="shortcut-setup" aria-labelledby="shortcut-title">
         <h2 id="shortcut-title">聽寫快捷鍵</h2>
-        <label for="shortcut-choice">所選辨識方式的按鍵</label>
+        <label for="shortcut-choice">本機聽寫按鍵</label>
         <select id="shortcut-choice" disabled>
           <option value="default">沿用預設</option>
           <option value="ctrl_shift_f9">Ctrl＋Shift＋F9</option>
         </select>
         <p id="shortcut-note" role="status" aria-live="polite">正在讀取快捷鍵設定…</p>
-        <p>先停用並卸載引擎才能變更。兩種辨識方式各自保存選擇；新快捷鍵會在下次啟用時驗證。Esc 仍可取消。</p>
+        <p>先停用並卸載引擎才能變更。新快捷鍵會在下次啟用時驗證。Esc 仍可取消。</p>
+      </section>
+      <section id="legacy-shortcut-recovery" class="recovery" aria-labelledby="legacy-shortcut-title" hidden>
+        <h2 id="legacy-shortcut-title">還原未完成的舊版快捷鍵交接</h2>
+        <p>偵測到先前版本留下的交接狀態。本版不提供 Google 辨識；按下還原只處理這筆舊交接，不會啟用本機聽寫。</p>
+        <button id="restore-legacy-shortcut" type="button" disabled>還原舊快捷鍵</button>
+        <p id="legacy-shortcut-note" role="status"></p>
       </section>
       <div class="save-row"><p id="status" role="status" aria-live="polite">正在讀取設定…</p><button id="cancel-dictation" type="button" hidden>取消聽寫</button><button id="check-providers" type="button" disabled>檢查服務</button><button id="reload" type="button">重新載入</button></div>
       <section class="model-setup" aria-labelledby="model-setup-title">
@@ -63,19 +62,6 @@
         <div class="model-actions"><button id="repair-local-runtime" type="button" disabled>修復本機引擎</button><button id="rollback-local-runtime" type="button" disabled>回復上一版引擎</button></div>
         <p class="model-note">先停用並卸載引擎才能修復或回復。回復選擇在重新開啟 App 後仍有效；要改用目前安裝包版本，請按「修復」。詞庫、學習資料與校對樣本會保留。</p>
         <p id="runtime-note">正在讀取引擎封裝狀態…</p>
-        <div id="google-runtime-setup">
-          <h3>Google 官方語音</h3>
-          <p>請依官方說明安裝 Antigravity CLI，並以自己的 Google 帳號登入。選擇 Google 只儲存偏好；按「載入」後才檢查官方 CLI、登入與空草稿，仍不會開始錄音。</p>
-          <div class="model-actions"><button id="load-google-runtime" type="button" disabled>載入 Google 引擎</button><button id="unload-google-runtime" type="button" hidden>停用並卸載 Google 引擎</button></div>
-          <p id="google-runtime-note" role="status" aria-live="polite">正在檢查官方 CLI 安裝。</p>
-          <p id="google-capture-note"></p>
-          <div id="google-transfer-setup">
-          <p>若仍使用舊 Google 輸入法，請先結束當前句子，再按下方按鈕切換。停止舊服務可能取消未完成的句子；切換會保存舊設定原始內容，並提供明確還原操作。每次變更快捷鍵設定後，需自行重新載入 Fcitx 或重新登入桌面。</p>
-          <div class="model-actions"><button id="stage-google-shortcut" type="button" hidden>準備切換舊 Google 快捷鍵</button><button id="switch-google-shortcut" type="button" hidden>確認已重新載入 Fcitx，停止舊服務並切換到 App</button><button id="restore-google-shortcut" type="button" hidden>還原舊 Google 服務</button></div>
-          <p id="google-transfer-note" role="status" aria-live="polite">正在核對舊 Google 快捷鍵交接狀態。</p>
-          <p>Google 預設使用 Ctrl＋CapsLock：按一次開始，再按一次停止；Esc 取消。既有 Google 輸入法若同時啟用此鍵，App 會拒絕接管，避免同時錄音。</p>
-          </div>
-        </div>
         <div id="input-module-setup" hidden>
           <h3>Linux 輸入法模組</h3>
           <p>請先將桌面輸入法設為 Fcitx5。首次使用需安裝模組並重新登入；原設定會保留備份，安裝本身不會接管快捷鍵。</p>
@@ -96,7 +82,7 @@
       <section id="vocabulary" class="vocabulary" aria-labelledby="vocabulary-title">
         <h2 id="vocabulary-title">我的詞庫</h2>
         <p>把常見辨識錯字改成你的用詞。儲存後，App 的本機聽寫會從下一句開始套用，不需重新載入引擎。</p>
-        <p>預覽版使用獨立詞庫。可匯入原有詞庫一次，原檔會保留；Google 接通後將使用同一份詞庫。</p>
+        <p>預覽版使用獨立詞庫。可匯入原有詞庫一次，原檔會保留。</p>
         <div class="model-actions"><button id="vocab-reload" type="button">重新載入詞庫</button><button id="vocab-import" type="button" disabled>匯入原有詞庫</button><button id="vocab-restore" type="button" disabled>還原上次儲存</button></div>
         <p id="vocab-status" role="status" aria-live="polite">正在讀取詞庫…</p>
         <div id="vocab-error" class="error" role="alert" hidden></div>
@@ -133,7 +119,7 @@
         <p>偶爾留下一段，空閒時聽聽看。錄音與文字只存在這台電腦，7 天後清理；不會突然跳出視窗。</p>
         <label class="review-opt-in"><input id="review-enabled" type="checkbox" disabled> 開啟本機抽樣校對</label>
         <p id="review-policy">每天最多 5 段，從 8 秒以上的聽寫抽樣。預設關閉，不會額外開啟麥克風。</p>
-        <p>此處使用 App 的獨立校對資料；日常版本的抽樣設定不變。開啟後，本機辨識與 Linux Google 可依條件保存音訊樣本；Windows Google 目前無法取得音訊，不會產生此路線的抽樣樣本。</p>
+        <p>此處使用 App 的獨立校對資料；日常版本的抽樣設定不變。開啟後，本機辨識可依條件保存音訊樣本。</p>
         <button id="review-reload" type="button">重新載入校對</button>
         <p id="review-status" role="status" aria-live="polite">正在讀取校對…</p>
         <div id="review-error" class="error" role="alert" hidden></div>

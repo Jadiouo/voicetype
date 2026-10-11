@@ -3,16 +3,19 @@
 This branch starts the Linux/Windows application described in
 [SDD](../docs/app/SDD.md) and [TDD](../docs/app/TDD.md).
 
-**Linux has explicit Fcitx-to-app Local and Google routes and an optional
-app-owned CPU spelling worker. Google still needs a logged-in official CLI and
-microphone acceptance; Windows Google recording remains unavailable.** Keep the
-existing installation available during preview testing.
+**This preview now ships Local Nano CPU dictation only.** The user withdrew the
+Google provider from the desktop App. Existing preview settings selecting Google
+are switched to Local on startup or reload; vocabulary, review and other settings remain.
+If an old Linux shortcut handoff was left unfinished, the settings show a
+recovery-only restore action. It does not start Google recognition.
+Windows automatic text delivery and live speech still require platform acceptance.
+Keep the existing daily installation available during preview testing.
 
 Model download/check/cancel is available in the UI. Linux installers now carry a
 source-built Nano CPU runtime: "載入本機引擎" verifies installed models and packaged
 bytes, then loads a private owned engine; "停用並卸載引擎" releases it. Loading does
-not record or acquire input. Windows runtime loading remains
-unavailable, with an explicit message in the same UI.
+not record or acquire input. Windows bundles its own CPU runtime, but automatic
+text delivery and live microphone acceptance remain pending.
 
 On Linux, choose **安裝／更新 Fcitx 模組**, then log out/in when convenient to load
 it. This installs verified versioned files and backs up the exact prior per-user
@@ -31,24 +34,9 @@ has no dictation until the app is enabled again. Input setup is explicit on each
 app run. App vocabulary and sampled review use their shared settings described
 below. The app-owned spelling worker is separate from the legacy service.
 
-Google uses the user's separately installed official Antigravity CLI and its
-normal account login. Selecting Google only saves a preference. **載入 Google
-引擎** checks a reviewed CLI version/image, bundled helpers, login/editor
-callback and the existing Google Fcitx shortcut setting before any recording;
-the CLI itself is not bundled or updated. Once the App route connects, press
-**Ctrl+CapsLock** to start and again to stop, then wait for one insertion at the
-original focused field. Escape cancels. Local keeps its Ctrl+Alt hold/release
-gesture. After each sentence the worker prepares a new empty CLI in the
-background; a pending prewarm is displayed separately and cannot open a second
-microphone. If the existing daily Google addon is enabled on Ctrl+CapsLock, the
-App refuses to take that shortcut. The reversible transfer/restore action for
-that configuration is still pending; this preview never changes it implicitly.
-The current Ctrl+CapsLock route needs Fcitx's X11 Caps restoration capability;
-other display protocols have not passed a shortcut trial.
-
 "Check services" sends a read-only ping to an existing Linux local engine and
 distinguishes response, missing service, timeout and incompatible reply. It does
-not start audio or establish Google login readiness. The shared core now also
+not start audio. The shared core now also
 tests provider/target ownership, cancel, late/duplicate results and failed input
 delivery. Native Fcitx/worker integration runs against a fixture capture/model;
 these checks do not establish live recognition quality or end-user latency.
@@ -72,7 +60,6 @@ and `libopencc-dev`, in addition to Tauri prerequisites):
 python3 scripts/build-desktop-native.py --cache private/native-source-cache --output private/release-native
 bash scripts/build-desktop-runtime.sh private/release-native desktop/target/runtime --source-built
 python3 scripts/build-desktop-input.py desktop/target/input
-python3 scripts/build-desktop-google.py desktop/target/google
 ```
 
 For optional CPU spelling, use an isolated Python 3.12 environment with
@@ -148,26 +135,17 @@ shell commands or access arbitrary files. Only typed Rust commands expose settin
 Core tests use temporary directories; no microphone, live dictation, GPU, account
 login or text injection is part of preview validation.
 
-The official Google CLI adapter, exact-version gate, App route and synthetic
-PCM/PTY tests are described in [GOOGLE-ADAPTER.md](GOOGLE-ADAPTER.md).
-Selecting Google is only a saved preference; an installed image or fixture
-test is not evidence of account login or live speech.
-
-The CI UI check runs the installer payload with a real platform WebDriver, chooses
-Google, reopens the app, and checks error/reload behavior. To use a disposable
-profile, set `VOICETYPE_PREVIEW_CONFIG_DIR` to an absolute temporary directory.
-This overrides only the preview's configuration directory. Isolate `XDG_DATA_HOME`
-as well when testing module installation; the setting is never
-used by the production dictation daemon. UI evidence is saved separately from
-installer artifacts. Neither is proof of working speech adapters.
-
+The CI UI check runs the installed payload with a real platform WebDriver,
+checks Local settings and reload behavior, and uses a disposable preview profile.
+Set `VOICETYPE_PREVIEW_CONFIG_DIR` to an absolute temporary directory. Isolate
+`XDG_DATA_HOME` when testing module installation. UI evidence is separate from
+installer artifacts; neither proves live speech or Windows text delivery.
 
 ### Vocabulary in the preview
 
 Open **我的詞庫** to add explicit wrong/right spellings, protect names, preview
 saved rules, or restore the previous save. The preview stores `vocab.toml` beside
-`desktop.json`; both installed providers will use that file, with Local already
-connected. Rules are reloaded at each local output without restarting the engine.
+`desktop.json`; Local uses that file. Rules are reloaded at each local output without restarting the engine.
 Preview checks vocabulary replacements only, not ASR, conversion or CSC.
 
 **匯入原有詞庫** explicitly copies the existing `voicetype/vocab.toml` (or the
@@ -187,8 +165,7 @@ not permission to discard protected names.
 
 Open **抽樣校對** and enable sampling explicitly. App-owned local dictation uses
 `review.json` and `review/` beside `desktop.json`, separate from the daily install.
-Google in the Linux App uses the same collector only after confirmed delivery
-to the original field. Default: off, at most five samples per local day, only 8–61 second recordings,
+Default: off, at most five samples per local day, only 8–61 second recordings,
 seven-day retention. Sampling never opens the microphone independently; the
 existing collector queues a selected sample only after queuing its final result.
 Disabling is rechecked before disk writes. The tray shows the pending count and
@@ -203,6 +180,5 @@ changes require reload and preserve unsaved edits. Delete removes both text and
 audio. Expiry also cleans damaged/abandoned recordings; the app must be running
 (or subsequently reopened) for cleanup to execute.
 
-Windows Google speech collection remains unavailable until its native drain
-contract is verified. The shared review commands/editor work on both platforms;
-fixture WAV tests are not evidence of live microphone or recognition quality.
+The shared review commands/editor work on both platforms; fixture WAV tests
+are not evidence of live microphone or recognition quality.

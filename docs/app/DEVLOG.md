@@ -909,3 +909,13 @@ Windows PE 聚合候選已經異作者短審及本機 12 項定點測試：對�
 同輪 Linux 已越過先前的 Xvfb 啟動故障並完成真 deb 安裝，但已安裝 UI 的 Google F9 WebDriver 選項仍未送出新的 `change` 事件：畫面選單已是 F9，磁碟上的 Google 要求仍是預設，故 job 失敗。跨作者短審的下一候選改用真 WebDriver 鍵盤 Actions 選項，不用 JavaScript 合成事件；原 30 秒與磁碟斷言不變，真 hosted GREEN 尚待測。
 
 新舊固定真包的 [升級 run 38143838772](https://github.com/Jadiouo/voicetype/actions/runs/38143838772) 已通過舊／新安裝、PE 與登錄版號及兩階段公開資料讀回；新版 `/S` 卸載回傳 0、安裝目錄清空後，立即查 HKCU 時仍有產品註冊，因此未到回復。只加失敗時有界登錄身分診斷、保留原判定，以同兩包重跑 [run 38144360729](https://github.com/Jadiouo/voicetype/actions/runs/38144360729) 則五階段全通過：新版卸載保留個人資料、舊版回裝讀回及最終卸載保留資料，六類公開測試資料雜湊未變。兩輪同包不同註冊結果支持卸載收尾時序競態，但尚未量到子程序／登錄先後；不能把一次成功當作時序缺口已修。日常安裝與個人資料未動，真人語音、TSF 跨應用送字及 Windows Google PCM／audioReview 仍未驗，PR 維持草稿。
+
+### 2026-10-11 收斂：使用者撤回 App 的 Google 路線
+
+使用者要求盡快把工作樹合入 main 並清理佔空間的產物，明確表示 App 只需目前好用的本機路線。舊雙 provider 完整目標暫停；本候選移除 Google 辨識入口、helper 資源與 CI 建置／下載，但保留未完成舊快捷鍵交接的顯式還原入口。預覽 profile 若曾選 Google，啟動或重新載入時以原子設定寫入改回 Local，保留其他偏好、詞庫和抽樣校對資料；不自動更動日常 Google 服務。Linux／Windows 本機 Nano、CPU 校字與共用功能仍在。Windows 自動送字、真人麥克風及端到端語音尚未完成驗收，PR 保持 draft；本輪 source 檢查後可合併，新的 local-only 真包驗證留待 CI，不冒稱已通過。
+
+同版 `0.2.1-alpha.1` 舊預覽曾打包 Google helper；新候選沿用經驗證的 NSIS 舊版 `/UPDATE` 路徑，對精確產品登錄及安裝目錄執行原卸載器，確認舊 helper 與已退役 UCRT 均不存在後才覆寫，不刪未知檔或 profile。此同版遷移及舊交接 UI 尚待真安裝驗證，不能以 source 審查代替。
+
+舊 Linux 快捷鍵交接的受控 resident fixture 已確認：`DisableStaged` 還原後仍待 Fcitx 真重新載入，只有 `RestoreStaged` 完成並清 journal 才放行 Local 快捷鍵；失敗維持阻擋。舊 Google transfer 全測中 10 項安全邊界通過、4 項 Google 啟動測因本機官方 CLI availability 未過而失敗，未改動的 baseline 亦相同；不把這些測試當本機 App 安裝驗收。
+
+前一候選 `8cc0735` 的 [run 38144712770](https://github.com/Jadiouo/voicetype/actions/runs/38144712770) Linux 已安裝 UI 24 項通過（含舊 Google 路線的快捷鍵測試），但這不是 local-only 新包的結果；Windows 當時仍在建置。雙真包 [upgrade run 38144360729](https://github.com/Jadiouo/voicetype/actions/runs/38144360729) 五階段與六項合成資料 hash 通過；前次同包註冊時序失敗仍未證明已修。

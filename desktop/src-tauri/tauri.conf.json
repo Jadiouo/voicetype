@@ -16,12 +16,12 @@
     "targets": ["deb", "nsis"],
     "category": "Utility",
     "shortDescription": "VoiceType desktop dictation preview",
-    "longDescription": "Development preview with Linux CPU dictation, official Google CLI integration, shared text tools and optional CPU spelling correction. Live Google speech acceptance and Windows Google recording remain pending.",
+    "longDescription": "Local CPU dictation preview with shared text tools and optional CPU spelling correction. Windows automatic text delivery and live speech acceptance remain pending.",
     "license": "GPL-3.0-only",
     "licenseFile": "../../LICENSE",
     "publisher": "VoiceType contributors",
     "homepage": "https://github.com/Jadiouo/voicetype",
-    "resources": { "../../LICENSE": "LICENSE.txt", "../README.md": "PREVIEW.md", "../target/google": "google" },
+    "resources": { "../../LICENSE": "LICENSE.txt", "../README.md": "PREVIEW.md" },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "windows": { "nsis": { "installMode": "currentUser", "languages": ["TradChinese", "English"], "displayLanguageSelector": true, "installerHooks": "./windows/upgrade-legacy-ucrt.nsh" } }
   }

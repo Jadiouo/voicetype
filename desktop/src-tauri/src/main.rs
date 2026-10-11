@@ -874,12 +874,23 @@ async fn set_shortcut(
     choice: ShortcutChoice,
     app: tauri::AppHandle,
 ) -> Result<View, String> {
+    if provider != Provider::Local {
+        return Err("此預覽版只提供本機辨識".into());
+    }
     with_desktop(app, move |worker| worker.set_shortcut(provider, choice)).await
 }
 
 #[tauri::command]
 async fn reload_settings(app: tauri::AppHandle) -> Result<View, String> {
-    with_desktop(app, DesktopWorker::reload).await
+    with_desktop(app, |worker| {
+        let view = worker.reload()?;
+        if view.settings.selected_provider == Provider::Google {
+            worker.select_provider(Provider::Local)
+        } else {
+            Ok(view)
+        }
+    })
+    .await
 }
 
 #[tauri::command]
@@ -929,8 +940,7 @@ async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
                     }
                 },
             };
-            worker.refresh_local(socket)?;
-            worker.refresh_google_install(official_google_path()?)
+            worker.refresh_local(socket)
         }
         #[cfg(windows)]
         {
@@ -941,7 +951,7 @@ async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
             {
                 return Err("錄音或清理進行中，請稍後重新檢查".into());
             }
-            worker.refresh_windows_google_install(official_google_path()?)
+            worker.settings()
         }
         #[cfg(not(any(target_os = "linux", windows)))]
         worker.settings()
@@ -1002,6 +1012,21 @@ fn main() {
                 None => app.path().app_config_dir()?,
             };
             let model_root = config_dir.join("model-assets");
+            let worker = DesktopWorker::spawn(config_dir.clone())?;
+            // A previously selected Google preference belongs to this preview
+            // profile only. Persist Local through the existing atomic settings
+            // writer; vocabulary, review and other settings remain untouched.
+            if worker
+                .settings()
+                .map_err(std::io::Error::other)?
+                .settings
+                .selected_provider
+                == Provider::Google
+            {
+                worker
+                    .select_provider(Provider::Local)
+                    .map_err(std::io::Error::other)?;
+            }
             app.manage(DesktopState {
                 spelling_installer: voicetype_app_core::spelling_install::SpellingInstaller::new(
                     config_dir.clone(),
@@ -1028,7 +1053,7 @@ fn main() {
                 legacy_vocabulary: std::env::var_os("VOICETYPE_VOCAB")
                     .map(PathBuf::from)
                     .unwrap_or(app.path().config_dir()?.join("voicetype/vocab.toml")),
-                worker: DesktopWorker::spawn(config_dir)?,
+                worker,
                 models: ModelSetup::new(model_root)?,
                 tray_available: AtomicBool::new(false),
             });
@@ -1067,7 +1092,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             set_spelling_enabled,
             get_settings,
-            select_provider,
             set_shortcut,
             reload_settings,
             refresh_providers,
@@ -1081,11 +1105,7 @@ fn main() {
             repair_local_runtime,
             rollback_local_runtime,
             unload_local_runtime,
-            load_google_runtime,
-            unload_google_runtime,
             google_shortcut_phase,
-            stage_google_shortcut,
-            switch_google_shortcut,
             restore_google_shortcut,
             enable_local_input,
             configure_input_module,

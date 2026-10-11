@@ -6,9 +6,9 @@ fn main() {
     if target == "linux" || target == "windows" {
         use sha2::{Digest, Sha256};
         let bundles: &[&str] = if target == "linux" {
-            &["runtime", "input", "spelling", "google"]
+            &["runtime", "input", "spelling"]
         } else {
-            &["opencc", "runtime", "spelling", "google"]
+            &["opencc", "runtime", "spelling"]
         };
         for name in bundles {
             let root = std::path::PathBuf::from("../target").join(name);
@@ -39,6 +39,9 @@ fn main() {
             }
             std::fs::write(out.join(format!("{name}-catalog.json")), data).unwrap();
         }
+        // The retired provider remains in historical core code but has no
+        // packaged helpers or callable desktop commands in this preview.
+        std::fs::write(out.join("google-catalog.json"), b"null").unwrap();
     } else {
         std::fs::write(out.join("runtime-catalog.json"), b"null").unwrap();
         std::fs::write(out.join("input-catalog.json"), b"null").unwrap();

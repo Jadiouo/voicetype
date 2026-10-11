@@ -56,6 +56,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="voicetype-shell-", dir=profile_root) as profile:
         env = os.environ.copy()
         env["VOICETYPE_PREVIEW_CONFIG_DIR"] = profile
+        # An existing preview may have selected the retired provider. Only its
+        # selection is migrated; unknown settings and shortcut choices survive.
+        config = Path(profile) / "desktop.json"
+        config.write_text(json.dumps({"schema_version": 1, "selected_provider": "google",
+                                      "spelling_enabled": True,
+                                      "shortcuts": {"local": {"requested": "default", "effective": "default"},
+                                                    "google": {"requested": "ctrl_shift_f9", "effective": "default"}},
+                                      "future": 23}), encoding="utf-8")
         env["XDG_DATA_HOME"] = str(Path(profile) / "data")
         env["XDG_CONFIG_HOME"] = str(Path(profile) / "legacy-config")
         env["VOICETYPE_VOCAB"] = str(Path(profile) / "legacy-vocab.toml")
@@ -178,49 +186,46 @@ return {provider:document.querySelector('input[name=provider]:checked')?.value,
                 session = open_app()
                 eventually(ready)
                 assert js("return document.querySelector('#provider-local').checked")
+                eventually(lambda: json.loads(config.read_text(encoding="utf-8"))["selected_provider"] == "local")
+                assert json.loads(config.read_text(encoding="utf-8"))["future"] == 23
+                assert json.loads(config.read_text(encoding="utf-8"))["shortcuts"]["google"]["requested"] == "ctrl_shift_f9"
+                assert not js("return document.querySelector('#provider-google')")
+                assert js("return document.querySelector('#legacy-shortcut-recovery').hidden")
                 assert js("return document.querySelector('#spelling-enabled').checked")
                 assert not js("return document.querySelector('#spelling-enabled').disabled")
                 eventually(lambda: js("return !document.querySelector('#shortcut-choice').disabled"))
                 assert js("return document.querySelector('#shortcut-choice').value === 'default'")
+                # An old preview setting can be reintroduced by an external
+                # edit while this App is running. Reload must also persist the
+                # Local fallback without discarding unrelated preferences.
+                old = json.loads(config.read_text(encoding="utf-8"))
+                old["selected_provider"] = "google"
+                old["future"] = 24
+                config.write_text(json.dumps(old), encoding="utf-8")
+                click("#reload")
+                eventually(lambda: ready() and js("return document.querySelector('#provider-local').checked")
+                           and json.loads(config.read_text(encoding="utf-8"))["selected_provider"] == "local")
+                assert json.loads(config.read_text(encoding="utf-8"))["future"] == 24
+                assert json.loads(config.read_text(encoding="utf-8"))["shortcuts"]["google"]["requested"] == "ctrl_shift_f9"
                 choose_shortcut("ctrl_shift_f9", "local")
-                assert shortcut_binding("local") == {"requested": "ctrl_shift_f9", "effective": "default"}
-                assert shortcut_binding("google") == {"requested": "default", "effective": "default"}
-                assert js("return document.querySelector('#shortcut-note').textContent.includes('已要求') && document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
-                click("#provider-google")
-                eventually(lambda: ready() and js("return document.querySelector('#provider-google').checked && document.querySelector('#shortcut-choice').value === 'default'"))
-                choose_shortcut("ctrl_shift_f9", "google")
-                assert shortcut_binding("google") == {"requested": "ctrl_shift_f9", "effective": "default"}
                 assert shortcut_binding("local") == {"requested": "ctrl_shift_f9", "effective": "default"}
                 assert js("return document.querySelector('#shortcut-note').textContent.includes('已要求') && document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
                 (output / "shortcut-requested.png").write_bytes(base64.b64decode(request("GET", f"/session/{session}/screenshot")))
                 request("DELETE", f"/session/{session}")
-                # A driver session may close its window while a native process
-                # remains alive. Change only this disposable profile on disk so
-                # the next view must reload it, not reuse the prior UI state.
+                # A driver session may close its window while the native
+                # process remains alive. Both memory and disk stay Local.
                 shortcut_config = Path(profile) / "desktop.json"
                 on_disk = json.loads(shortcut_config.read_text(encoding="utf-8"))
-                assert on_disk["selected_provider"] == "google"
-                on_disk["selected_provider"] = "local"
-                shortcut_config.write_text(json.dumps(on_disk, ensure_ascii=False), encoding="utf-8")
+                assert on_disk["selected_provider"] == "local"
                 session = open_app()
                 eventually(ready)
                 assert js("return document.querySelector('#provider-local').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'")
-                assert js("return document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
-                click("#provider-google")
-                eventually(lambda: ready() and js("return document.querySelector('#provider-google').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'"))
+                assert json.loads(shortcut_config.read_text(encoding="utf-8"))["selected_provider"] == "local"
+                assert not js("return document.querySelector('#provider-google')")
                 assert js("return document.querySelector('#shortcut-note').textContent.includes('前次確認仍是')")
                 assert shortcut_binding("local")["effective"] == "default"
-                assert shortcut_binding("google")["effective"] == "default"
-                click("#provider-local")
-                eventually(lambda: ready() and js("return document.querySelector('#provider-local').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'"))
                 choose_shortcut("default", "local")
-                assert shortcut_binding("google")["requested"] == "ctrl_shift_f9", "Local selection changed Google"
-                click("#provider-google")
-                eventually(lambda: ready() and js("return document.querySelector('#provider-google').checked && document.querySelector('#shortcut-choice').value === 'ctrl_shift_f9'"))
-                choose_shortcut("default", "google")
                 assert shortcut_binding("local") == {"requested": "default", "effective": "default"}
-                assert shortcut_binding("google") == {"requested": "default", "effective": "default"}
-                click("#provider-local")
                 eventually(lambda: ready() and js("return document.querySelector('#provider-local').checked && document.querySelector('#shortcut-choice').value === 'default'"))
                 click("#spelling-enabled")
                 spelling_config = Path(profile) / "desktop.json"
@@ -309,7 +314,6 @@ return {provider:document.querySelector('input[name=provider]:checked')?.value,
                     engine_socket.unlink()
                 else:
                     assert js("return document.querySelector('#local-availability').textContent.includes('尚未連接')")
-                assert js("return document.querySelector('#google-availability').textContent.includes('找不到官方 CLI')")
                 # Exercise the actual vocabulary commands through the installed
                 # webview. Synthetic words only; no live dictionary is accessed.
                 eventually(lambda: js("return !document.querySelector('#vocab-fields').disabled"))
@@ -410,16 +414,13 @@ return {provider:document.querySelector('input[name=provider]:checked')?.value,
                 eventually(lambda: js("return document.querySelector('#review-status').textContent === '校對資料已載入。'"))
                 js("document.querySelector('#review').scrollIntoView()")
                 (output / "review.png").write_bytes(base64.b64decode(request("GET", f"/session/{session}/screenshot")))
-                click("#provider-google")
-                eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('偏好已儲存')"))
-                assert js("return document.querySelector('#provider-google').checked")
                 screenshot = request("GET", f"/session/{session}/screenshot")
-                (output / "google-selected.png").write_bytes(base64.b64decode(screenshot))
+                (output / "local-selected.png").write_bytes(base64.b64decode(screenshot))
                 request("DELETE", f"/session/{session}")
                 session = None
                 session = open_app()
                 eventually(ready)
-                assert js("return document.querySelector('#provider-google').checked"), "Choice did not survive restart"
+                assert js("return document.querySelector('#provider-local').checked"), "Local choice did not survive restart"
                 assert not js("return document.querySelector('#spelling-enabled').checked"), "CSC choice did not survive restart"
                 click("#spelling-enabled")
                 eventually(lambda: json.loads(spelling_config.read_text())["spelling_enabled"] is True)
@@ -449,11 +450,11 @@ return {provider:document.querySelector('input[name=provider]:checked')?.value,
                 config.write_bytes(original)
                 click("#reload")
                 eventually(ready)
-                assert js("return document.querySelector('#provider-google').checked")
+                assert js("return document.querySelector('#provider-local').checked")
                 assert js("return document.querySelector('#spelling-enabled').checked")
                 (output / "result.json").write_text(json.dumps({
-                    "passed": ["installed-window", "default-local", "choose-google",
-                               "shortcut-per-provider-request-and-restart", "shortcut-unconfirmed-effective-and-restore",
+                    "passed": ["installed-window", "default-local", "legacy-google-selection-restored-to-local",
+                               "local-shortcut-request-and-restart", "shortcut-unconfirmed-effective-and-restore",
                                "restart-persists-choice", "corrupt-settings-visible", "repair-and-reload",
                                "provider-status-without-recording", "recovery-empty-state",
                                "model-setup-explicit-only", "runtime-setup-requires-models", "input-requires-runtime", "vocabulary-explicit-import",
