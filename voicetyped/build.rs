@@ -206,6 +206,7 @@ fn link_opencc() {
             let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
             let link = out.join("libopencc.so");
             let _ = std::fs::remove_file(&link);
+            #[cfg(unix)]
             if std::os::unix::fs::symlink(Path::new(dir).join(&soname), &link).is_ok() {
                 println!("cargo:rustc-link-search=native={}", out.display());
                 println!("cargo:rustc-link-lib=dylib=opencc");
