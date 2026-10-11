@@ -50,7 +50,7 @@ pub struct GoogleTerminal {
     child: Option<Box<dyn Child + Send + Sync>>,
     #[cfg(windows)]
     job: Option<WindowsJob>,
-    writer: Box<dyn Write + Send>,
+    writer: Option<Box<dyn Write + Send>>,
     reader: Option<JoinHandle<()>>,
     reader_done: Arc<AtomicBool>,
     output_bytes: Arc<AtomicUsize>,
@@ -190,7 +190,7 @@ impl GoogleTerminal {
             child: Some(child),
             #[cfg(windows)]
             job: Some(job),
-            writer,
+            writer: Some(writer),
             reader: Some(reader),
             reader_done,
             output_bytes,
@@ -215,8 +215,9 @@ impl GoogleTerminal {
         {
             return Err(io::ErrorKind::BrokenPipe.into());
         }
-        self.writer.write_all(control.bytes())?;
-        self.writer.flush()
+        let writer = self.writer.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
+        writer.write_all(control.bytes())?;
+        writer.flush()
     }
 
     pub fn capture_dir(&self) -> PathBuf {
@@ -224,6 +225,16 @@ impl GoogleTerminal {
     }
     pub fn log_path(&self) -> PathBuf {
         self.session.path().join("official-cli.log")
+    }
+
+    /// Process state only; terminal output and draft text never enter status.
+    pub fn child_exit_observed(&mut self) -> io::Result<bool> {
+        Ok(self
+            .child
+            .as_mut()
+            .ok_or(io::ErrorKind::BrokenPipe)?
+            .try_wait()?
+            .is_some())
     }
 
     pub fn capture_editor(&mut self, budget: Duration) -> io::Result<String> {
@@ -264,47 +275,66 @@ impl GoogleTerminal {
     }
 
     pub fn shutdown(&mut self) -> io::Result<()> {
+        // Close input before the pseudoconsole. Its output clone is drained by
+        // the reader thread until ClosePseudoConsole releases the write side.
+        self.writer.take();
         if let Some(child) = self.child.as_mut() {
-            #[cfg(unix)]
-            if let Some(group) = self
-                .master
-                .as_ref()
-                .and_then(|master| master.process_group_leader())
+            #[cfg(windows)]
             {
-                if group > 0 {
-                    unsafe {
-                        libc::kill(-group, libc::SIGTERM);
+                // portable-pty's WinChild::kill swallows TerminateProcess
+                // failures and WinChild::wait waits forever. Closing our
+                // kill-on-close Job terminates the whole ConPTY child tree;
+                // only a bounded observed exit counts as cleanup.
+                self.job.take();
+                let until = Instant::now() + Duration::from_secs(2);
+                while child.try_wait()?.is_none() {
+                    if Instant::now() >= until {
+                        return Err(io::ErrorKind::TimedOut.into());
                     }
+                    thread::sleep(Duration::from_millis(5));
                 }
             }
-            if child.try_wait()?.is_none() {
-                child.kill()?;
-            }
-            let until = Instant::now() + Duration::from_millis(500);
-            while child.try_wait()?.is_none() {
-                if Instant::now() >= until {
-                    #[cfg(unix)]
-                    if let Some(group) = self
-                        .master
-                        .as_ref()
-                        .and_then(|master| master.process_group_leader())
-                    {
-                        if group > 0 {
-                            unsafe {
-                                libc::kill(-group, libc::SIGKILL);
-                            }
+            #[cfg(unix)]
+            {
+                if let Some(group) = self
+                    .master
+                    .as_ref()
+                    .and_then(|master| master.process_group_leader())
+                {
+                    if group > 0 {
+                        unsafe {
+                            libc::kill(-group, libc::SIGTERM);
                         }
                     }
-                    child.kill()?;
-                    break;
                 }
-                thread::sleep(Duration::from_millis(5));
+                if child.try_wait()?.is_none() {
+                    child.kill()?;
+                }
+                let until = Instant::now() + Duration::from_millis(500);
+                while child.try_wait()?.is_none() {
+                    if Instant::now() >= until {
+                        if let Some(group) = self
+                            .master
+                            .as_ref()
+                            .and_then(|master| master.process_group_leader())
+                        {
+                            if group > 0 {
+                                unsafe {
+                                    libc::kill(-group, libc::SIGKILL);
+                                }
+                            }
+                        }
+                        child.kill()?;
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                child.wait()?;
             }
-            child.wait()?;
             self.child.take();
         }
         #[cfg(windows)]
-        self.job.take(); // closes Job Object and kills any remaining children
+        self.job.take();
         self.master.take();
         let until = Instant::now() + Duration::from_millis(500);
         while !self.reader_done.load(Ordering::Acquire) && Instant::now() < until {
