@@ -839,3 +839,5 @@ Google 已審的 `1896bd4` 以獨立 merge 納入 App 候選，包括兩個狹�
 `012e758` 的 [run 38128018261](https://github.com/Jadiouo/voicetype/actions/runs/38128018261) Linux job 成功：真封裝 CSC 第 1 次修字 7ms、`first_fail_open=false`，`.deb` 抽取後 235 個 CSC 項目、Google helper、435 個鎖定 Rust 套件／766 份文字與三項原生目錄均通過位元組與清單核對；已安裝 UI 的選擇、重啟、損壞設定及重新載入測試通過。官方 Google CLI 在 runner 中不存在，故此結果不代表真人 Google 語音驗收。
 
 同 run 的 Windows job 已通過新 CSC 模型建置與修字 gate，接著在 `google_terminal_windows::conpty_delivers_only_voice_and_editor_controls_to_child` 停留超過 14 分鐘；為取得 GitHub 只在 job 結束後開放的原始 log，root 取消該 job。這是有界診斷操作，不是產品測試的失敗斷言，也沒有取得該 run 的 Windows NSIS 安裝結果。Google 作者正按原測試語義定位 ConPTY 停滯；不以加長 timeout 略過。Windows PE 來源、安裝器內插件授權及新 NSIS 全集合核對仍標為未完成。
+
+後續主 App 候選已在本地合併經審的 Windows Nano／原生輸入分支與 Google 快捷鍵服務可回復遷移；Google ConPTY 修補改由釘版 `portable-pty` 0.9.0 單一 Windows flag 調整，並保留子程序清理邊界。釘版原 crate 全檔與唯一 patch、MIT notice 已逐項核對，Rust notice 清單明列 vendored 來源而非 workspace；本機 Linux 全套 core/text、7 項 notice fixture 與完整 Rust graph／766 份文字驗證通過。Windows 預覽另接線六個 NSIS 插件的實際抽取、來源位元組與已安裝 notice 檢查，外層 setup EXE 及整包 PE 來源仍未宣稱完整。這些新整合尚待下一輪真 Windows NSIS／已安裝 daemon、UI 與真人語音驗收，PR 繼續為草稿。
