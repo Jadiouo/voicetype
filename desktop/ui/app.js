@@ -7,6 +7,8 @@ const cancel = document.querySelector('#cancel-dictation');
 const choices = [...document.querySelectorAll('input[name="provider"]')];
 const shortcutChoice = document.querySelector('#shortcut-choice');
 const shortcutNote = document.querySelector('#shortcut-note');
+let renderedShortcutProvider;
+let renderedShortcutRequested;
 let lastView;
 let commandBusy = false;
 let pollBusy = false;
@@ -49,13 +51,23 @@ function runtimeControls(view) {
     || view.local_runtime !== 'inactive' || view.google_runtime !== 'inactive'
     || view.input_requested || googleTransferPhase !== null;
   if (binding) {
-    shortcutChoice.value = binding.requested;
-    shortcutChoice.options[0].textContent = `預設：${shortcutLabel(view, provider, 'default')}`;
-    shortcutChoice.options[1].textContent = shortcutLabel(view, provider, 'ctrl_shift_f9');
+    // Polling must not reset a native select while its menu is being operated.
+    // Sync only when the authoritative provider or requested binding changes.
+    if (renderedShortcutProvider !== provider || renderedShortcutRequested !== binding.requested) {
+      shortcutChoice.value = binding.requested;
+      renderedShortcutProvider = provider;
+      renderedShortcutRequested = binding.requested;
+    }
+    const defaultLabel = `預設：${shortcutLabel(view, provider, 'default')}`;
+    const alternateLabel = shortcutLabel(view, provider, 'ctrl_shift_f9');
+    if (shortcutChoice.options[0].textContent !== defaultLabel) shortcutChoice.options[0].textContent = defaultLabel;
+    if (shortcutChoice.options[1].textContent !== alternateLabel) shortcutChoice.options[1].textContent = alternateLabel;
     shortcutNote.textContent = binding.requested === binding.effective
       ? `已選擇 ${shortcutLabel(view, provider, binding.requested)}；啟用後才確認本次按鍵可用。`
       : `已要求 ${shortcutLabel(view, provider, binding.requested)}；前次確認仍是 ${shortcutLabel(view, provider, binding.effective)}。下一次啟用若未通過確認，會保留前次有效鍵。`;
   } else {
+    renderedShortcutProvider = undefined;
+    renderedShortcutRequested = undefined;
     shortcutNote.textContent = '正在讀取快捷鍵設定…';
   }
   spellingEnabled.disabled = commandBusy || !view || view.local_runtime !== 'inactive'
@@ -234,6 +246,7 @@ async function command(name, args = {}) {
   try {
     if (!window.__TAURI__) throw new Error('請透過已安裝的 VoiceType App 開啟設定。');
     const view = await window.__TAURI__.core.invoke(name, args);
+    if (name === 'set_shortcut' || name === 'reload_settings') renderedShortcutRequested = undefined;
     render(view);
     await refreshGoogleTransferPhase();
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
@@ -260,6 +273,7 @@ async function command(name, args = {}) {
       : '已讀取你的偏好設定。';
   } catch (reason) {
     await refreshGoogleTransferPhase();
+    renderedShortcutRequested = undefined;
     if (lastView) render(lastView);
     error.textContent = String(reason);
     error.hidden = false;
