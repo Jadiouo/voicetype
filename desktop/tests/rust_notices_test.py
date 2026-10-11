@@ -14,6 +14,41 @@ INSTALLED = runpy.run_path(str(ROOT / "desktop/tests/installed_rust_notices.py")
 
 
 class RustNoticeTests(unittest.TestCase):
+    def test_windows_builder_catalogs_owned_daemon_and_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in ("desktop/Cargo.lock", "voicetyped/Cargo.lock"):
+                lock = root / relative
+                lock.parent.mkdir(parents=True, exist_ok=True)
+                lock.write_text("fixture lock")
+            notice = root / "LICENSE"
+            notice.write_text("fixture notice")
+            components = []
+            for name in ("runtime", "opencc", "spelling"):
+                native = root / name
+                (native / "licenses").mkdir(parents=True)
+                license_file = native / "licenses/NOTICE"
+                license_file.write_text("fixture " + name)
+                checksum = hashlib.sha256(license_file.read_bytes()).hexdigest()
+                (native / "manifest.json").write_text(json.dumps({"id": name, "files": [
+                    {"path": "licenses/NOTICE", "sha256": checksum}]}))
+                components.append((name, native))
+            def graph(_manifest, target, package, _extra=()):
+                self.assertEqual(target, "x86_64-pc-windows-msvc")
+                return {package: {"name": package, "version": "1", "source": None,
+                                  "license": "GPL-3.0-only", "_resolved_features": []}}
+            output = root / "output"
+            with mock.patch.dict(BUILDER["build"].__globals__, ROOT=root, cargo_graph=graph,
+                                 lock_checksums=lambda _: {},
+                                 license_sources=lambda _package, _checksum: [(notice, "fixture", None)]):
+                BUILDER["build"](output, "x86_64-pc-windows-msvc", components)
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(set(manifest["roots"]), {"desktop-app", "owned-daemon"})
+            self.assertEqual({item["name"] for item in manifest["native_components"]},
+                             {"runtime", "opencc", "spelling"})
+            self.assertEqual({item["name"] for item in manifest["packages"]},
+                             {"voicetype-desktop", "voicetyped"})
+
     def test_target_graph_keeps_normal_and_build_edges_but_not_dev(self):
         packages = [{"id": name, "name": name} for name in ("voicetype-desktop", "normal", "build", "dev")]
         nodes = [{"id": "voicetype-desktop", "deps": [
