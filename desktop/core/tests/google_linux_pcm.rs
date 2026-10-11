@@ -136,7 +136,9 @@ fn dropping_a_started_native_recorder_kills_and_reaps_the_child() {
         format!(
             r#"#!/usr/bin/python3 -u
 import os,time
-open({:?},'w').write(str(os.getpid()))
+pid_file={:?}
+with open(pid_file+'.tmp','w') as out: out.write(str(os.getpid()))
+os.replace(pid_file+'.tmp',pid_file)
 while True: time.sleep(1)
 "#,
             pid_file.display().to_string()
@@ -217,7 +219,9 @@ fn failed_cleanup_retains_a_real_recorder_until_retry_reaps_it() {
         format!(
             r#"#!/usr/bin/python3 -u
 import os,time
-open({:?},'w').write(str(os.getpid()))
+pid_file={:?}
+with open(pid_file+'.tmp','w') as out: out.write(str(os.getpid()))
+os.replace(pid_file+'.tmp',pid_file)
 while True: time.sleep(1)
 "#,
             pid_file.display().to_string()
