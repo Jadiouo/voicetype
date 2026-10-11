@@ -74,6 +74,27 @@ def windows_argv(command_line):
         kernel32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
 
 
+def plain_directory(path):
+    """Reject symlinks and Windows junctions before accepting a WebView2 profile."""
+    try:
+        details = path.lstat()
+    except OSError:
+        return False
+    return (stat.S_ISDIR(details.st_mode) and not stat.S_ISLNK(details.st_mode)
+            and not (getattr(details, "st_file_attributes", 0)
+                     & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)))
+
+
+def expected_webview_profile(path, requested):
+    """WebView2 may use the requested UDF or its one EBWebView child."""
+    if not plain_directory(requested) or path not in (requested, requested / "EBWebView"):
+        return False
+    if not plain_directory(path):
+        return False
+    expected = requested if path == requested else requested / "EBWebView"
+    return path.resolve(strict=True) == expected.resolve(strict=True)
+
+
 def webview_process_udf(executable, driver_pid, requested, env, timeout):
     """Inspect only this App's WebView2 descendants; never persist command lines."""
     snapshot = powershell_json(r'''
@@ -111,12 +132,13 @@ $items = @(Get-CimInstance Win32_Process |
                    if arg.lower().startswith("--user-data-dir=")]
         if len(folders) > 1:
             raise RuntimeError("WebView2 process has duplicate user data folder arguments")
-        folder = Path(folders[0]).resolve() if folders else None
+        folder = Path(folders[0]) if folders else None
         browsers.append({"pid": row["pid"], "parent_pid": row["parent_pid"],
                          "user_data_dir": str(folder) if folder else None})
     observed = [Path(row["user_data_dir"]) for row in browsers if row["user_data_dir"]]
     return {"app_pids": sorted(apps), "webview_processes": browsers,
-            "matches": bool(apps and observed and all(path == requested for path in observed))}
+            "matches": bool(apps and len(observed) == len(browsers) and observed
+                            and all(expected_webview_profile(path, requested) for path in observed))}
 
 
 def file_version(path, env, expected):
@@ -218,10 +240,38 @@ def bounded_folder_metadata(root):
     return {"exists": True, "entries": entries, "truncated": truncated or bool(pending)}
 
 
-def assert_known_folders_unchanged(env, scratch, before, report, phase):
+def is_empty_framework_directory(path):
+    """Only observe an exact empty Tauri identifier directory; never modify it."""
+    if not plain_directory(path):
+        return False
+    try:
+        if next(path.iterdir(), None) is not None:
+            return False
+        return True
+    except OSError:
+        return False
+
+
+def assert_clean_known_folder_baseline(before):
+    if any(before.values()):
+        raise RuntimeError("product data already exists in an OS known folder before upgrade")
+
+
+def assert_known_folders_unchanged(env, scratch, before, report, phase, udf_verified=False):
     current = known_folder_product_paths(env, scratch)
     report[f"known_folder_candidates_{phase}"] = current
     added = [name for name, existed in before.items() if not existed and current.get(name)]
+    framework_name = "local/io.github.jadiouo.voicetype.preview"
+    if current.keys() == before.keys() and added == [framework_name] and udf_verified:
+        locations = powershell_json(
+            "@{local=[Environment]::GetFolderPath('LocalApplicationData')}|ConvertTo-Json -Compress",
+            env,
+        )
+        root = Path(locations["local"]) / "io.github.jadiouo.voicetype.preview"
+        if not root.is_relative_to(scratch) and is_empty_framework_directory(root):
+            report.setdefault("framework_empty_known_folder_observed", []).append(
+                {"phase": phase, "path": framework_name})
+            return
     if current.keys() != before.keys() or added:
         try:
             locations = powershell_json(
@@ -305,6 +355,7 @@ class InstalledApp:
         self.driver = None
         self.session = None
         self.log = None
+        self.udf_verified = False
 
     def request(self, method, route, body=None, timeout=30):
         encoded = None if body is None else json.dumps(body).encode()
@@ -343,6 +394,10 @@ class InstalledApp:
             reported_udf = opened.get("capabilities", {}).get("msedge.userDataDir")
             actual_udf = Path(reported_udf).resolve() if reported_udf else None
             expected_udf = requested_udf.resolve()
+            workspace = Path(self.env["GITHUB_WORKSPACE"]).resolve(strict=True)
+            if (not requested_udf.is_relative_to(workspace)
+                    or not expected_udf.is_relative_to(workspace)):
+                raise RuntimeError("requested WebView2 user data folder is outside test workspace")
             deadline = time.monotonic() + 5
             process = {"app_pids": [], "webview_processes": [], "matches": False}
             while True:
@@ -358,7 +413,7 @@ class InstalledApp:
                 if process["matches"]:
                     break
                 time.sleep(0.2)
-            matches = (requested_udf.is_dir() and process["matches"]
+            matches = (plain_directory(requested_udf) and process["matches"]
                        and (actual_udf is None or actual_udf == expected_udf))
             (self.evidence / f"{self.label}-webview-udf.json").write_text(json.dumps({
                 "requested": str(expected_udf), "reported_capability": str(actual_udf) if actual_udf else None,
@@ -366,6 +421,7 @@ class InstalledApp:
             }, indent=2) + "\n", encoding="utf-8")
             if not matches:
                 raise RuntimeError("WebDriver WebView2 user data folder is outside the test workspace")
+            self.udf_verified = True
             return self
         except Exception:
             self.__exit__(None, None, None)
@@ -519,6 +575,7 @@ def main():
             raise RuntimeError("runner already has a VoiceType Preview registration")
         known_before = known_folder_product_paths(env, scratch)
         report["known_folder_candidates_before"] = known_before
+        assert_clean_known_folder_baseline(known_before)
         old_setup_version, old_setup_info = file_version(old, env, args.old_version)
         new_setup_version, new_setup_info = file_version(new, env, args.new_version)
         report["setup_pe_versions"] = {"old": old_setup_info, "new": new_setup_info}
@@ -538,7 +595,7 @@ def main():
             saved = snapshot(profile)
             assert_public_data(app, profile, saved)
         assert_app_stopped(env, "old data read")
-        assert_known_folders_unchanged(env, scratch, known_before, report, "old")
+        assert_known_folders_unchanged(env, scratch, known_before, report, "old", app.udf_verified)
         report["phases"].append("old-installed-public-data")
         new_exe = run_installer(new, destination, env, evidence, "new-upgrade")
         new_registry = registration(destination, env)
@@ -556,7 +613,7 @@ def main():
         with InstalledApp(new_exe, env, evidence, "upgraded") as app:
             assert_public_data(app, profile, saved)
         assert_app_stopped(env, "new data read")
-        assert_known_folders_unchanged(env, scratch, known_before, report, "upgrade")
+        assert_known_folders_unchanged(env, scratch, known_before, report, "upgrade", app.udf_verified)
         report["phases"].append("new-installed-public-data")
         uninstall(new_registry, destination, env, evidence, "new")
         if snapshot(profile) != saved:
@@ -572,14 +629,14 @@ def main():
         with InstalledApp(restored_exe, env, evidence, "rollback") as app:
             assert_public_data(app, profile, saved)
         assert_app_stopped(env, "rollback data read")
-        assert_known_folders_unchanged(env, scratch, known_before, report, "rollback")
+        assert_known_folders_unchanged(env, scratch, known_before, report, "rollback", app.udf_verified)
         report["phases"].append("old-restored-public-data")
         uninstall(restored_registry, destination, env, evidence, "old")
         if snapshot(profile) != saved:
             raise RuntimeError("final uninstall changed personal data")
         if product_registration_count(env):
             raise RuntimeError("NSIS registration remains after final uninstall")
-        assert_known_folders_unchanged(env, scratch, known_before, report, "after_uninstall")
+        assert_known_folders_unchanged(env, scratch, known_before, report, "after_uninstall", app.udf_verified)
         report["phases"].append("final-uninstall-data-retained")
         report["personal_sha256"] = saved
         report["result"] = "passed"

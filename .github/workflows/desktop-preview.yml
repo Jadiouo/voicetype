@@ -277,6 +277,8 @@ jobs:
       - name: Check both CI origins and pinned setup bytes
         shell: pwsh
         run: |
+          python tests/windows_upgrade_isolation_test.py
+          if ($LASTEXITCODE -ne 0) { throw 'Upgrade isolation regression failed' }
           python tests/windows_upgrade_inputs.py --new-run-id "$env:NEW_RUN_ID" --new-head-sha "$env:NEW_HEAD_SHA" --new-setup-sha256 "$env:NEW_SETUP_SHA256"
           if ($LASTEXITCODE -ne 0) { throw 'Two-package source or byte pin failed' }
       - name: Install native UI driver
