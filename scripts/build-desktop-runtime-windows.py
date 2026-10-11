@@ -42,7 +42,9 @@ def verify_native(native):
     require(metadata["platform"] == "windows-x86_64" and metadata["provider"] == "cpu", "Wrong native build")
     require(metadata["recipe_sha256"] == sha(WIN_RECIPE)
             and metadata["shared_recipe_sha256"] == sha(SHARED_RECIPE)
-            and metadata["patch_sha256"] == recipe["patch_sha256"], "Native source provenance mismatch")
+            and metadata["patch_sha256"] == recipe["patch_sha256"]
+            and metadata["windows_ort_import_patch_sha256"] == recipe["windows_ort_import_patch_sha256"],
+            "Native source provenance mismatch")
     for relative, entry in metadata["files"].items():
         path = native / relative
         require(path.is_file() and not path.is_symlink() and path.stat().st_size == entry["bytes"]

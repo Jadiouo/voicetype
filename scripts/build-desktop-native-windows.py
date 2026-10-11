@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RECIPE = ROOT / "desktop/assets/windows-native-sources.json"
 SHARED = ROOT / "desktop/assets/linux-native-sources.json"
 PATCH = ROOT / "patches/sherpa-onnx-1.13.8-nano-integrity.patch"
+WINDOWS_ORT_PATCH = ROOT / "patches/sherpa-onnx-1.13.8-windows-cpu-ort-import.patch"
 base = runpy.run_path(str(ROOT / "scripts/build-desktop-native.py"))
 fetch, extract, copy = base["fetch"], base["extract"], base["copy"]
 
@@ -36,6 +37,8 @@ def recipe():
     require(win["platform"] == "windows-x86_64" and win["provider"] == "cpu", "Wrong native platform")
     require(sha(SHARED) == win["shared_source_recipe_sha256"], "Shared source pins changed")
     require(sha(PATCH) == win["patch_sha256"] == shared["patch_sha256"], "Integrity patch changed")
+    require(sha(WINDOWS_ORT_PATCH) == win["windows_ort_import_patch_sha256"],
+            "Windows ORT import patch changed")
     require(win["source_commit"] == shared["source_commit"], "Different Sherpa source revision")
     return win, shared
 
@@ -87,6 +90,15 @@ def checked_source_inputs(shared, cache, offline, work):
     header = sherpa / "sherpa-onnx/c-api/c-api.h"
     require(sha(header) == "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce",
             "C API header changed")
+    ort_cmake = sherpa / "cmake/onnxruntime.cmake"
+    require(sha(ort_cmake) == "4dad1ee8f3e09d6270c5b752629f4ddbb3c8584a93a424d9aa8a4c4d66bf2fc5",
+            "Original Sherpa ORT importer changed")
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-C", str(sherpa), "apply",
+                    "--check", str(WINDOWS_ORT_PATCH)], check=True)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-C", str(sherpa), "apply",
+                    str(WINDOWS_ORT_PATCH)], check=True)
+    require(sha(ort_cmake) == "7a214259d438cdfdc2cf3b1f04b98d8046ed15c9da6ebffce1dd6821a7d83dd2",
+            "Patched Windows ORT importer changed")
     copy(header, payload / "include/sherpa-onnx/c-api/c-api.h")
     return sources, sherpa, payload
 
@@ -115,6 +127,8 @@ def build(args):
             print("Windows source archives, native members, headers and integrity patch verified")
             return
         ort_lib = payload / "lib"
+        require((ort_lib / "onnxruntime.dll").is_file() and (ort_lib / "onnxruntime.lib").is_file(),
+                "Pinned ORT DLL and import library are required")
         include = work / "ort-include"
         require(include.joinpath("onnxruntime_c_api.h").is_file(), "Missing pinned ORT headers")
         disabled = ["GPU", "DIRECTML", "TTS", "SPEAKER_DIARIZATION", "PYTHON", "JNI", "BINARY",
@@ -144,11 +158,13 @@ def build(args):
         copy(RECIPE, payload / "provenance/windows-native-sources.json")
         copy(SHARED, payload / "provenance/linux-native-sources.json")
         copy(PATCH, payload / "provenance/sherpa-onnx-1.13.8-nano-integrity.patch")
+        copy(WINDOWS_ORT_PATCH, payload / "provenance/sherpa-onnx-1.13.8-windows-cpu-ort-import.patch")
         copy(ROOT / "patches/README.nano-integrity.md", payload / "provenance/README.nano-integrity.md")
         provenance = {
             "schema_version": 1, "platform": "windows-x86_64", "provider": "cpu",
             "recipe_sha256": sha(RECIPE), "shared_recipe_sha256": sha(SHARED),
-            "patch_sha256": sha(PATCH), "cmake_options": options,
+            "patch_sha256": sha(PATCH), "windows_ort_import_patch_sha256": sha(WINDOWS_ORT_PATCH),
+            "cmake_options": options,
             "files": {str(path.relative_to(payload)).replace("\\", "/"): {"bytes": path.stat().st_size,
                        "sha256": sha(path)} for path in sorted(payload.rglob("*")) if path.is_file()},
         }

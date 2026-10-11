@@ -6,6 +6,7 @@
   "shared_source_recipe_sha256": "325f1a509fba95a0fa5acfd3d6faca7b772afe8274c2e61afef05dd95255bedd",
   "source_commit": "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf",
   "patch_sha256": "5206aa456897f13e04c32a3184f80048167b81d528d57c4bdd294b10f64f3812",
+  "windows_ort_import_patch_sha256": "2c0ca4a114ca1e97dfa26ebe4e598180c11a6277e50ef1ea88555c1f9fbe2389",
   "onnxruntime": {
     "id": "onnxruntime-windows",
     "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-win-x64-1.28.2.zip",
