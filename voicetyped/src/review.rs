@@ -185,19 +185,19 @@ fn day(timestamp: u64) -> Result<String> {
     }
     #[cfg(unix)]
     {
-    let time = libc::time_t::try_from(timestamp)?;
-    let mut local: libc::tm = unsafe { std::mem::zeroed() };
-    // localtime_r writes to our stack value; the libc timezone is the desktop's.
-    ensure!(
-        !unsafe { libc::localtime_r(&time, &mut local) }.is_null(),
-        "local date unavailable"
-    );
-    Ok(format!(
-        "{:04}-{:02}-{:02}",
-        local.tm_year + 1900,
-        local.tm_mon + 1,
-        local.tm_mday
-    ))
+        let time = libc::time_t::try_from(timestamp)?;
+        let mut local: libc::tm = unsafe { std::mem::zeroed() };
+        // localtime_r writes to our stack value; the libc timezone is the desktop's.
+        ensure!(
+            !unsafe { libc::localtime_r(&time, &mut local) }.is_null(),
+            "local date unavailable"
+        );
+        Ok(format!(
+            "{:04}-{:02}-{:02}",
+            local.tm_year + 1900,
+            local.tm_mon + 1,
+            local.tm_mday
+        ))
     }
 }
 
@@ -228,11 +228,7 @@ impl StoreLock {
 
     fn acquire_path(path: &Path) -> Result<Self> {
         let mut options = OpenOptions::new();
-        options
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false);
+        options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         let file = options.open(path)?;

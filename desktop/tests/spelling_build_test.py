@@ -17,6 +17,52 @@ INSTALLED = runpy.run_path(str(ROOT / "desktop/tests/installed_spelling.py"))
 
 
 class SpellingBuildTests(unittest.TestCase):
+    def test_generated_windows_executable_records_pinned_bootloader_and_recipe(self):
+        def pe(text, resource):
+            data = bytearray(0x400)
+            data[:2] = b"MZ"
+            data[0x3c:0x40] = (0x80).to_bytes(4, "little")
+            data[0x80:0x84] = b"PE\0\0"
+            data[0x86:0x88] = (2).to_bytes(2, "little")
+            data[0x94:0x96] = (0xe0).to_bytes(2, "little")
+            table = 0x80 + 24 + 0xe0
+            for index, (name, value, offset) in enumerate(((b".text", text, 0x200),
+                                                           (b".rsrc", resource, 0x300))):
+                section = table + index * 40
+                data[section:section + len(name)] = name
+                data[section + 16:section + 20] = len(value).to_bytes(4, "little")
+                data[section + 20:section + 24] = offset.to_bytes(4, "little")
+                data[offset:offset + len(value)] = value
+            return bytes(data)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "run.exe"
+            output = root / "voicetype-csc.exe"
+            spec = root / "voicetype-csc.spec"
+            entry = root / "voicetype_csc.py"
+            source.write_bytes(pe(b"source-code", b"old-resource"))
+            output.write_bytes(pe(b"source-code", b"new-resource"))
+            spec.write_text("generated spec")
+            entry.write_text("app entry")
+            record = BUILDER["generated_windows_executable_origin"](
+                output, source, spec, entry, ["--onedir", "--noupx"],
+                expected_bootloader_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+            self.assertEqual(record["path"], "voicetype-csc.exe")
+            self.assertEqual(record["source_member"], "PyInstaller/bootloader/Windows-64bit-intel/run.exe")
+            self.assertEqual(record["bootloader_sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
+            self.assertEqual(record["entry_sha256"], hashlib.sha256(entry.read_bytes()).hexdigest())
+            self.assertEqual(record["spec_sha256"], hashlib.sha256(spec.read_bytes()).hexdigest())
+            self.assertEqual(record["unchanged_bootloader_sections"], [".text"])
+            self.assertEqual(record["notice"], "licenses/pyinstaller/00-COPYING.txt")
+            changed = bytearray(output.read_bytes())
+            changed[0x200] ^= 1
+            output.write_bytes(changed)
+            with self.assertRaisesRegex(RuntimeError, "bootloader code section"):
+                BUILDER["generated_windows_executable_origin"](
+                    output, source, spec, entry, ["--onedir", "--noupx"],
+                    expected_bootloader_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+
     def test_windows_bundle_omits_only_os_ucrt_forwarders(self):
         with tempfile.TemporaryDirectory() as directory:
             bundle = Path(directory)

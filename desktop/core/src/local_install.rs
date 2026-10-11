@@ -1,10 +1,13 @@
 //! Prepare trusted packaged runtime bytes and already-installed models off the
 //! dictation thread. No network, process launch, microphone or service migration.
-use crate::{assets::{AssetManifest, AssetStore}, setup::bundled_models};
 #[cfg(target_os = "linux")]
 use crate::runtime::LocalRuntimePaths;
 #[cfg(windows)]
 use crate::windows_engine::EnginePaths as LocalRuntimePaths;
+use crate::{
+    assets::{AssetManifest, AssetStore},
+    setup::bundled_models,
+};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -37,10 +40,15 @@ impl LocalInstaller {
         runtime.validate()?;
         if !root.is_absolute()
             || runtime.id != "nano-runtime"
-            || !runtime
-                .files
-                .iter()
-                .any(|f| f.path == if cfg!(windows) { "bin/voicetyped.exe" } else { "bin/voicetyped" } && f.executable)
+            || !runtime.files.iter().any(|f| {
+                f.path
+                    == if cfg!(windows) {
+                        "bin/voicetyped.exe"
+                    } else {
+                        "bin/voicetyped"
+                    }
+                    && f.executable
+            })
             || models.len() != 2
             || models[0].id != "funasr-nano-int8"
             || models[1].id != "silero-vad"
@@ -88,7 +96,11 @@ impl LocalInstaller {
             &mut progress,
         )?;
         Ok(LocalRuntimePaths {
-            executable: runtime.join(if cfg!(windows) { "bin/voicetyped.exe" } else { "bin/voicetyped" }),
+            executable: runtime.join(if cfg!(windows) {
+                "bin/voicetyped.exe"
+            } else {
+                "bin/voicetyped"
+            }),
             model_dir: installed_models[0].clone(),
             vad_model: installed_models[1].join("silero-v5.0.onnx"),
             profile: self.root.join("local-profile"),

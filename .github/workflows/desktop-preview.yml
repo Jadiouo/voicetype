@@ -3,7 +3,7 @@ name: Desktop preview
 on:
   push:
     branches: [main, feat/desktop-app, feat/windows-dictation-work]
-    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "scripts/build-desktop-*", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
+    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "config/rust-vendor-sources.json", "scripts/build-desktop-*", "scripts/catalog-windows-installer-pe.py", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
 
 permissions:
@@ -126,6 +126,13 @@ jobs:
           else
             python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-pc-windows-msvc --component runtime=target/runtime --component opencc=target/opencc --component spelling=target/spelling
           fi
+      - name: Prepare pinned Windows installer plugin notices
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -e
+          python tests/windows_installer_pe_test.py
+          python ../scripts/catalog-windows-installer-pe.py prepare target/installer-notices --cache target/installer-source-cache
       - name: Build preview installer
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
       - name: Inspect and install preview (Linux)
@@ -163,6 +170,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed Google helper verification failed' }
           python tests/installed_rust_notices.py "$destination" target/rust-notices/manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed Rust notice verification failed' }
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) { throw '7z required to inspect actual NSIS plugin PEs' }
+          $extracted = Join-Path $env:GITHUB_WORKSPACE 'desktop/target/installer-extraction'
+          7z x -y $installer.FullName "-o$extracted" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS extraction failed' }
+          python ../scripts/catalog-windows-installer-pe.py verify "$extracted" target/installer-notices/plugin-origins.json $installer.FullName target/installer-pe-audit.json --installed "$destination"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual NSIS plugin or installed notice audit failed' }
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
         run: python tests/artifact_manifest.py
@@ -205,4 +218,6 @@ jobs:
             desktop/target/windows-native/build-provenance.json
             desktop/target/spelling/manifest.json
             desktop/target/spelling/provenance/binary-origins.json
+            desktop/target/installer-notices/plugin-origins.json
+            desktop/target/installer-pe-audit.json
             desktop/target/rust-notices/

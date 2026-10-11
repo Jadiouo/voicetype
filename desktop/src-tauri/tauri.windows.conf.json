@@ -11,6 +11,7 @@
       "../target/runtime/": "runtime/",
       "../target/spelling": "spelling",
       "../target/google": "google",
+      "../target/installer-notices": "licenses/installer",
       "../target/rust-notices": "licenses/rust"
     }
   }
