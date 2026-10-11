@@ -846,4 +846,10 @@ Google 已審的 `1896bd4` 以獨立 merge 納入 App 候選，包括兩個狹�
 
 整合候選 `50c055d` 的 [preview run 38130204932](https://github.com/Jadiouo/voicetype/actions/runs/38130204932) 在 Windows 通過 OpenCC 與核心編譯，但 Google 合成 ConPTY 測試在三次 editor 回應後找不到 F5 控制位元組紀錄；Linux 通過公開核心測試、封裝 CSC 模型改字與原生輸入檢查，首次進入 Tauri 主程式編譯時發現 Google formatter 的輸入被推斷成無大小的 `str`。兩個 job 均未產生本輪安裝包。Windows TSF 同 HEAD 隔離測試 5 項中 4 項通過，唯一既有跨程序啟用 gate 仍是 API 回成功、五秒內沒有 TIP `Activate/HELLO`；這不是 MSVC 編譯錯誤。
 
-ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前記錄固定合成控制序列；單次 [Google 分支 run 38130628092](https://github.com/Jadiouo/voicetype/actions/runs/38130628092) 的 Windows 公開命令測試已通過，整個步驟約七秒，不代表麥克風、停錄或整句延遲。Tauri formatter 改為明確 `String` 入參，原作者已核對型別邊界。兩項修正已推到主 App `8ecdcb3`，[新 preview run 38130953571](https://github.com/Jadiouo/voicetype/actions/runs/38130953571) 正進行真正雙平台編譯、安裝與測試；在其完成前不宣稱新版 NSIS、Linux deb 或真人送字驗收。
+ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前記錄固定合成控制序列；單次 [Google 分支 run 38130628092](https://github.com/Jadiouo/voicetype/actions/runs/38130628092) 的 Windows 公開命令測試已通過，整個步驟約七秒，不代表麥克風、停錄或整句延遲。Tauri formatter 改為明確 `String` 入參，原作者已核對型別邊界。兩項修正已推到主 App `8ecdcb3`，[preview run 38130953571](https://github.com/Jadiouo/voicetype/actions/runs/38130953571) 曾啟動雙平台檢查；後續結果以下一候選為準。
+
+### 同日進展：Windows 原生建置與校正通過，安裝前 notice 契約失敗
+
+`0ea4422` 的 [preview run 38131407549](https://github.com/Jadiouo/voicetype/actions/runs/38131407549) 在 Windows 通過公開 App 命令測試、真 MSVC Nano CPU runtime 建置、CSC 封裝模型測試；固定合成句在已載入後第 1 次、16ms 修字，`first_fail_open=false`，不是整句或麥克風延遲。釘版 `portable-pty` 的 Windows checkout 位元組已通過來源核對，該 run 接著在 Rust native notice 整合遇到 OpenCC manifest 缺少 `id`，尚未建 NSIS、安裝或跑 UI。已讓 OpenCC builder 產生固定 `id: opencc`，collector 保留缺欄即失敗；修正仍待下一輪真 Windows 建置核對。
+
+同輪 Linux 在公開測試發現合成錄音器 PID 檔先建立、後寫入的競態，讀端可能看到空檔。Google 作者已在獨立測試修正中改為同目錄暫存檔寫完再原子發布，本地該組 4/4 通過；新版 Linux 安裝包仍待 CI。另已本地整合經審的 Windows runtime 明確修復／回復入口，以及正式預覽版號 `0.2.1-alpha.1`，用於與先前真 `0.2.0-alpha.1` NSIS 比較；兩版安裝、保留個資與回復尚未實測。PR 保持草稿，日常安裝未切換。
