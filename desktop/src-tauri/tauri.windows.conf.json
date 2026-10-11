@@ -10,6 +10,7 @@
       "../target/opencc/manifest.json": "opencc-manifest.json",
       "../target/runtime/": "runtime/",
       "../target/spelling": "spelling",
+      "../target/google": "google",
       "../target/rust-notices": "licenses/rust"
     }
   }

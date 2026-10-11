@@ -23,6 +23,58 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from prepare_csc import REVISION, SOURCES, digest
 
+# Exact members observed in the 7e1944f Windows installer. Windows 11/Server
+# 2022 use their system UCRT and API-set forwarders; Microsoft documents that
+# app-local UCRT is ignored on Windows 10/11. Do not extend this allowlist to
+# MSVC runtime libraries or to newly observed DLLs without a fresh review.
+# https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment
+WINDOWS_OS_UCRT_DLLS = frozenset({
+    "api-ms-win-core-console-l1-1-0.dll",
+    "api-ms-win-core-datetime-l1-1-0.dll",
+    "api-ms-win-core-debug-l1-1-0.dll",
+    "api-ms-win-core-errorhandling-l1-1-0.dll",
+    "api-ms-win-core-fibers-l1-1-0.dll",
+    "api-ms-win-core-fibers-l1-1-1.dll",
+    "api-ms-win-core-file-l1-1-0.dll",
+    "api-ms-win-core-file-l1-2-0.dll",
+    "api-ms-win-core-file-l2-1-0.dll",
+    "api-ms-win-core-handle-l1-1-0.dll",
+    "api-ms-win-core-heap-l1-1-0.dll",
+    "api-ms-win-core-interlocked-l1-1-0.dll",
+    "api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+    "api-ms-win-core-libraryloader-l1-1-0.dll",
+    "api-ms-win-core-localization-l1-2-0.dll",
+    "api-ms-win-core-memory-l1-1-0.dll",
+    "api-ms-win-core-namedpipe-l1-1-0.dll",
+    "api-ms-win-core-processenvironment-l1-1-0.dll",
+    "api-ms-win-core-processthreads-l1-1-0.dll",
+    "api-ms-win-core-processthreads-l1-1-1.dll",
+    "api-ms-win-core-profile-l1-1-0.dll",
+    "api-ms-win-core-rtlsupport-l1-1-0.dll",
+    "api-ms-win-core-string-l1-1-0.dll",
+    "api-ms-win-core-synch-l1-1-0.dll",
+    "api-ms-win-core-synch-l1-2-0.dll",
+    "api-ms-win-core-sysinfo-l1-1-0.dll",
+    "api-ms-win-core-sysinfo-l1-2-0.dll",
+    "api-ms-win-core-timezone-l1-1-0.dll",
+    "api-ms-win-core-util-l1-1-0.dll",
+    "api-ms-win-crt-conio-l1-1-0.dll",
+    "api-ms-win-crt-convert-l1-1-0.dll",
+    "api-ms-win-crt-environment-l1-1-0.dll",
+    "api-ms-win-crt-filesystem-l1-1-0.dll",
+    "api-ms-win-crt-heap-l1-1-0.dll",
+    "api-ms-win-crt-locale-l1-1-0.dll",
+    "api-ms-win-crt-math-l1-1-0.dll",
+    "api-ms-win-crt-private-l1-1-0.dll",
+    "api-ms-win-crt-process-l1-1-0.dll",
+    "api-ms-win-crt-runtime-l1-1-0.dll",
+    "api-ms-win-crt-stdio-l1-1-0.dll",
+    "api-ms-win-crt-string-l1-1-0.dll",
+    "api-ms-win-crt-time-l1-1-0.dll",
+    "api-ms-win-crt-utility-l1-1-0.dll",
+    "ucrtbase.dll",
+})
+
 
 def run(*args):
     subprocess.run([str(a) for a in args], check=True, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
@@ -93,7 +145,39 @@ def python_runtime_source(binary, prefix=None):
     return None
 
 
-def binary_origins(bundle):
+def is_pe(binary):
+    """Recognize actual PE bytes, including renamed extension modules."""
+    with binary.open("rb") as stream:
+        header = stream.read(64)
+        if len(header) != 64 or header[:2] != b"MZ":
+            return False
+        offset = int.from_bytes(header[0x3c:0x40], "little")
+        if offset < 64 or offset > binary.stat().st_size - 4:
+            return False
+        stream.seek(offset)
+        return stream.read(4) == b"PE\0\0"
+
+
+def remove_windows_os_ucrt(bundle):
+    """Use the Windows 11 system UCRT instead of shipping copied OS DLLs."""
+    internal = bundle / "_internal"
+    removed = []
+    for path in sorted(internal.rglob("*")):
+        name = path.name.lower()
+        if name.startswith("api-ms-win-") and name.endswith(".dll") and name not in WINDOWS_OS_UCRT_DLLS:
+            raise RuntimeError("unreviewed Windows API-set DLL: " + str(path))
+        if name not in WINDOWS_OS_UCRT_DLLS:
+            continue
+        if not path.is_file() or not is_pe(path):
+            raise RuntimeError("unexpected Windows UCRT member: " + str(path))
+        removed.append(dict(path=path.relative_to(bundle).as_posix(), bytes=path.stat().st_size,
+                            sha256=digest(path), provided_by="Windows 11/Server 2022 OS UCRT/API-set"))
+        path.unlink()
+    print(f"Omitted {len(removed)} copied Windows OS UCRT/API-set DLLs; Windows 11/Server 2022 use system copies")
+    return removed
+
+
+def binary_origins(bundle, excluded_os_binaries=()):
     """Account for frozen native libraries; fail Linux builds on unknown copies."""
     internal = bundle / "_internal"
     records = []
@@ -158,12 +242,15 @@ def binary_origins(bundle):
         records.append(dict(path="voicetype-csc", origin="pyinstaller bootloader",
                             notice=notice_for("pyinstaller")))
     else:
-        # Windows wheels/Python distribute native DLLs under several roots. CI
-        # publishes the exact list for a separate MSVC redistributable audit.
-        for binary in sorted([*bundle.rglob("*.dll"), *bundle.rglob("*.pyd")]):
+        # An executable or renamed module is as much a distributed PE as a
+        # .dll/.pyd. Keep the incomplete catalog exact until source artifacts
+        # and their redistribution notices are independently established.
+        for binary in sorted(path for path in bundle.rglob("*") if path.is_file() and is_pe(path)):
             records.append(dict(path=binary.relative_to(bundle).as_posix(),
+                                bytes=binary.stat().st_size, sha256=digest(binary),
                                 origin="Windows native binary; license audit pending"))
-    return dict(complete=sys.platform == "linux", binaries=records)
+    return dict(complete=sys.platform == "linux", binaries=records,
+                excluded_os_binaries=list(excluded_os_binaries))
 
 
 def main():
@@ -211,8 +298,9 @@ def main():
         # Resolve PyInstaller's same-directory library symlinks into ordinary
         # files; the app's version store never follows untrusted links.
         shutil.copytree(work / "dist/voicetype-csc", bundle, symlinks=False)
+        excluded_os_binaries = remove_windows_os_ucrt(bundle) if sys.platform == "win32" else []
         versions = notices(bundle / "licenses")
-        origins = binary_origins(bundle)
+        origins = binary_origins(bundle, excluded_os_binaries)
         models = bundle / "models"
         models.mkdir()
         for filename in ["model-int8-fused.onnx", "tokenizer.json"]:

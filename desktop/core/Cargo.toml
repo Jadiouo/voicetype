@@ -6,6 +6,22 @@ license.workspace = true
 rust-version.workspace = true
 description = "Platform-independent commands for the VoiceType desktop app"
 
+[features]
+default = ["shared-review-in-app"]
+shared-review-in-app = []
+
+[[bin]]
+name = "voicetype-google-editor"
+path = "src/bin/google_editor.rs"
+
+[[bin]]
+name = "voicetype-google-pcm"
+path = "src/bin/google_pcm.rs"
+
+[[bin]]
+name = "voicetype-google-pty-fixture"
+path = "src/bin/google_pty_fixture.rs"
+
 [dependencies]
 voicetype-text = { path = "../text" }
 toml_edit = "0.25.15"
@@ -19,6 +35,9 @@ bzip2 = "0.6"
 tar = "0.4"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["rt", "time", "macros", "net"] }
+portable-pty = "0.9.0"
+anyhow = "1.0.104"
+tracing = "0.1.44"
 
 [target.'cfg(unix)'.dependencies]
 socket2 = { version = "0.6", features = ["all"] }
@@ -27,4 +46,4 @@ socket2 = { version = "0.6", features = ["all"] }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Security"] }

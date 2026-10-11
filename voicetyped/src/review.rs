@@ -88,7 +88,7 @@ impl Collector {
         Self::with_paths(config_path, root)
     }
 
-    fn with_paths(config_path: PathBuf, root: PathBuf) -> Option<Arc<Self>> {
+    pub fn with_paths(config_path: PathBuf, root: PathBuf) -> Option<Arc<Self>> {
         let gate = Arc::new(Gate::default());
         gate.draw
             .store(now().wrapping_mul(1_000_003), Ordering::Relaxed);
@@ -545,7 +545,7 @@ fn persist(root: &Path, config: &Config, sample: &Sample, timestamp: u64) -> Res
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "shared-review-in-app")))]
 mod tests {
     use super::*;
     fn directory() -> PathBuf {

@@ -235,8 +235,10 @@ void VoiceType::pollInputRoute() {
     const bool useApp = route && route->socket != rejectedInputPath_;
     const std::string desired = useApp ? route->socket : "";
     const int pid = useApp ? route->pid : 0;
-    if (desired == appInputPath_ && pid == appInputPid_) return;
+    const bool googleToggle = useApp && route->googleToggle;
+    if (desired == appInputPath_ && pid == appInputPid_ && googleToggle == appGoogleToggle_) return;
     appInputPath_ = desired; appInputPid_ = pid;
+    appGoogleToggle_ = googleToggle;
     appInputReady_ = false;
     appInputDeadline_ = fcitx::now(CLOCK_MONOTONIC) + 1000000;
     connectInput(useApp ? desired : socketPath(), pid);
@@ -262,7 +264,26 @@ std::string VoiceType::learnKeyLabel() const {
 bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
     auto key = event.key();
     const bool learnPress = !event.isRelease() && key.check(learnKey_);
-    if (capsLockGuard_->filter(event, learnPress)) { return true; }
+    const bool googleTogglePress = appGoogleToggle_ && !appInputPath_.empty() &&
+        !event.isRelease() && key.check(fcitx::Key("Control+Caps_Lock"));
+    if (capsLockGuard_->filter(event, learnPress || googleTogglePress)) { return true; }
+    if (googleTogglePress) {
+        auto *ic = event.inputContext();
+        if (!capsLockGuard_->supports(ic)) return true;
+        if (!ic->hasFocus() || isSensitive(ic) || !ipc_ || !ipc_->connected() || !appInputReady_) {
+            return true;
+        }
+        // Only the original target can stop. Final delivery still rechecks
+        // the target in the shared Coordinator.
+        switch (googleToggleAction(true,
+                                   event.rawKey().states().test(fcitx::KeyState::Repeat),
+                                   recording_, deliveryPending_, targetIc_.get() == ic)) {
+        case GoogleToggleAction::Start: startRecording(ic); break;
+        case GoogleToggleAction::Stop: stopRecording(/*cancelled=*/false); break;
+        case GoogleToggleAction::None: break;
+        }
+        return true;
+    }
     if (learnPress) {
         auto *ic = event.inputContext();
         clearFeedback();
@@ -315,6 +336,10 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
         stopRecording(/*cancelled=*/true);
         return true;
     }
+
+    // The routed Google gesture is toggle-only. Ctrl+Alt remains Local's
+    // press/release shortcut and cannot start an unexpected Google session.
+    if (appGoogleToggle_) return false;
 
     if (!event.isRelease()) {
         if (!isCtrlAltPress(key)) {
@@ -423,7 +448,7 @@ void VoiceType::onDaemonMessage(const IpcMessage &msg) {
         IpcMessage reply;
         reply.type = "desktop_hello";
         reply.setSession(msg.session);
-        reply.value = "voicetype.fcitx.v1";
+        reply.value = appGoogleToggle_ ? "voicetype.fcitx.google-toggle.v2" : "voicetype.fcitx.v1";
         if (ipc_->send(reply) && !appInputPath_.empty()) appInputReady_ = true;
         return;
     }

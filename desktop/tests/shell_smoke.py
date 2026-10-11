@@ -172,7 +172,7 @@ def main():
                     engine_socket.unlink()
                 else:
                     assert js("return document.querySelector('#local-availability').textContent.includes('尚未連接')")
-                assert js("return document.querySelector('#google-availability').textContent.includes('尚未連接')")
+                assert js("return document.querySelector('#google-availability').textContent.includes('找不到官方 CLI')")
                 # Exercise the actual vocabulary commands through the installed
                 # webview. Synthetic words only; no live dictionary is accessed.
                 eventually(lambda: js("return !document.querySelector('#vocab-fields').disabled"))

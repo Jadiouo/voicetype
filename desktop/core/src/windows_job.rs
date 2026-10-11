@@ -1,9 +1,18 @@
 //! A private kill-on-close Job Object for any Windows child process tree.
-use std::{io, mem::size_of, os::windows::io::{AsRawHandle, RawHandle}, process::Child};
-use windows_sys::Win32::{Foundation::{CloseHandle, HANDLE}, System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JobObjectExtendedLimitInformation}};
+use std::{
+    io,
+    mem::size_of,
+    os::windows::io::{AsRawHandle, RawHandle},
+    process::Child,
+};
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    },
+};
 
 pub struct WindowsJob(HANDLE);
 // A kernel handle is process-wide and owned exactly once by this RAII wrapper.
@@ -24,14 +33,23 @@ impl WindowsJob {
     /// `process` must be a live, valid process HANDLE throughout this call.
     pub unsafe fn attach_raw_handle(process: RawHandle) -> io::Result<Self> {
         let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() { return Err(io::Error::last_os_error()); }
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
         let job = Self(handle);
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let set = unsafe { SetInformationJobObject(handle, JobObjectExtendedLimitInformation,
-            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32) };
-        if set == 0 { return Err(io::Error::last_os_error()); }
+        let set = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
         if unsafe { AssignProcessToJobObject(handle, process as HANDLE) } == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -40,5 +58,9 @@ impl WindowsJob {
 }
 
 impl Drop for WindowsJob {
-    fn drop(&mut self) { unsafe { CloseHandle(self.0); } }
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
 }

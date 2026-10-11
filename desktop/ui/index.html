@@ -19,7 +19,7 @@
     </aside>
     <main id="recognition">
       <header><span class="eyebrow">語音輸入</span><h1>選擇適合你的辨識方式</h1><p>離線處理，或使用你的 Google 帳號。</p></header>
-      <div class="notice"><strong>開發預覽</strong><p>Linux 可明確啟用本機聽寫。Google 與 Windows 語音仍在整合中；開啟設定不會切換現有語音輸入。</p></div>
+      <div class="notice"><strong>開發預覽</strong><p>Linux 可明確載入本機或 Google 引擎；Google 真實帳號、麥克風與送字仍需候選版驗收。Windows 語音仍在整合中。開啟設定不會切換現有語音輸入。</p></div>
       <div id="error" class="error" role="alert" hidden></div>
       <fieldset id="providers" disabled>
         <legend class="sr-only">辨識方式</legend>
@@ -51,6 +51,13 @@
         <p class="model-note">模型完成後，先載入引擎，再啟用本機聽寫。Linux 需安裝本版 Fcitx 模組並重新登入桌面。</p>
         <div class="model-actions"><button id="load-local-runtime" type="button" disabled>載入本機引擎</button><button id="enable-local-input" type="button" disabled>啟用本機聽寫</button><button id="unload-local-runtime" type="button" hidden>停用並卸載引擎</button></div>
         <p id="runtime-note">正在讀取引擎封裝狀態…</p>
+        <div id="google-runtime-setup">
+          <h3>Google 官方語音</h3>
+          <p>請依官方說明安裝 Antigravity CLI，並以自己的 Google 帳號登入。選擇 Google 只儲存偏好；按「載入」後才檢查官方 CLI、登入與空草稿，仍不會開始錄音。</p>
+          <div class="model-actions"><button id="load-google-runtime" type="button" disabled>載入 Google 引擎</button><button id="unload-google-runtime" type="button" hidden>停用並卸載 Google 引擎</button></div>
+          <p id="google-runtime-note" role="status" aria-live="polite">正在檢查官方 CLI 安裝。</p>
+          <p>Google 預設使用 Ctrl＋CapsLock：按一次開始，再按一次停止；Esc 取消。既有 Google 輸入法若同時啟用此鍵，App 會拒絕接管，避免同時錄音。</p>
+        </div>
         <div id="input-module-setup" hidden>
           <h3>Linux 輸入法模組</h3>
           <p>請先將桌面輸入法設為 Fcitx5。首次使用需安裝模組並重新登入；原設定會保留備份，安裝本身不會接管快捷鍵。</p>

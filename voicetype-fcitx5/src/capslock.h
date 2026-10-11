@@ -44,6 +44,7 @@ public:
     // release or a repeat of the already-armed shortcut (no second learning).
     bool filter(fcitx::KeyEvent &event, bool shortcutPress);
     bool enabled() const;
+    bool supports(const fcitx::InputContext *ic) const;
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
