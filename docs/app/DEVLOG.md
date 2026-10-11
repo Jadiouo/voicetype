@@ -823,3 +823,7 @@ App 已推送 `59150e5`、`eca98be`、`3f816a2`。失敗診斷只使用固定合
 Windows checkout 自動換行曾破壞固定來源／notice 雜湊，已對指定輸入固定 LF；Windows runtime 的解壓來源套用 patch 也以明確 Git 設定保留 LF，未更換預期雜湊。Windows 分支第二輪 Linux 建置已通過原生 CPU runtime 與 Rust notices，但 App 編譯揭露平台條件分支語法錯誤，正修正重跑；尚未取得該候選的安裝成功證據。
 
 Google App 接線已推送 `2ada6f0`、`a5838a1`，錄音事件處理中的慢速完整性檢查已移出，獨立複查的阻塞與清理問題已關閉。其 Linux CI 已通過核心命令測試及 Google helper 建置，仍待原生快捷鍵、安裝與 UI 結果。Windows PE 清單與移除系統 UCRT 副本的候選另行短審；未將來源完整旗標改為通過。上述皆未替代真人錄音、跨應用送字或日常服務遷移驗收，PR 繼續保持草稿。
+
+後續 `04a35f3`、`f6cd75b` 已提交上述 PE 清單及模型分層診斷。[run 38126833695](https://github.com/Jadiouo/voicetype/actions/runs/38126833695) 在 AMD EPYC 7763 上，同一 tokenizer／輸入與 ONNX Runtime 下，原始、基本最佳化、融合後浮點模型皆產生正確候選（機率 0.987453），QInt8 的來源 Python 與封裝執行檔卻同樣失敗（期望字機率 0.000214）。問題因此定位到目前量化模型的執行結果，具體指令機制尚待對照；不再增加等待或放寬信心門檻。本機 U8U8 候選與原基線在公開合成測例 48 次執行的輸出、修改與狀態逐項相同，兩者皆 40/48 符合預期；這不是完整語音品質驗收，候選仍待失敗平台實測。
+
+同輪 Windows 已確認移除 44 個系統 UCRT 副本後，實際封裝校正器仍能啟動，固定句於第 1 次、9ms 改字成功。後續安裝建置在 Rust 依賴 notice 缺漏停止，尚未取得去 UCRT 新版 NSIS 安裝證據。已盤點 Windows App／daemon 合計 352 個依賴，缺漏集中於三個 WebView2 同源套件，接續補確切上游授權來源。Windows Nano 原生建置則已跨過來源雜湊檢查，正在修正 pinned Sherpa CMake 的 CPU DLL／import library 對應，仍須真正 MSVC 建置核對。
