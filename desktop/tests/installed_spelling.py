@@ -44,6 +44,9 @@ def verify(installation, expected_path):
         origin_pe = {entry["path"] for entry in origins["binaries"]}
         assert actual_pe == origin_pe, "Installed Windows PE set differs from origin catalog"
         assert len(origin_pe) == len(origins["binaries"]), "Duplicate Windows PE origin"
+        source_catalog = root / "provenance/windows-pe-sources.json"
+        assert source_catalog.is_file() and "provenance/windows-pe-sources.json" in names
+        assert hashlib.sha256(source_catalog.read_bytes()).hexdigest() == origins["source_catalog_sha256"]
         excluded = origins.get("excluded_os_binaries", [])
         assert len({entry["path"] for entry in excluded}) == len(excluded), "Duplicate Windows OS exclusion"
         for entry in excluded:
@@ -55,8 +58,17 @@ def verify(installation, expected_path):
             assert entry.get("bytes") == member.stat().st_size, entry["path"]
             with member.open("rb") as stream:
                 assert entry.get("sha256") == hashlib.file_digest(stream, "sha256").hexdigest(), entry["path"]
+            if "source_member_sha256" in entry:
+                assert entry["source_member_sha256"] == entry["sha256"], entry["path"]
+                assert hashlib.sha256((root / entry["notice"]).read_bytes()).hexdigest() == entry["notice_sha256"], entry["path"]
             if origins["complete"]:
                 assert entry.get("source_artifact") and entry.get("source_sha256") and entry.get("notice"), entry["path"]
+        assert origins["source_catalog_matches"] == sum(
+            "source_member_sha256" in entry for entry in origins["binaries"])
+        assert set(origins["source_catalog_pending_paths"]) == {
+            entry["path"] for entry in origins["binaries"]
+            if "source_artifact" not in entry
+        }
     for entry in origins["binaries"]:
         if "notice" in entry:
             assert entry["notice"] in names and (root / entry["notice"]).is_file(), entry["path"]

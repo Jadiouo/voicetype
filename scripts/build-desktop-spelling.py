@@ -83,6 +83,8 @@ PYINSTALLER_WINDOWS_WHEEL_URL = (
 PYINSTALLER_WINDOWS_WHEEL_SHA256 = "500bd58c7bf7e584a8435adccbd763a0b918d5c12b08d74ff50fd79b2915458b"
 PYINSTALLER_WINDOWS_BOOTLOADER_MEMBER = "PyInstaller/bootloader/Windows-64bit-intel/run.exe"
 PYINSTALLER_WINDOWS_BOOTLOADER_SHA256 = "581ea23eb35cee8f9df8835c892e91416df95ca629b1a6050289aea19390e08d"
+WINDOWS_PE_SOURCES = ROOT / "config/csc-windows-pe-sources.json"
+WINDOWS_MSVC_LICENSE = ROOT / "config/csc-windows-msvc-license-14.51.36231.rtf"
 
 
 def run(*args):
@@ -236,6 +238,43 @@ def remove_windows_os_ucrt(bundle):
     return removed
 
 
+def windows_pe_source_records():
+    """Expand exact archive members; a filename or package family alone proves nothing."""
+    catalog = json.loads(WINDOWS_PE_SOURCES.read_text(encoding="utf-8"))
+    if catalog.get("schema_version") != 1:
+        raise RuntimeError("Windows PE source catalog schema differs")
+    records = {}
+    for archive in catalog["archives"]:
+        for binary in archive["binaries"]:
+            path = binary["path"]
+            if path in records or not path.startswith("_internal/") or ".." in Path(path).parts:
+                raise RuntimeError("duplicate or unsafe Windows PE source path: " + path)
+            records[path] = dict(origin="pinned Windows source archive member",
+                                 source_artifact=archive["source_url"],
+                                 source_sha256=archive["source_sha256"],
+                                 source_member=binary["source_member"],
+                                 source_member_sha256=binary["sha256"],
+                                 notice=archive["notice"],
+                                 notice_sha256=archive["notice_sha256"],
+                                 **({"notice_source_member": archive["notice_source_member"]}
+                                    if "notice_source_member" in archive else
+                                    {"notice_source_url": archive["notice_source_url"]}))
+    msvc = catalog["msvc_runtime"]
+    if msvc["path"] in records:
+        raise RuntimeError("duplicate Windows MSVC runtime source path")
+    records[msvc["path"]] = dict(origin="Microsoft Visual C++ runtime redistributable",
+                                source_artifact=msvc["source_artifact"],
+                                source_sha256=msvc["source_sha256"],
+                                source_container_member=msvc["source_container_member"],
+                                source_container_sha256=msvc["source_container_sha256"],
+                                source_member=msvc["source_member"],
+                                source_member_sha256=msvc["sha256"],
+                                notice=msvc["notice"],
+                                notice_source_member=msvc["notice_source_member"],
+                                notice_sha256=msvc["notice_sha256"])
+    return catalog, records
+
+
 def binary_origins(bundle, excluded_os_binaries=(), generated_windows_executable=None):
     """Account for frozen native libraries; fail Linux builds on unknown copies."""
     internal = bundle / "_internal"
@@ -302,19 +341,39 @@ def binary_origins(bundle, excluded_os_binaries=(), generated_windows_executable
                             notice=notice_for("pyinstaller")))
     else:
         # An executable or renamed module is as much a distributed PE as a
-        # .dll/.pyd. Keep the incomplete catalog exact until source artifacts
-        # and their redistribution notices are independently established.
+        # .dll/.pyd. Historical source candidates must match actual bytes and
+        # the shipped notice; unknown copies remain visibly unresolved.
+        _, source_records = windows_pe_source_records()
+        matched = 0
+        pending = []
         for binary in sorted(path for path in bundle.rglob("*") if path.is_file() and is_pe(path)):
             relative = binary.relative_to(bundle).as_posix()
+            actual_sha256 = digest(binary)
             if relative == "voicetype-csc.exe" and generated_windows_executable is not None:
                 if (generated_windows_executable["path"] != relative
-                        or generated_windows_executable["sha256"] != digest(binary)
+                        or generated_windows_executable["sha256"] != actual_sha256
                         or generated_windows_executable["bytes"] != binary.stat().st_size):
                     raise RuntimeError("generated Windows executable origin differs from bundle")
                 records.append(generated_windows_executable)
             else:
-                records.append(dict(path=relative, bytes=binary.stat().st_size, sha256=digest(binary),
-                                    origin="Windows native binary; license audit pending"))
+                source = source_records.get(relative)
+                if source is not None and source["source_member_sha256"] == actual_sha256:
+                    notice = bundle / source["notice"]
+                    if not notice.is_file() or digest(notice) != source["notice_sha256"]:
+                        raise RuntimeError("Windows PE notice differs from pinned source: " + relative)
+                    records.append(dict(path=relative, bytes=binary.stat().st_size,
+                                        sha256=actual_sha256, **source))
+                    matched += 1
+                else:
+                    pending.append(relative)
+                    records.append(dict(path=relative, bytes=binary.stat().st_size,
+                                        sha256=actual_sha256,
+                                        origin="Windows native binary; source/notice audit pending"))
+        return dict(complete=False, binaries=records,
+                    excluded_os_binaries=list(excluded_os_binaries),
+                    source_catalog_sha256=digest(WINDOWS_PE_SOURCES),
+                    source_catalog_matches=matched,
+                    source_catalog_pending_paths=pending)
     return dict(complete=sys.platform == "linux", binaries=records,
                 excluded_os_binaries=list(excluded_os_binaries))
 
@@ -369,6 +428,12 @@ def main():
         versions = notices(bundle / "licenses")
         generated = None
         if sys.platform == "win32":
+            catalog, _ = windows_pe_source_records()
+            if digest(WINDOWS_MSVC_LICENSE) != catalog["msvc_runtime"]["notice_sha256"]:
+                raise RuntimeError("pinned Microsoft runtime license differs from source")
+            msvc_notice = bundle / catalog["msvc_runtime"]["notice"]
+            msvc_notice.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(WINDOWS_MSVC_LICENSE, msvc_notice)
             bootloader = Path(metadata.distribution("pyinstaller").locate_file(
                 PYINSTALLER_WINDOWS_BOOTLOADER_MEMBER))
             if not bootloader.is_file():
@@ -389,6 +454,7 @@ def main():
             shutil.copyfile(work / "voicetype-csc.spec", provenance / "pyinstaller.spec")
             if digest(provenance / "pyinstaller.spec") != generated["spec_sha256"]:
                 raise RuntimeError("stored PyInstaller spec differs from generated executable recipe")
+            shutil.copyfile(WINDOWS_PE_SOURCES, provenance / "windows-pe-sources.json")
         shutil.copyfile(prepared / "prepared.json", provenance / "model.json")
         shutil.copyfile(ROOT / "scripts/prepare_csc.py", provenance / "prepare_csc.py")
         shutil.copyfile(ROOT / "config/csc-requirements.txt", provenance / "requirements.txt")
