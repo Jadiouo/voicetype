@@ -201,6 +201,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Actual NSIS plugin or installed notice audit failed' }
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
+        id: artifact_manifest
         run: python tests/artifact_manifest.py
       - name: Install native UI driver
         run: cargo install tauri-driver --version 2.1.0 --locked
@@ -227,6 +228,7 @@ jobs:
           retention-days: 14
           path: desktop/target/shell-evidence/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.artifact_manifest.outcome == 'success' }}
         with:
           name: voicetype-preview-${{ matrix.os }}
           if-no-files-found: error
