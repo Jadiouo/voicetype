@@ -1,0 +1,5 @@
+# Pinned native source hashes and the applied patch must keep repository bytes
+# on Windows checkouts, even when core.autocrlf is enabled globally.
+desktop/assets/linux-native-sources.json text eol=lf
+desktop/assets/windows-native-sources.json text eol=lf
+patches/sherpa-onnx-1.13.8-nano-integrity.patch text eol=lf
