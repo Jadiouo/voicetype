@@ -881,3 +881,9 @@ ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前
 已審的 `/D=` 修正以隔離 ref 跑 [升級 run 38136716931](https://github.com/Jadiouo/voicetype/actions/runs/38136716931)：同兩版固定來源、雜湊、PE 版號與**舊版 NSIS 真安裝**均通過，已安裝 App EXE／registry 也匹配舊版，先前缺檔問題關閉；但第一個公開 App 命令 `set_spelling_enabled` 經 native WebDriver async endpoint 回 HTTP 500。原 harness 未保存 HTTP 回覆 body，這次仍是 `phases=[]`，沒有開始升級／資料保留。只增加 HTTP 失敗原始回覆的有界 evidence 保存，原命令、60 秒 timeout 與斷言不變；已從隔離 ref 用同一對 faa 實包再派 [run 38137258982](https://github.com/Jadiouo/voicetype/actions/runs/38137258982) 取得確切原因，不先猜 endpoint 或放寬測試。
 
 該 [38137258982](https://github.com/Jadiouo/voicetype/actions/runs/38137258982) 的 HTTP 500 沒有重現，舊版已安裝 App 的公開命令與合成個人資料讀寫走過；接著嚴格隔離檢查發現 Windows 真 `LocalApplicationData/io.github.jadiouo.voicetype.preview` 從不存在變為存在，故仍失敗於舊版階段、`phases=[]`。目前未取得該新目錄的檔案類型，不能斷定是五類個資還是 Tauri／WebView 快取；不刪外部目錄、不放寬隔離斷言，也不把這輪當跨版本資料保留通過。下一步只記有界檔案樹與原本指定在 repo 內的 WebView 資料夾狀態，再針對實際寫入來源修正。
+
+### 同日進展：已安裝快捷鍵與升級隔離路徑的真實回饋
+
+`f310801` 的 [preview run 38137750986](https://github.com/Jadiouo/voicetype/actions/runs/38137750986) 在 Windows 真 NSIS 安裝後通過 24 項 UI 操作，新增情境確認 Local／Google 分別保存 F9 要求、重啟後讀回，再恢復預設；狀態仍明示按鍵「尚未確認有效」，本輪沒有注入真鍵或驗證 TSF／麥克風。Linux 同一新增情境在 Local F9 保存成功後，切到 Google 再選 F9 時，30 秒內磁碟要求值未更新；目前 log 未顯示是 WebDriver 選項變更事件、App 命令或產品拒絕哪一層。經獨立短審的下一候選只在原逾時失敗時保存限長、無轉錄的 UI 狀態、設定值與截圖，原判定和時限不變，仍待 hosted 復驗。
+
+隔離的 [升級 run 38138065457](https://github.com/Jadiouo/voicetype/actions/runs/38138065457) 證實舊 App 只在 OS LocalAppData 預建一個空的產品目錄，沒有子檔；原期待的 repo 內 WebView 資料夾當時不存在。釘版 WebDriver 的 session 原先沒有指定 UDF，[Microsoft 的 WebView2 WebDriver 規格](https://learn.microsoft.com/en-us/microsoft-edge/webdriver/capabilities-edge-options) 說這時會另建臨時資料夾。加上明確 repo UDF 後，[run 38138783747](https://github.com/Jadiouo/voicetype/actions/runs/38138783747) 看見所要求的 repo 目錄已建立，但 WebView2 session 未回報 `msedge.userDataDir`，新嚴格核對在舊版公開命令前失敗。這不等於已證實瀏覽資料落點；下一步要在 App 運行時限定該 driver／App 的 WebView2 子程序、核實際 `--user-data-dir`，原 OS 目錄斷言仍保留。兩輪都未進入新版安裝、資料保留與回復，不能宣稱升級通過。
