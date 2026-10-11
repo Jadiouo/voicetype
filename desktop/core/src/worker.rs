@@ -267,13 +267,17 @@ impl DesktopWorker {
         mut paths: crate::windows_engine::EnginePaths,
     ) -> Result<DesktopSnapshot, String> {
         self.call(move |desktop| {
-            if desktop.app()?.snapshot().dictation.busy { return Err(AppError::DictationBusy.to_string()); }
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
             if desktop.app()?.snapshot().selected_provider != Provider::Local {
                 return Err("請先選擇本機離線辨識".into());
             }
             if desktop.windows_local.is_none() {
                 let spelling_enabled = desktop.app()?.snapshot().spelling_enabled;
-                if !spelling_enabled { paths.spelling = None; }
+                if !spelling_enabled {
+                    paths.spelling = None;
+                }
                 let spelling_requested = paths.spelling.is_some();
                 let engine = match crate::windows_engine::WindowsEngine::start(paths) {
                     Ok(engine) => engine,
@@ -281,7 +285,9 @@ impl DesktopWorker {
                         desktop.local_status = LocalRuntimeStatus::Failed;
                         desktop.spelling_status = if spelling_enabled {
                             SpellingRuntimeStatus::Unavailable
-                        } else { SpellingRuntimeStatus::Disabled };
+                        } else {
+                            SpellingRuntimeStatus::Disabled
+                        };
                         return Err("無法啟動 Windows 本機引擎或核對協定".into());
                     }
                 };
@@ -292,7 +298,11 @@ impl DesktopWorker {
                 } else {
                     SpellingRuntimeStatus::Unavailable
                 };
-                desktop.windows_local = Some(WindowsLocal { engine, input: None, active: None });
+                desktop.windows_local = Some(WindowsLocal {
+                    engine,
+                    input: None,
+                    active: None,
+                });
                 desktop.local_status = LocalRuntimeStatus::WaitingForInput;
             }
             desktop.snapshot()
@@ -302,11 +312,15 @@ impl DesktopWorker {
     #[cfg(windows)]
     pub fn enable_windows_input(&self) -> Result<DesktopSnapshot, String> {
         self.call(|desktop| {
-            if desktop.app()?.snapshot().dictation.busy { return Err(AppError::DictationBusy.to_string()); }
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
             let local = desktop.windows_local.as_mut().ok_or("請先載入本機引擎")?;
             if local.input.is_none() {
-                local.input = Some(crate::windows_input::WindowsInput::start()
-                    .map_err(|_| "無法註冊 Ctrl＋CapsLock 快捷鍵".to_string())?);
+                local.input = Some(
+                    crate::windows_input::WindowsInput::start()
+                        .map_err(|_| "無法註冊 Ctrl＋CapsLock 快捷鍵".to_string())?,
+                );
             }
             desktop.local_status = LocalRuntimeStatus::Ready;
             desktop.snapshot()
@@ -394,7 +408,9 @@ impl DesktopWorker {
             }
             #[cfg(windows)]
             if let (Some(local), Ok(app)) = (&mut desktop.windows_local, &mut desktop.app) {
-                if local.active.is_some() { let _ = app.cancel_dictation(&mut local.engine); }
+                if local.active.is_some() {
+                    let _ = app.cancel_dictation(&mut local.engine);
+                }
             }
             desktop.snapshot()
         })
@@ -464,9 +480,15 @@ impl Desktop {
                 #[cfg(not(target_os = "linux"))]
                 {
                     #[cfg(windows)]
-                    { self.windows_local.as_ref().is_some_and(|local| local.input.is_some()) }
+                    {
+                        self.windows_local
+                            .as_ref()
+                            .is_some_and(|local| local.input.is_some())
+                    }
                     #[cfg(not(windows))]
-                    { false }
+                    {
+                        false
+                    }
                 }
             },
         })
@@ -475,7 +497,9 @@ impl Desktop {
         #[cfg(windows)]
         if let Some(local) = self.windows_local.as_mut() {
             let app = self.app.as_mut().map_err(|e| e.to_string())?;
-            local.shutdown(app).map_err(|_| "本機引擎尚未確認停止，請稍後再試".to_string())?;
+            local
+                .shutdown(app)
+                .map_err(|_| "本機引擎尚未確認停止，請稍後再試".to_string())?;
             self.windows_local = None;
         }
         #[cfg(target_os = "linux")]
@@ -493,12 +517,25 @@ impl Desktop {
     fn poll(&mut self) {
         #[cfg(windows)]
         if let (Some(local), Ok(app)) = (&mut self.windows_local, &mut self.app) {
-            if local.poll(app).is_err() {
+            if local.poll(app).is_ok() {
+                if matches!(
+                    self.spelling_status,
+                    SpellingRuntimeStatus::Ready | SpellingRuntimeStatus::Unavailable
+                ) {
+                    self.spelling_status = if local.engine.spelling_ready() {
+                        SpellingRuntimeStatus::Ready
+                    } else {
+                        SpellingRuntimeStatus::Unavailable
+                    };
+                }
+            } else {
                 self.local_status = LocalRuntimeStatus::Failed;
                 if self.spelling_status == SpellingRuntimeStatus::Ready {
                     self.spelling_status = SpellingRuntimeStatus::Unavailable;
                 }
-                if local.shutdown(app).is_ok() { self.windows_local = None; }
+                if local.shutdown(app).is_ok() {
+                    self.windows_local = None;
+                }
             }
         }
         #[cfg(target_os = "linux")]
@@ -538,7 +575,11 @@ struct WindowsLocal {
 struct WindowsRecovery;
 #[cfg(windows)]
 impl crate::DeliveryPort for WindowsRecovery {
-    fn commit_if_focused(&mut self, target: &crate::TargetLease, _text: &str) -> crate::DeliveryOutcome {
+    fn commit_if_focused(
+        &mut self,
+        target: &crate::TargetLease,
+        _text: &str,
+    ) -> crate::DeliveryOutcome {
         if crate::windows_input::focus_matches(target) {
             // This recovery-only adapter has not attempted any insertion.
             crate::DeliveryOutcome::NotSent
@@ -554,19 +595,25 @@ impl WindowsLocal {
         if let Some(input) = &self.input {
             input.set_session_active(self.active.is_some());
             for _ in 0..16 {
-                let Some(event) = input.poll() else { break; };
+                let Some(event) = input.poll() else {
+                    break;
+                };
                 match event {
                     crate::windows_input::InputEvent::Start(target) if self.active.is_none() => {
                         if let Ok(key) = app.start_dictation(target, &mut self.engine) {
                             self.active = Some(key);
                             input.set_session_active(true);
+                        } else {
+                            input.reject_start();
                         }
                     }
                     crate::windows_input::InputEvent::Stop if self.active.is_some() => {
-                        app.stop_dictation(&mut self.engine).map_err(io::Error::other)?;
+                        app.stop_dictation(&mut self.engine)
+                            .map_err(io::Error::other)?;
                     }
                     crate::windows_input::InputEvent::Cancel if self.active.is_some() => {
-                        app.cancel_dictation(&mut self.engine).map_err(io::Error::other)?;
+                        app.cancel_dictation(&mut self.engine)
+                            .map_err(io::Error::other)?;
                     }
                     _ => {}
                 }
@@ -578,15 +625,21 @@ impl WindowsLocal {
         if let Some((key, event)) = self.engine.poll_event()? {
             let released = matches!(event, crate::ProviderEvent::Released);
             app.provider_event(key, event, &mut WindowsRecovery);
-            if released && self.active == Some(key) { self.active = None; }
+            if released && self.active == Some(key) {
+                self.active = None;
+            }
         }
-        if let Some(input) = &self.input { input.set_session_active(self.active.is_some()); }
+        if let Some(input) = &self.input {
+            input.set_session_active(self.active.is_some());
+        }
         Ok(())
     }
 
     fn shutdown(&mut self, app: &mut Application) -> io::Result<()> {
         self.input.take();
-        if self.active.is_some() { let _ = app.cancel_dictation(&mut self.engine); }
+        if self.active.is_some() {
+            let _ = app.cancel_dictation(&mut self.engine);
+        }
         self.engine.shutdown()?;
         if let Some(key) = self.active.take() {
             app.provider_event(key, crate::ProviderEvent::Released, &mut WindowsRecovery);

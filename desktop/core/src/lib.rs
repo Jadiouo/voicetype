@@ -24,6 +24,8 @@ pub mod worker;
 pub mod windows_engine;
 #[cfg(windows)]
 pub mod windows_input;
+#[cfg(any(test, windows))]
+mod windows_gesture;
 #[cfg(windows)]
 pub mod windows_job;
 pub use dictation::{
