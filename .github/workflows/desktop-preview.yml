@@ -54,7 +54,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11 fonts-noto-cjk libasound2-dev libopencc-dev cmake ninja-build extra-cmake-modules libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev fcitx5-modules-dev libxcb-xkb-dev libxcb-ewmh-dev fcitx5
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11 fonts-noto-cjk libasound2-dev libopencc-dev cmake ninja-build extra-cmake-modules libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev fcitx5-modules-dev libxcb-xkb-dev libxcb-ewmh-dev libxtst-dev fcitx5
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: desktop
@@ -83,7 +83,8 @@ jobs:
           bash ../scripts/build-desktop-runtime.sh ../private/release-native target/runtime --source-built
           python3 ../scripts/build-desktop-input.py target/input
           cmake -S ../voicetype-fcitx5 -B target/input-tests -DFCITX_INSTALL_USE_FCITX_SYS_PATHS=ON
-          cmake --build target/input-tests --target test_app_frontend -j 2
+          cmake --build target/input-tests --target test_app_frontend test_capslock_x11 -j 2
+          ctest --test-dir target/input-tests --output-on-failure -R '^capslock_native_x11(_remapped)?$'
           VOICETYPE_TEST_FCITX="$PWD/target/input-tests/tests/test_app_frontend" VOICETYPE_TEST_INPUT_BUNDLE="$PWD/target/input" cargo test -p voicetype-app-core --test local_runtime installed_fcitx --locked -- --ignored
       - name: Catalog locked Rust graph and native notices
         shell: bash
