@@ -9,6 +9,8 @@ spelling_origins = Path("target/spelling/provenance/binary-origins.json")
 rust_notices = Path("target/rust-notices/manifest.json")
 installer_pe = Path("target/installer-pe-audit.json")
 installer_status = json.loads(installer_pe.read_text()) if os.name == "nt" and installer_pe.is_file() else {}
+distribution_pe = Path("target/windows-pe-provenance.json")
+distribution_status = json.loads(distribution_pe.read_text()) if os.name == "nt" and distribution_pe.is_file() else {}
 files = sorted(root.glob("deb/*.deb")) + sorted(root.glob("nsis/*-setup.exe"))
 if not files:
     raise SystemExit("No installer was produced")
@@ -24,7 +26,8 @@ report = {
     "rust_target_notices_complete": json.loads(rust_notices.read_text())["complete"] if rust_notices.is_file() else False,
     "windows_installer_plugins_verified": bool(installer_status.get("plugins_verified") and
                                                 installer_status.get("installed_notices_verified")),
-    "windows_pe_provenance_complete": False,
+    "windows_pe_provenance_complete": distribution_status.get("complete") is True,
+    "msvc_redistribution_eligibility": distribution_status.get("msvc_redistribution_eligibility", "not_assessed"),
     "fcitx_input_bundled": Path("target/input/manifest.json").is_file(),
     "end_to_end_dictation_verified": False,
     "artifacts": [

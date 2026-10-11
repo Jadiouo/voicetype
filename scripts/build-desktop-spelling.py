@@ -259,6 +259,16 @@ def windows_pe_source_records():
                                  **({"notice_source_member": archive["notice_source_member"]}
                                     if "notice_source_member" in archive else
                                     {"notice_source_url": archive["notice_source_url"]}))
+    numpy_msvc = catalog["msvc_numpy_runtime"]
+    paths = numpy_msvc["paths"]
+    if len(paths) != 2 or len(set(paths)) != 2:
+        raise RuntimeError("NumPy Microsoft runtime paths differ")
+    for path in paths:
+        if path not in records or records[path]["source_member_sha256"] != numpy_msvc["sha256"]:
+            raise RuntimeError("NumPy Microsoft runtime differs from official source: " + path)
+        records[path]["microsoft_runtime_source"] = {
+            key: value for key, value in numpy_msvc.items() if key != "paths"
+        }
     msvc = catalog["msvc_runtime"]
     if msvc["path"] in records:
         raise RuntimeError("duplicate Windows MSVC runtime source path")
@@ -346,21 +356,32 @@ def binary_origins(bundle, excluded_os_binaries=(), generated_windows_executable
         _, source_records = windows_pe_source_records()
         matched = 0
         pending = []
+        observed = set()
         for binary in sorted(path for path in bundle.rglob("*") if path.is_file() and is_pe(path)):
             relative = binary.relative_to(bundle).as_posix()
+            observed.add(relative)
             actual_sha256 = digest(binary)
             if relative == "voicetype-csc.exe" and generated_windows_executable is not None:
                 if (generated_windows_executable["path"] != relative
                         or generated_windows_executable["sha256"] != actual_sha256
                         or generated_windows_executable["bytes"] != binary.stat().st_size):
                     raise RuntimeError("generated Windows executable origin differs from bundle")
-                records.append(generated_windows_executable)
+                notice = bundle / generated_windows_executable["notice"]
+                if not notice.is_file():
+                    raise RuntimeError("generated Windows executable notice missing")
+                records.append(dict(generated_windows_executable, notice_sha256=digest(notice)))
             else:
                 source = source_records.get(relative)
                 if source is not None and source["source_member_sha256"] == actual_sha256:
                     notice = bundle / source["notice"]
                     if not notice.is_file() or digest(notice) != source["notice_sha256"]:
                         raise RuntimeError("Windows PE notice differs from pinned source: " + relative)
+                    microsoft = source.get("microsoft_runtime_source")
+                    if microsoft is not None:
+                        official_notice = bundle / microsoft["notice"]
+                        if (microsoft["sha256"] != actual_sha256 or not official_notice.is_file()
+                                or digest(official_notice) != microsoft["notice_sha256"]):
+                            raise RuntimeError("Microsoft runtime source/notice differs: " + relative)
                     records.append(dict(path=relative, bytes=binary.stat().st_size,
                                         sha256=actual_sha256, **source))
                     matched += 1
@@ -369,11 +390,16 @@ def binary_origins(bundle, excluded_os_binaries=(), generated_windows_executable
                     records.append(dict(path=relative, bytes=binary.stat().st_size,
                                         sha256=actual_sha256,
                                         origin="Windows native binary; source/notice audit pending"))
-        return dict(complete=False, binaries=records,
+        missing = sorted(set(source_records) - observed)
+        complete = (not pending and not missing and generated_windows_executable is not None
+                    and observed == set(source_records) | {"voicetype-csc.exe"})
+        return dict(complete=complete, binaries=records,
+                    msvc_redistribution_eligibility="not_assessed",
                     excluded_os_binaries=list(excluded_os_binaries),
                     source_catalog_sha256=digest(WINDOWS_PE_SOURCES),
                     source_catalog_matches=matched,
-                    source_catalog_pending_paths=pending)
+                    source_catalog_pending_paths=pending,
+                    source_catalog_missing_paths=missing)
     return dict(complete=sys.platform == "linux", binaries=records,
                 excluded_os_binaries=list(excluded_os_binaries))
 
@@ -429,7 +455,8 @@ def main():
         generated = None
         if sys.platform == "win32":
             catalog, _ = windows_pe_source_records()
-            if digest(WINDOWS_MSVC_LICENSE) != catalog["msvc_runtime"]["notice_sha256"]:
+            if (digest(WINDOWS_MSVC_LICENSE) != catalog["msvc_runtime"]["notice_sha256"]
+                    or digest(WINDOWS_MSVC_LICENSE) != catalog["msvc_numpy_runtime"]["notice_sha256"]):
                 raise RuntimeError("pinned Microsoft runtime license differs from source")
             msvc_notice = bundle / catalog["msvc_runtime"]["notice"]
             msvc_notice.parent.mkdir(parents=True, exist_ok=True)

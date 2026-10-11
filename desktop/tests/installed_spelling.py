@@ -61,6 +61,11 @@ def verify(installation, expected_path):
             if "source_member_sha256" in entry:
                 assert entry["source_member_sha256"] == entry["sha256"], entry["path"]
                 assert hashlib.sha256((root / entry["notice"]).read_bytes()).hexdigest() == entry["notice_sha256"], entry["path"]
+            if "microsoft_runtime_source" in entry:
+                official = entry["microsoft_runtime_source"]
+                assert official["sha256"] == entry["sha256"], entry["path"]
+                assert official["source_artifact"] and official["source_sha256"] and official["source_member"], entry["path"]
+                assert hashlib.sha256((root / official["notice"]).read_bytes()).hexdigest() == official["notice_sha256"], entry["path"]
             if origins["complete"]:
                 assert entry.get("source_artifact") and entry.get("source_sha256") and entry.get("notice"), entry["path"]
         assert origins["source_catalog_matches"] == sum(
@@ -69,9 +74,13 @@ def verify(installation, expected_path):
             entry["path"] for entry in origins["binaries"]
             if "source_artifact" not in entry
         }
+        if origins["complete"]:
+            assert not origins.get("source_catalog_missing_paths"), "Complete CSC source catalog has missing PE"
     for entry in origins["binaries"]:
         if "notice" in entry:
             assert entry["notice"] in names and (root / entry["notice"]).is_file(), entry["path"]
+            if "notice_sha256" in entry:
+                assert hashlib.sha256((root / entry["notice"]).read_bytes()).hexdigest() == entry["notice_sha256"], entry["path"]
     print(f"PASS: {len(names)} installed CSC members, model and CPU runtime; native notices complete={origins['complete']}")
 
 

@@ -269,6 +269,21 @@
       ]
     }
   ],
+  "msvc_numpy_runtime": {
+    "paths": [
+      "_internal/msvcp140.dll",
+      "_internal/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll"
+    ],
+    "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde",
+    "source_artifact": "https://aka.ms/vs/17/release/14.40.33810/VC_redist.x64.exe",
+    "source_sha256": "3642e3f95d50cc193e4b5a0b0ffbf7fe2c08801517758b4c8aeb7105a091208a",
+    "source_container_member": "a12",
+    "source_container_sha256": "8fafd6d0754ee53125902df1b67ef2db86eb7af4c097522f2fb58443501fecdd",
+    "source_member": "msvcp140.dll_amd64",
+    "notice": "licenses/msvc/00-License.rtf",
+    "notice_source_member": "u4",
+    "notice_sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b"
+  },
   "msvc_runtime": {
     "path": "_internal/MSVCP140_1.dll",
     "sha256": "456aebccb449fcba35f1109c259ba0aa10923e660f4de812a490d35f37f54fc9",

@@ -3,7 +3,7 @@ name: Desktop preview
 on:
   push:
     branches: [main, feat/desktop-app, feat/windows-dictation-work]
-    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "config/rust-vendor-sources.json", "scripts/build-desktop-*", "scripts/catalog-windows-installer-pe.py", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
+    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "config/rust-vendor-sources.json", "scripts/build-desktop-*", "scripts/catalog-windows-installer-pe.py", "scripts/catalog-windows-pe-distribution.py", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
     inputs:
       upgrade_new_run_id:
@@ -199,6 +199,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'NSIS extraction failed' }
           python ../scripts/catalog-windows-installer-pe.py verify "$extracted" target/installer-notices/plugin-origins.json $installer.FullName target/installer-pe-audit.json --installed "$destination"
           if ($LASTEXITCODE -ne 0) { throw 'Actual NSIS plugin or installed notice audit failed' }
+          python tests/windows_pe_distribution_test.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PE aggregate regression failed' }
+          python ../scripts/catalog-windows-pe-distribution.py "$extracted" "$destination" $installer.FullName target target/windows-pe-provenance.json
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PE aggregate could not record evidence' }
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
         id: artifact_manifest
@@ -243,8 +247,10 @@ jobs:
             desktop/target/windows-native/build-provenance.json
             desktop/target/spelling/manifest.json
             desktop/target/spelling/provenance/binary-origins.json
+            desktop/target/google/manifest.json
             desktop/target/installer-notices/plugin-origins.json
             desktop/target/installer-pe-audit.json
+            desktop/target/windows-pe-provenance.json
             desktop/target/rust-notices/
   windows_upgrade:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.upgrade_new_run_id != '' }}

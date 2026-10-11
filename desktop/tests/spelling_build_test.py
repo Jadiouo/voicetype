@@ -17,6 +17,28 @@ INSTALLED = runpy.run_path(str(ROOT / "desktop/tests/installed_spelling.py"))
 
 
 class SpellingBuildTests(unittest.TestCase):
+    def test_numpy_msvc_copies_have_exact_official_runtime_source(self):
+        catalog, records = BUILDER["windows_pe_source_records"]()
+        official = catalog["msvc_numpy_runtime"]
+        self.assertEqual(set(official["paths"]), {
+            "_internal/msvcp140.dll",
+            "_internal/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+        })
+        self.assertEqual(official["source_member"], "msvcp140.dll_amd64")
+        self.assertEqual(official["notice_source_member"], "u4")
+        for path in official["paths"]:
+            self.assertEqual(records[path]["source_member_sha256"], official["sha256"])
+            self.assertEqual(records[path]["microsoft_runtime_source"]["notice_sha256"],
+                             official["notice_sha256"])
+        with tempfile.TemporaryDirectory() as directory:
+            damaged = Path(directory) / "sources.json"
+            catalog["msvc_numpy_runtime"]["sha256"] = "0" * 64
+            damaged.write_text(json.dumps(catalog))
+            with mock.patch.dict(BUILDER["windows_pe_source_records"].__globals__,
+                                 {"WINDOWS_PE_SOURCES": damaged}):
+                with self.assertRaisesRegex(RuntimeError, "NumPy Microsoft runtime differs"):
+                    BUILDER["windows_pe_source_records"]()
+
     def test_generated_windows_executable_records_pinned_bootloader_and_recipe(self):
         def pe(text, resource):
             data = bytearray(0x400)
@@ -112,6 +134,44 @@ class SpellingBuildTests(unittest.TestCase):
             for entry in origins["binaries"]:
                 self.assertEqual(entry["sha256"], hashlib.sha256((bundle / entry["path"]).read_bytes()).hexdigest())
                 self.assertEqual(entry["bytes"], 128)
+
+    def test_windows_complete_requires_every_source_pe_and_generated_executable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory)
+            source = bundle / "_internal/source.pyd"
+            source.parent.mkdir()
+            generated = bundle / "voicetype-csc.exe"
+            data = bytearray(128)
+            data[:2] = b"MZ"
+            data[0x3c:0x40] = (64).to_bytes(4, "little")
+            data[64:68] = b"PE\0\0"
+            source.write_bytes(data)
+            generated.write_bytes(data)
+            notice = bundle / "licenses/source.txt"
+            notice.parent.mkdir()
+            notice.write_text("synthetic notice")
+            checksum = hashlib.sha256(data).hexdigest()
+            origin = {"source_artifact": "fixture archive", "source_sha256": "fixture",
+                      "source_member_sha256": checksum, "notice": "licenses/source.txt",
+                      "notice_sha256": hashlib.sha256(notice.read_bytes()).hexdigest()}
+            generated_origin = {"path": generated.name, "bytes": len(data), "sha256": checksum,
+                                "source_artifact": "fixture wheel", "source_sha256": "fixture",
+                                "notice": "licenses/source.txt"}
+            with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(
+                    BUILDER["binary_origins"].__globals__,
+                    {"windows_pe_source_records": lambda: ({}, {"_internal/source.pyd": origin})}):
+                complete = BUILDER["binary_origins"](bundle, generated_windows_executable=generated_origin)
+                self.assertTrue(complete["complete"])
+                self.assertEqual(complete["source_catalog_missing_paths"], [])
+                source.unlink()
+                missing = BUILDER["binary_origins"](bundle, generated_windows_executable=generated_origin)
+                self.assertFalse(missing["complete"])
+                self.assertEqual(missing["source_catalog_missing_paths"], ["_internal/source.pyd"])
+                source.write_bytes(data)
+                (bundle / "extra.dat").write_bytes(data)
+                extra = BUILDER["binary_origins"](bundle, generated_windows_executable=generated_origin)
+                self.assertFalse(extra["complete"])
+                self.assertEqual(extra["source_catalog_pending_paths"], ["extra.dat"])
 
     def test_installed_windows_pe_set_rejects_missing_executable_origin(self):
         with tempfile.TemporaryDirectory() as directory:
