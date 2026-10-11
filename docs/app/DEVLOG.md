@@ -863,3 +863,9 @@ ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前
 同輪 Windows 真 MSVC／Nano、CSC 封裝與 NSIS 建置、靜默安裝、模型／DLL 載入、OpenCC、Google helper、365 個 Rust 套件的 notice 及實際 NSIS 六插件／已安裝 notice 核對通過。CSC 固定合成句在模型載入後第 1 次、10ms 改字，`first_fail_open=false`；這不是整句或麥克風延遲。安裝後 UI 測試在開始階段發現待載入引擎說明少了測試要求的「引擎」二字而失敗，故本輪沒有通過完整 Windows UI，也沒有上傳可獨立核對的 NSIS 產物；run log 的安裝包雜湊不能代替下載後重算。Windows CSC 原生 notice 與整包 PE 來源仍標示未完整；真人錄音、跨應用送字與兩個實包的升級／回復測試尚未執行。正在按實際 UI 文案失敗定點修正，下一輪仍須真 Windows 安裝與 UI 驗證。
 
 已在本地整合經原作者複查的 Google Windows 原生 CLI／單一輸入 owner 候選 `ae9539c`；Linux core／文字全套、本機格式與 JavaScript 語法檢查通過，但這些 Linux 測試沒有執行 Windows 平台分支，新整合仍待真 Windows CI。PR 保持草稿，日常服務未切換。
+
+### 同日進展：新預覽正在驗收，校正 PE 來源與快捷鍵本地整合
+
+`faa44cc` 的 [run 38134306970](https://github.com/Jadiouo/voicetype/actions/runs/38134306970) Linux job 已成功；Windows 已越過公開命令、真 Nano、CSC 與 Google helper 建置，正在建新 NSIS。仍須取得 Windows 最終安裝／UI 結果，下載新安裝包獨立核來源、雜湊、版本與實際 PE 集合，才能以兩個真版本執行升級／回復測試；目前沒有把進行中的 job 算通過。
+
+本地已獨立提交並經 Windows 作者短審的 CSC Windows PE 來源候選 `4dcced3`：舊真 NSIS 的 44 個系統 UCRT 副本依精確清單排除後，43 個 CPython／wheel PE 與一個 MSVC runtime 分別對上原始 archive/member、SHA-256 和隨包 notice。舊包暫存實例的安裝驗證通過，改動已知 DLL 位元組會回到待查；生成的 PyInstaller EXE 另記其來源與建置過程。這些是舊包的候選映射，新的 NSIS 與整包 PE 來源旗標仍維持 `false`。已在本地正常合併經雙作者審查的可選快捷鍵 `1cbc120`，修正抽樣校對說明以區分本機、Linux Google 與目前不回傳音訊的 Windows Google；本機 core／text 測試、格式及 JS 語法檢查通過，尚未推送這批、未取消正在跑的 CI，也未接觸日常安裝或私人資料。
