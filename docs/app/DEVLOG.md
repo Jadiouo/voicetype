@@ -793,3 +793,15 @@ Google adapter 的獨立審查發現立即取消被重設、cleanup 失敗丟失
 最後短審又補上兩項回歸：collector 與 UI 停用抽樣現在按相同 config→store 順序持鎖至音訊發布，持鎖後重讀同意狀態；barrier 測試核對停用成功後不會發布先前待存樣本。pending WAV 期間 session 已失效時不消耗每日 quota，rename 失敗會回復本次預留。健康狀態只接受明確的 ready／unavailable／disabled；缺漏或未知值視為無效回覆，不把已就緒誤降成失敗。
 
 root 抽查鎖定順序、狀態解析與實際 log：daemon 全套164/164通過（沒有略過抽樣測試），desktop core66項通過（4項opt-in/helper ignored）。既有實際 CPU bundle 與長啟動邊界 probe 證據保留。程式與開發日誌進入既有 App 草稿分支的提交／雙平台 CI；尚未以此宣稱新版安裝 UI、Windows 校正器、完整 Google／Windows 語音或全部依賴 notice 驗收完成。
+
+## 2026-10-09：Linux 安裝包實證、Windows 校正測試與輸入服務限制
+
+App 分支已推送 `95dfd61`、`852e8ad`、`7e1944f`。Linux 的實際 `.deb` 已核對來源與 SHA-256，安裝後 22 項 UI 操作、校正開關重新啟動保存及 Fcitx 安裝／回復檢查通過；root 另開啟詞庫與抽樣校對截圖，確認繁體中文與英文內容可讀。CPU 校正套件的 229 項檔案雜湊一致，83 個 ELF 檔均對應來源與 notice。此為 [run 37806714608](https://github.com/Jadiouo/voicetype/actions/runs/37806714608) 的 Linux 產物證據，manifest 仍明列尚未完成端到端語音驗收。
+
+後續 [run 37808930921](https://github.com/Jadiouo/voicetype/actions/runs/37808930921) 的 Linux job 已完成；Windows 已通過真模型校正 probe 與 App 核心測試，安裝包及 UI 測試仍在進行。冷機 probe 最多重試三秒，每次實際校正仍維持 100ms 上限；這沒有放寬產品的送字等待。Windows 冷機嘗試次數與首句結果待原始 log 核對，完整 Rust 與 Windows 原生依賴 notice 也仍在補齊。
+
+Google App 接線採用既有日常版本的流程：一句完整排空與清理後，在閒置時預備下一個空白 CLI。連續兩句的合成測試已通過，真 CLI 的錄音啟動時間與完整尾句仍待實測。保留 Google 的 Ctrl＋Caps Lock 切換開始／停止，以及本機 Linux 的 Ctrl＋Alt 按住錄音。
+
+Windows 輸入服務的最小原生一次寫入測試已通過，但 [run 37809828271](https://github.com/Jadiouo/voicetype/actions/runs/37809828271) 的跨程序啟用仍失敗：API 回報成功，五秒內卻沒有服務載入事件，結果為 4/5。已提供隔離診斷包供 Windows 11 真機回報；診斷不錄音、不送字，會核對自己的註冊清理。此限制不等於完整 Windows App 可用，其他 Windows ASR 與快捷鍵接線持續進行。PR 保持草稿，日常安裝未替換。
+
+同輪後續結果：`7e1944f` 的雙平台 preview CI 已全部成功。Windows 安裝後的 22 項 UI 操作及校正開關保存／損壞設定檢查通過；root 核對原始 `result.json` 與兩張實際截圖。真模型 probe 為 `first_fail_open=false`、第 1 次改字成功、改字 9ms；整項測試含啟動共 8.28 秒，因此 9ms 只代表模型載入後這一次改字，不能當作整句延遲或普遍速度。Windows 227 項 CSC 檔案雜湊檢查通過，原生 notice 完整旗標仍為 false，持續核對實際安裝包中的 PE 檔。這些通過結果尚未包含 Windows 語音擷取與跨應用送字。

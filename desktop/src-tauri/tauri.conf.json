@@ -16,7 +16,7 @@
     "targets": ["deb", "nsis"],
     "category": "Utility",
     "shortDescription": "VoiceType desktop dictation preview",
-    "longDescription": "Development preview with explicit Linux Local and official Google CLI routes, shared correction tools and separately verified assets. Live Google speech acceptance and Windows Google recording remain pending.",
+    "longDescription": "Development preview with Linux CPU dictation, official Google CLI integration, shared text tools and optional CPU spelling correction. Live Google speech acceptance and Windows Google recording remain pending.",
     "license": "GPL-3.0-only",
     "licenseFile": "../../LICENSE",
     "publisher": "VoiceType contributors",

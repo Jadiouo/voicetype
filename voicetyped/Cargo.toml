@@ -3,7 +3,7 @@ name = "voicetyped"
 version = "0.1.0"
 edition = "2021"
 description = "VoiceType ASR daemon — push-to-talk speech input for Fcitx5"
-license = "MIT"
+license = "GPL-3.0-only"
 
 [features]
 default = []
