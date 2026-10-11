@@ -841,3 +841,9 @@ Google 已審的 `1896bd4` 以獨立 merge 納入 App 候選，包括兩個狹�
 同 run 的 Windows job 已通過新 CSC 模型建置與修字 gate，接著在 `google_terminal_windows::conpty_delivers_only_voice_and_editor_controls_to_child` 停留超過 14 分鐘；為取得 GitHub 只在 job 結束後開放的原始 log，root 取消該 job。這是有界診斷操作，不是產品測試的失敗斷言，也沒有取得該 run 的 Windows NSIS 安裝結果。Google 作者正按原測試語義定位 ConPTY 停滯；不以加長 timeout 略過。Windows PE 來源、安裝器內插件授權及新 NSIS 全集合核對仍標為未完成。
 
 後續主 App 候選已在本地合併經審的 Windows Nano／原生輸入分支與 Google 快捷鍵服務可回復遷移；Google ConPTY 修補改由釘版 `portable-pty` 0.9.0 單一 Windows flag 調整，並保留子程序清理邊界。釘版原 crate 全檔與唯一 patch、MIT notice 已逐項核對，Rust notice 清單明列 vendored 來源而非 workspace；本機 Linux 全套 core/text、7 項 notice fixture 與完整 Rust graph／766 份文字驗證通過。Windows 預覽另接線六個 NSIS 插件的實際抽取、來源位元組與已安裝 notice 檢查，外層 setup EXE 及整包 PE 來源仍未宣稱完整。這些新整合尚待下一輪真 Windows NSIS／已安裝 daemon、UI 與真人語音驗收，PR 繼續為草稿。
+
+### 同日進展：整合後首輪 Windows 終端與 Linux Tauri 編譯回饋
+
+整合候選 `50c055d` 的 [preview run 38130204932](https://github.com/Jadiouo/voicetype/actions/runs/38130204932) 在 Windows 通過 OpenCC 與核心編譯，但 Google 合成 ConPTY 測試在三次 editor 回應後找不到 F5 控制位元組紀錄；Linux 通過公開核心測試、封裝 CSC 模型改字與原生輸入檢查，首次進入 Tauri 主程式編譯時發現 Google formatter 的輸入被推斷成無大小的 `str`。兩個 job 均未產生本輪安裝包。Windows TSF 同 HEAD 隔離測試 5 項中 4 項通過，唯一既有跨程序啟用 gate 仍是 API 回成功、五秒內沒有 TIP `Activate/HELLO`；這不是 MSVC 編譯錯誤。
+
+ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前記錄固定合成控制序列；單次 [Google 分支 run 38130628092](https://github.com/Jadiouo/voicetype/actions/runs/38130628092) 的 Windows 公開命令測試已通過，整個步驟約七秒，不代表麥克風、停錄或整句延遲。Tauri formatter 改為明確 `String` 入參，原作者已核對型別邊界。兩項修正已推到主 App `8ecdcb3`，[新 preview run 38130953571](https://github.com/Jadiouo/voicetype/actions/runs/38130953571) 正進行真正雙平台編譯、安裝與測試；在其完成前不宣稱新版 NSIS、Linux deb 或真人送字驗收。
