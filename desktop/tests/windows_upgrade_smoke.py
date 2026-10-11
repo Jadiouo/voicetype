@@ -7,7 +7,7 @@ files. No microphone, daily profile, or system installation is used.
 Example (after building two genuinely different versions):
   python tests/windows_upgrade_smoke.py --old-installer target/old/setup.exe \
     --old-sha256 HASH --old-version 0.2.0-alpha.1 \
-    --new-installer target/new/setup.exe --new-sha256 HASH --new-version 0.2.1
+    --new-installer target/new/setup.exe --new-sha256 HASH --new-version 0.2.1-alpha.1
 """
 import argparse
 import hashlib
@@ -51,17 +51,25 @@ def powershell_json(script, env, timeout=30):
     return json.loads(result.stdout)
 
 
-def file_version(path, env):
+def file_version(path, env, expected):
     child_env = {**env, "VT_UPGRADE_FILE": str(path)}
     value = powershell_json(
         "$v=(Get-Item -LiteralPath $env:VT_UPGRADE_FILE).VersionInfo; "
-        "@{file=$v.FileVersion;product=$v.ProductVersion}|ConvertTo-Json -Compress",
+        "@{file_string=$v.FileVersion;product_string=$v.ProductVersion;"
+        "file_fixed=@($v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart);"
+        "product_fixed=@($v.ProductMajorPart,$v.ProductMinorPart,$v.ProductBuildPart,$v.ProductPrivatePart)}"
+        "|ConvertTo-Json -Compress",
         child_env,
     )
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?", value["file"] or "")
-    if not match:
-        raise RuntimeError(f"PE has no numeric FileVersion: {path.name}: {value}")
-    return tuple(int(part or 0) for part in match.groups()), value
+    fixed = value["file_fixed"]
+    product = value["product_fixed"]
+    if (value["file_string"] != expected or value["product_string"] != expected
+            or not all(isinstance(parts, list) and len(parts) == 4 and all(
+                isinstance(part, int) and not isinstance(part, bool) and 0 <= part <= 65535
+                for part in parts) for parts in (fixed, product))
+            or fixed != product):
+        raise RuntimeError(f"PE string/fixed version mismatch: {path.name}: {value}")
+    return tuple(fixed), value
 
 
 def registration(destination, env):
@@ -347,8 +355,8 @@ def main():
             raise RuntimeError("runner already has a VoiceType Preview registration")
         known_before = known_folder_product_paths(env, scratch)
         report["known_folder_candidates_before"] = known_before
-        old_setup_version, old_setup_info = file_version(old, env)
-        new_setup_version, new_setup_info = file_version(new, env)
+        old_setup_version, old_setup_info = file_version(old, env, args.old_version)
+        new_setup_version, new_setup_info = file_version(new, env, args.new_version)
         report["setup_pe_versions"] = {"old": old_setup_info, "new": new_setup_info}
         if not old_setup_version < new_setup_version:
             raise RuntimeError("NSIS setup numeric PE version did not increase")
@@ -356,7 +364,7 @@ def main():
         old_registry = registration(destination, env)
         if old_registry["display"] != args.old_version:
             raise RuntimeError("old NSIS registered version differs from expected")
-        old_app_version, old_app_info = file_version(old_exe, env)
+        old_app_version, old_app_info = file_version(old_exe, env, args.old_version)
         report["old_app_pe_version"] = old_app_info
         report["old_app_sha256"] = digest(old_exe)
         if old_app_version != old_setup_version:
@@ -372,7 +380,7 @@ def main():
         new_registry = registration(destination, env)
         if new_registry["display"] != args.new_version:
             raise RuntimeError("new NSIS registered version differs from expected")
-        new_app_version, new_app_info = file_version(new_exe, env)
+        new_app_version, new_app_info = file_version(new_exe, env, args.new_version)
         report["new_app_pe_version"] = new_app_info
         report["new_app_sha256"] = digest(new_exe)
         if new_app_version != new_setup_version:
@@ -394,7 +402,7 @@ def main():
         report["phases"].append("new-uninstalled-data-retained")
         restored_exe = run_installer(old, destination, env, evidence, "old-rollback")
         restored_registry = registration(destination, env)
-        restored_version, _ = file_version(restored_exe, env)
+        restored_version, _ = file_version(restored_exe, env, args.old_version)
         if restored_registry["display"] != args.old_version or restored_version != old_app_version:
             raise RuntimeError("old installer was not restored after uninstall")
         with InstalledApp(restored_exe, env, evidence, "rollback") as app:
