@@ -102,6 +102,7 @@ def main():
                 click("#spelling-enabled")
                 spelling_config = Path(profile) / "desktop.json"
                 eventually(lambda: spelling_config.exists() and json.loads(spelling_config.read_text())["spelling_enabled"] is False)
+                eventually(lambda: js("return !document.querySelector('#spelling-enabled').checked && document.querySelector('#status').textContent.includes('已讀取你的偏好設定')"))
                 assert not js("return document.querySelector('#spelling-enabled').checked")
                 assert js("return document.querySelector('#recovery-note').textContent.includes('沒有待處理')")
                 assert js("return document.querySelector('#recovery-content').hidden")
@@ -286,6 +287,7 @@ def main():
                 assert not js("return document.querySelector('#spelling-enabled').checked"), "CSC choice did not survive restart"
                 click("#spelling-enabled")
                 eventually(lambda: json.loads(spelling_config.read_text())["spelling_enabled"] is True)
+                eventually(lambda: js("return document.querySelector('#spelling-enabled').checked && document.querySelector('#status').textContent.includes('已讀取你的偏好設定')"))
                 assert js("return document.querySelector('#spelling-enabled').checked")
 
                 eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))
