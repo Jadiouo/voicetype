@@ -103,7 +103,15 @@ function render(view) {
   };
   for (const provider of view.settings.providers) {
     const label = document.querySelector(`#${provider.provider}-availability`);
-    if (label) label.textContent = labels[provider.availability] || '尚未檢查服務';
+    if (label) {
+      const googleMissing = provider.provider === 'google' && view.google_runtime === 'inactive'
+        && view.google_install.state === 'missing';
+      const googleIncompatible = provider.provider === 'google' && view.google_runtime === 'inactive'
+        && view.google_install.state === 'incompatible';
+      label.textContent = googleMissing ? '找不到官方 CLI · 尚未連接辨識引擎'
+        : googleIncompatible ? '官方 CLI 版本不相容 · 未開放錄音'
+        : labels[provider.availability] || '尚未檢查服務';
+    }
   }
   if (view.google_runtime === 'ready') {
     document.querySelector('#google-availability').textContent = 'CLI 與輸入路由已連接 · 真實語音待驗收';
