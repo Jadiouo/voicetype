@@ -21,11 +21,37 @@ use voicetype_app_core::{
 #[cfg(target_os = "linux")]
 use voicetype_app_core::google::{
     adapter::GoogleCliBoundary,
+    legacy_systemd::{fcitx_identity, SystemdLegacyService},
+    legacy_transfer::{GoogleShortcutTransfer, LegacyService, TransferPhase},
     linux_audio::LinuxPcmAudio,
     release::{inspect_linux_install, GoogleCliRelease},
     terminal::TerminalLaunch,
     GoogleInstallState, GoogleSetup, GoogleText,
 };
+
+#[cfg(target_os = "linux")]
+fn google_transfer_resources(
+    app: &tauri::AppHandle,
+) -> Result<(GoogleShortcutTransfer, SystemdLegacyService), String> {
+    let home = PathBuf::from(std::env::var_os("HOME").ok_or("找不到登入者的主目錄")?);
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    let runtime = PathBuf::from(
+        std::env::var_os("XDG_RUNTIME_DIR").ok_or("無法找到登入環境，請從桌面重新開啟 App")?,
+    );
+    if !config_home.is_absolute() || !runtime.is_absolute() {
+        return Err("登入環境路徑無效".into());
+    }
+    let transfer = GoogleShortcutTransfer::new(
+        app.state::<DesktopState>().config_dir.clone(),
+        config_home.join("fcitx5/conf/googlevoiceinput.conf"),
+        runtime.join("googlevoiceinput/bridge.lock"),
+    )
+    .map_err(|e| e.to_string())?;
+    let service = SystemdLegacyService::new(&runtime).map_err(|e| e.to_string())?;
+    Ok((transfer, service))
+}
 
 struct DesktopState {
     worker: DesktopWorker,
@@ -249,6 +275,13 @@ fn bundled_google_helper(app: &tauri::AppHandle, name: &str) -> Result<(PathBuf,
 
 #[tauri::command]
 async fn load_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
+    load_google_runtime_mode(app, false).await
+}
+
+async fn load_google_runtime_mode(
+    app: tauri::AppHandle,
+    transfer_mode: bool,
+) -> Result<View, String> {
     #[cfg(target_os = "linux")]
     {
         let official = official_google_path()?;
@@ -266,8 +299,9 @@ async fn load_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
             return Err("輸入法設定位置無效".into());
         }
         let legacy = config_home.join("fcitx5/conf/googlevoiceinput.conf");
-        if voicetype_app_core::google::legacy_config::ctrl_caps_conflict(&legacy)
-            .map_err(|_| "無法核對現有 Google 快捷鍵設定；未接管錄音".to_string())?
+        if !transfer_mode
+            && voicetype_app_core::google::legacy_config::ctrl_caps_conflict(&legacy)
+                .map_err(|_| "無法核對現有 Google 快捷鍵設定；未接管錄音".to_string())?
         {
             return Err("現有 Google 輸入法也使用 Ctrl＋CapsLock；為避免同時錄音，App 目前未接管。請保留現有設定，等待可回復的遷移操作。".into());
         }
@@ -304,6 +338,37 @@ async fn load_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
         let runtime = PathBuf::from(
             std::env::var_os("XDG_RUNTIME_DIR").ok_or("無法找到登入環境，請從桌面重新開啟 App")?,
         );
+        // A staged handoff is never an ordinary Google load. The worker route
+        // must stay Start-gated until it owns the old bridge's lifetime lock.
+        if !transfer_mode {
+            match std::fs::symlink_metadata(config_dir.join("google-shortcut-rollback.json")) {
+                Ok(_) => {
+                    return Err("Google 快捷鍵交接尚未完成；請使用明確的切換或還原操作。".into())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err("無法核對 Google 快捷鍵交接紀錄；錄音未開始。".into()),
+            }
+            match std::fs::symlink_metadata(runtime.join("googlevoiceinput/bridge.lock")) {
+                Ok(_) => {
+                    return Err("偵測到舊 Google bridge 鎖；請使用明確的可回復切換操作。".into())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err("無法核對舊 Google bridge；錄音未開始。".into()),
+            }
+            let legacy_service =
+                voicetype_app_core::google::legacy_systemd::SystemdLegacyService::new(&runtime)
+                    .map_err(|_| "無法核對舊 Google 服務；錄音未開始。".to_string())?;
+            match voicetype_app_core::google::legacy_transfer::LegacyService::snapshot(
+                &legacy_service,
+            ) {
+                Ok(unit) if unit.active => {
+                    return Err("舊 Google 服務仍在執行；請先使用明確的可回復切換操作。".into())
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err("無法核對舊 Google 服務；錄音未開始。".into()),
+            }
+        }
         let launch = TerminalLaunch {
             executable: official,
             sha256: release.reviewed_sha256().into(),
@@ -314,32 +379,28 @@ async fn load_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
         let vocab = config_dir.join("vocab.toml");
         with_desktop(app, move |worker| {
             let profile = runtime.clone();
-            worker.activate_google(
-                runtime,
-                move || {
-                    let audio = LinuxPcmAudio::new(
-                        &profile,
-                        std::path::Path::new("/usr/bin/pw-record"),
-                        "3874ae059c9eafdbd4d6fde4d4b7553aa83fe4149246e427a3208bdc4c712c64",
-                        &pcm,
-                    )?
-                    .with_review_config(config_dir.join("review.json"));
-                    GoogleCliBoundary::open(
-                        launch.clone(),
-                        audio,
-                        std::time::Duration::from_secs(18),
-                    )
-                },
-                move |raw| {
-                    GoogleText::open(&vocab)?.apply(&raw, |text, terms| {
-                        spelling
-                            .as_ref()
-                            .map_or_else(|| text.to_owned(), |worker| worker.correct(text, terms))
-                    })
-                },
-                spelling_ready,
-                review,
-            )
+            let create = move || {
+                let audio = LinuxPcmAudio::new(
+                    &profile,
+                    std::path::Path::new("/usr/bin/pw-record"),
+                    "3874ae059c9eafdbd4d6fde4d4b7553aa83fe4149246e427a3208bdc4c712c64",
+                    &pcm,
+                )?
+                .with_review_config(config_dir.join("review.json"));
+                GoogleCliBoundary::open(launch.clone(), audio, std::time::Duration::from_secs(18))
+            };
+            let format = move |raw| {
+                GoogleText::open(&vocab)?.apply(&raw, |text, terms| {
+                    spelling
+                        .as_ref()
+                        .map_or_else(|| text.to_owned(), |worker| worker.correct(text, terms))
+                })
+            };
+            if transfer_mode {
+                worker.prepare_google_transfer(runtime, create, format, spelling_ready, review)
+            } else {
+                worker.activate_google(runtime, create, format, spelling_ready, review)
+            }
         })
         .await
     }
@@ -347,6 +408,218 @@ async fn load_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
     {
         let _ = app;
         Err("此平台的 Google 錄音完整性尚未通過驗證。".into())
+    }
+}
+
+#[tauri::command]
+async fn google_shortcut_phase(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (transfer, _) = google_transfer_resources(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            transfer
+                .phase()
+                .map(|phase| {
+                    phase.map(|phase| match phase {
+                        TransferPhase::DisableStaged => "disable_staged".to_owned(),
+                        TransferPhase::AppOwned => "app_owned".to_owned(),
+                        TransferPhase::RestoreStaged => "restore_staged".to_owned(),
+                    })
+                })
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|_| "Google 交接狀態查詢中斷".to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+/// The UI action only stages disabled bytes; it does not stop the old unit.
+/// Fcitx must load the staged bytes under a new process identity before claim.
+#[tauri::command]
+async fn stage_google_shortcut(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let official = official_google_path()?;
+        let install =
+            tauri::async_runtime::spawn_blocking(move || inspect_linux_install(&official))
+                .await
+                .map_err(|_| "Google CLI 核對中斷".to_string())?;
+        if install.state != GoogleInstallState::OfficialCheckRequired {
+            return Err("請先安裝並核對官方 Google CLI，再準備切換舊服務".into());
+        }
+        with_worker(app.clone(), DesktopWorker::begin_google_transfer_setup).await?;
+        let (transfer, service) = google_transfer_resources(&app)?;
+        let staged = tauri::async_runtime::spawn_blocking(move || {
+            let fcitx = fcitx_identity().map_err(|e| e.to_string())?;
+            let unit = service.snapshot().map_err(|e| e.to_string())?;
+            transfer
+                .stage_disable(fcitx, unit)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|_| "Google 交接準備中斷".to_string())?;
+        if let Err(error) = staged {
+            let (transfer, _) = google_transfer_resources(&app)?;
+            if matches!(transfer.phase(), Ok(None)) {
+                let _ = with_worker(app.clone(), move |worker| {
+                    worker.finish_google_transfer_setup(transfer)
+                })
+                .await;
+            }
+            return Err(error);
+        }
+        with_desktop(app, DesktopWorker::settings).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err("此平台不使用 Fcitx Google 快捷鍵交接。".into())
+    }
+}
+
+/// This is the second, explicit setup action after Fcitx has loaded the
+/// disabled shortcut. A v2 peer PID, service quiescence and the old bridge
+/// lock must all agree before the resident Start gate opens.
+#[tauri::command]
+async fn switch_google_shortcut(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (transfer, service) = google_transfer_resources(&app)?;
+        if transfer.phase().map_err(|e| e.to_string())? != Some(TransferPhase::DisableStaged) {
+            return Err("請先準備 Google 快捷鍵切換".into());
+        }
+        if with_worker(app.clone(), DesktopWorker::google_endpoint)
+            .await?
+            .is_none()
+        {
+            load_google_runtime_mode(app.clone(), true).await?;
+        }
+        let peer = with_worker(app.clone(), |worker| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            loop {
+                if let Some(pid) = worker.google_transfer_route_pid()? {
+                    return Ok(pid);
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err("等待新版 Fcitx v2 路由逾時；舊服務尚未停止，錄音仍鎖定".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        })
+        .await?;
+        let (owned, identity) = tauri::async_runtime::spawn_blocking(move || {
+            let identity = fcitx_identity().map_err(|e| e.to_string())?;
+            if identity.pid != peer {
+                return Err("Fcitx 路由身分已變更；舊服務尚未停止".into());
+            }
+            let owned = transfer
+                .claim(identity.clone(), true, &service)
+                .map_err(|e| format!("無法取得舊 Google 服務完整所有權：{e}"))?;
+            Ok::<_, String>((owned, identity))
+        })
+        .await
+        .map_err(|_| "Google 交接程序中斷；錄音仍鎖定".to_string())??;
+        // A process replacement during stop/lock acquisition cannot inherit
+        // this claim. Park the lock in the resident worker for explicit restore.
+        let still_same = tauri::async_runtime::spawn_blocking(fcitx_identity)
+            .await
+            .map_err(|_| "無法再次核對 Fcitx 身分".to_string())?
+            .map(|now| now == identity)
+            .unwrap_or(false);
+        if !still_same {
+            with_desktop(app, move |worker| {
+                worker.park_google_transfer_ownership(owned)
+            })
+            .await?;
+            return Err("Fcitx 身分在交接期間改變；服務鎖由 App 保留，請還原後重試".into());
+        }
+        with_desktop(app, move |worker| {
+            worker.complete_google_transfer(owned, identity)
+        })
+        .await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err("此平台不使用 Fcitx Google 快捷鍵交接。".into())
+    }
+}
+
+#[tauri::command]
+async fn restore_google_shortcut(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (transfer, service) = google_transfer_resources(&app)?;
+        let phase = transfer.phase().map_err(|e| e.to_string())?;
+        match phase {
+            Some(TransferPhase::DisableStaged) => {
+                with_worker(app.clone(), DesktopWorker::deactivate_google).await?;
+                tauri::async_runtime::spawn_blocking(move || {
+                    transfer
+                        .abort_staged(fcitx_identity().map_err(|e| e.to_string())?, true, &service)
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|_| "Google 還原程序中斷".to_string())??;
+                with_desktop(app, DesktopWorker::settings).await
+            }
+            Some(TransferPhase::AppOwned) => {
+                let owned = with_worker(app.clone(), DesktopWorker::google_transfer_owned).await?;
+                if !owned {
+                    let ownership = tauri::async_runtime::spawn_blocking(move || {
+                        transfer
+                            .reclaim_for_restore(&service)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .map_err(|_| "無法恢復舊 Google 服務鎖".to_string())??;
+                    with_worker(app.clone(), move |worker| {
+                        worker.park_google_transfer_ownership(ownership)
+                    })
+                    .await?;
+                } else if with_worker(app.clone(), DesktopWorker::google_endpoint)
+                    .await?
+                    .is_some()
+                {
+                    with_worker(app.clone(), DesktopWorker::begin_google_transfer_restore).await?;
+                }
+                with_worker(app.clone(), DesktopWorker::deactivate_google).await?;
+                let (transfer, service) = google_transfer_resources(&app)?;
+                with_desktop(app, move |worker| {
+                    worker.restore_google_transfer(transfer, service)
+                })
+                .await
+            }
+            Some(TransferPhase::RestoreStaged) => {
+                with_worker(app.clone(), DesktopWorker::deactivate_google).await?;
+                tauri::async_runtime::spawn_blocking(move || {
+                    transfer
+                        .resume_restore(true, &service)
+                        .map_err(|e| e.to_string())?;
+                    transfer
+                        .finish_restore(fcitx_identity().map_err(|e| e.to_string())?, &service)
+                        .map_err(|e| format!("請重新載入 Fcitx 後再按一次「完成還原」：{e}"))
+                })
+                .await
+                .map_err(|_| "Google 還原程序中斷".to_string())??;
+                let (transfer, _) = google_transfer_resources(&app)?;
+                with_desktop(app, move |worker| {
+                    worker.finish_google_transfer_setup(transfer)
+                })
+                .await
+            }
+            None => Err("目前沒有待還原的 Google 快捷鍵交接".into()),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err("此平台不使用 Fcitx Google 快捷鍵交接。".into())
     }
 }
 
@@ -617,6 +890,10 @@ fn main() {
             unload_local_runtime,
             load_google_runtime,
             unload_google_runtime,
+            google_shortcut_phase,
+            stage_google_shortcut,
+            switch_google_shortcut,
+            restore_google_shortcut,
             enable_local_input,
             configure_input_module,
             get_vocabulary,
