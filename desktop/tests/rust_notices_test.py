@@ -14,6 +14,41 @@ INSTALLED = runpy.run_path(str(ROOT / "desktop/tests/installed_rust_notices.py")
 
 
 class RustNoticeTests(unittest.TestCase):
+    def test_windows_builder_catalogs_owned_daemon_and_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in ("desktop/Cargo.lock", "voicetyped/Cargo.lock"):
+                lock = root / relative
+                lock.parent.mkdir(parents=True, exist_ok=True)
+                lock.write_text("fixture lock")
+            notice = root / "LICENSE"
+            notice.write_text("fixture notice")
+            components = []
+            for name in ("runtime", "opencc", "spelling"):
+                native = root / name
+                (native / "licenses").mkdir(parents=True)
+                license_file = native / "licenses/NOTICE"
+                license_file.write_text("fixture " + name)
+                checksum = hashlib.sha256(license_file.read_bytes()).hexdigest()
+                (native / "manifest.json").write_text(json.dumps({"id": name, "files": [
+                    {"path": "licenses/NOTICE", "sha256": checksum}]}))
+                components.append((name, native))
+            def graph(_manifest, target, package, _extra=()):
+                self.assertEqual(target, "x86_64-pc-windows-msvc")
+                return {package: {"name": package, "version": "1", "source": None,
+                                  "license": "GPL-3.0-only", "_resolved_features": []}}
+            output = root / "output"
+            with mock.patch.dict(BUILDER["build"].__globals__, ROOT=root, cargo_graph=graph,
+                                 lock_checksums=lambda _: {},
+                                 license_sources=lambda _package, _checksum: [(notice, "fixture", None)]):
+                BUILDER["build"](output, "x86_64-pc-windows-msvc", components)
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(set(manifest["roots"]), {"desktop-app", "owned-daemon"})
+            self.assertEqual({item["name"] for item in manifest["native_components"]},
+                             {"runtime", "opencc", "spelling"})
+            self.assertEqual({item["name"] for item in manifest["packages"]},
+                             {"voicetype-desktop", "voicetyped"})
+
     def test_target_graph_keeps_normal_and_build_edges_but_not_dev(self):
         packages = [{"id": name, "name": name} for name in ("voicetype-desktop", "normal", "build", "dev")]
         nodes = [{"id": "voicetype-desktop", "deps": [
@@ -77,23 +112,45 @@ class RustNoticeTests(unittest.TestCase):
             member = notices / "packages/example/LICENSE-MIT"
             member.parent.mkdir(parents=True)
             member.write_text("MIT example")
-            native = installed / "spelling/manifest.json"
-            native.parent.mkdir()
-            native.write_text("catalog")
+            catalogs = {}
+            for name, relative in (("runtime", "runtime/manifest.json"),
+                                   ("opencc", "opencc-manifest.json"),
+                                   ("spelling", "spelling/manifest.json")):
+                native = installed / relative
+                native.parent.mkdir(parents=True, exist_ok=True)
+                native.write_text("catalog-" + name)
+                catalogs[name] = native
             sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-            catalog = {"complete": True, "packages": [{"name": "example", "version": "1",
+            package = lambda name, scope: {"name": name, "version": "1",
                        "source": "workspace", "crate_checksum": None,
                        "license_expression": "MIT", "selected_license": "MIT",
-                       "scopes": ["desktop-app"], "scope_features": {"desktop-app": []},
-                       "notices": [{"path": "packages/example/LICENSE-MIT"}]}],
+                       "scopes": [scope], "scope_features": {scope: []},
+                       "notices": [{"path": "packages/example/LICENSE-MIT"}]}
+            catalog = {"complete": True, "target": "x86_64-pc-windows-msvc",
+                       "roots": ["desktop-app", "owned-daemon"],
+                       "locks": {"desktop": "a" * 64, "owned-daemon": "b" * 64},
+                       "packages": [package("voicetype-desktop", "desktop-app"),
+                                    package("voicetyped", "owned-daemon")],
                        "files": [{"path": "packages/example/LICENSE-MIT", "bytes": member.stat().st_size,
                                   "sha256": sha(member)}],
-                       "native_components": [{"name": "spelling", "catalog_sha256": sha(native),
-                                              "notice_count": 1}]}
+                       "native_components": [{"name": name, "catalog_sha256": sha(path),
+                                              "notice_count": 1} for name, path in catalogs.items()]}
             expected = root / "expected.json"
             expected.write_text(json.dumps(catalog))
             (notices / "manifest.json").write_bytes(expected.read_bytes())
-            self.assertEqual(INSTALLED["verify"](installed, expected), (1, 1, 1))
+            self.assertEqual(INSTALLED["verify"](installed, expected), (2, 1, 3))
+            missing_runtime = dict(catalog, native_components=[item for item in catalog["native_components"]
+                                                                if item["name"] != "runtime"])
+            expected.write_text(json.dumps(missing_runtime))
+            with self.assertRaisesRegex(AssertionError, "native notice catalogs"):
+                INSTALLED["verify"](installed, expected)
+            missing_daemon = dict(catalog, packages=[catalog["packages"][0]])
+            expected.write_text(json.dumps(missing_daemon))
+            (notices / "manifest.json").write_bytes(expected.read_bytes())
+            with self.assertRaisesRegex(AssertionError, "daemon Rust graph"):
+                INSTALLED["verify"](installed, expected)
+            expected.write_text(json.dumps(catalog))
+            (notices / "manifest.json").write_bytes(expected.read_bytes())
             (notices / "extra").write_text("uncataloged")
             with self.assertRaisesRegex(AssertionError, "member set"):
                 INSTALLED["verify"](installed, expected)

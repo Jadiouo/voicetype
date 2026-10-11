@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Catalog licenses for the Rust graphs and native bundles in this installer.
 
-The app uses its build/default features. Linux also ships voicetyped built with
---no-default-features --features relocatable-runtime. Only normal/build edges
+The app uses its build/default features. Linux and Windows also ship voicetyped
+built with --no-default-features --features relocatable-runtime. Only normal/build edges
 from those roots are included; Cargo.lock's unused or dev-only crates are not.
 """
 import argparse
@@ -170,16 +170,15 @@ def build(output, target, components):
     graphs = {key: {"package": entry, "scope_features": {"desktop-app": entry["_resolved_features"]}}
               for key, entry in app.items()}
     locks = {**lock_checksums(ROOT / "desktop/Cargo.lock")}
-    if target == "x86_64-unknown-linux-gnu":
-        daemon = cargo_graph(ROOT / "voicetyped/Cargo.toml", target, "voicetyped",
-                             ("--no-default-features", "--features", "relocatable-runtime"))
-        locks.update(lock_checksums(ROOT / "voicetyped/Cargo.lock"))
-        for key, entry in daemon.items():
-            if key in graphs:
-                graphs[key]["scope_features"]["owned-daemon"] = entry["_resolved_features"]
-            else:
-                graphs[key] = {"package": entry,
-                               "scope_features": {"owned-daemon": entry["_resolved_features"]}}
+    daemon = cargo_graph(ROOT / "voicetyped/Cargo.toml", target, "voicetyped",
+                         ("--no-default-features", "--features", "relocatable-runtime"))
+    locks.update(lock_checksums(ROOT / "voicetyped/Cargo.lock"))
+    for key, entry in daemon.items():
+        if key in graphs:
+            graphs[key]["scope_features"]["owned-daemon"] = entry["_resolved_features"]
+        else:
+            graphs[key] = {"package": entry,
+                           "scope_features": {"owned-daemon": entry["_resolved_features"]}}
 
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists() or output.is_symlink():
@@ -239,10 +238,9 @@ def build(output, target, components):
                            "notice_count": len(license_files)})
 
         manifest = {"schema_version": 1, "target": target,
-                    "roots": ["desktop-app"] + (["owned-daemon"] if target == "x86_64-unknown-linux-gnu" else []),
+                    "roots": ["desktop-app", "owned-daemon"],
                     "locks": {"desktop": digest(ROOT / "desktop/Cargo.lock"),
-                              **({"owned-daemon": digest(ROOT / "voicetyped/Cargo.lock")}
-                                 if target == "x86_64-unknown-linux-gnu" else {})},
+                              "owned-daemon": digest(ROOT / "voicetyped/Cargo.lock")},
                     "packages": records, "files": sorted(files, key=lambda item: item["path"]),
                     "native_components": native, "complete": True}
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -264,7 +262,7 @@ def main():
         if name not in {"runtime", "input", "spelling", "opencc"}:
             parser.error("unknown native component: " + name)
         components.append((name, Path(path).resolve()))
-    required = {"runtime", "input", "spelling"} if args.target.endswith("linux-gnu") else {"opencc", "spelling"}
+    required = {"runtime", "input", "spelling"} if args.target.endswith("linux-gnu") else {"runtime", "opencc", "spelling"}
     if {name for name, _ in components} != required:
         parser.error("native component set differs from installer")
     build(args.output.resolve(), args.target, components)

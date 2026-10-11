@@ -14,6 +14,16 @@ def verify(installation, expected_catalog):
     expected_bytes = expected_catalog.read_bytes()
     expected = json.loads(expected_bytes)
     assert expected["complete"] is True
+    target = expected["target"]
+    required_components = {
+        "x86_64-unknown-linux-gnu": {"runtime", "input", "spelling"},
+        "x86_64-pc-windows-msvc": {"runtime", "opencc", "spelling"},
+    }
+    assert target in required_components, "Unexpected Rust notice target"
+    assert set(expected["roots"]) == {"desktop-app", "owned-daemon"}
+    assert set(expected["locks"]) == {"desktop", "owned-daemon"}
+    assert {item["name"] for item in expected["native_components"]} == required_components[target], \
+        "Target native notice catalogs incomplete"
     candidates = list(installation.rglob("licenses/rust/manifest.json"))
     assert len(candidates) == 1, "Expected one installed Rust notice catalog"
     root = candidates[0].parent
@@ -27,6 +37,10 @@ def verify(installation, expected_catalog):
         assert not path.is_symlink() and path.stat().st_size == item["bytes"]
         assert digest(path) == item["sha256"], item["path"]
     packages = expected["packages"]
+    assert any(package["name"] == "voicetype-desktop" and "desktop-app" in package["scopes"]
+               for package in packages), "Desktop App Rust graph missing"
+    assert any(package["name"] == "voicetyped" and "owned-daemon" in package["scopes"]
+               for package in packages), "Owned daemon Rust graph missing"
     assert len({(p["name"], p["version"], p["source"]) for p in packages}) == len(packages)
     for package in packages:
         assert package["license_expression"] and package["selected_license"]

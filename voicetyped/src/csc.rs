@@ -1,25 +1,42 @@
-//! Optional CPU character correction over a private Unix socket.
+//! Optional CPU character correction through an owned process, or a legacy
+//! private Unix socket for the daily Linux service.
 //! The original transcript stays here; the worker only returns positional edits.
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result};
+#[cfg(unix)]
+use anyhow::ensure;
+#[cfg(unix)]
 use serde::Deserialize;
+#[cfg(unix)]
 use serde_json::json;
+#[cfg(unix)]
 use socket2::{Domain, SockAddr, Socket, Type};
 
+#[cfg(unix)]
 const MAX_REPLY: usize = 32 * 1024;
+#[cfg(unix)]
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct CscClient {
+    #[cfg(unix)]
     path: PathBuf,
+    #[cfg(unix)]
     timeout: Duration,
     owned: Option<voicetype_text::spelling::OwnedSpelling>,
 }
 
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Reply {
@@ -47,11 +64,15 @@ impl CscClient {
                 Duration::from_secs(30),
             )?;
             return Ok(Some(Self {
+                #[cfg(unix)]
                 path: PathBuf::new(),
+                #[cfg(unix)]
                 timeout: Duration::from_millis(100),
                 owned: Some(worker),
             }));
         }
+        #[cfg(unix)]
+        {
         let Some(path) = std::env::var_os("VOICETYPE_CSC_SOCKET") else {
             return Ok(None);
         };
@@ -65,6 +86,9 @@ impl CscClient {
             timeout: Duration::from_millis(100),
             owned: None,
         }))
+        }
+        #[cfg(windows)]
+        { Ok(None) }
     }
 
     pub fn correct(&self, text: &str, terms: &[String]) -> String {
@@ -78,6 +102,8 @@ impl CscClient {
             );
             return result;
         }
+        #[cfg(unix)]
+        {
         if !voicetype_text::spelling_policy::accepts(text) {
             return text.to_owned();
         }
@@ -102,8 +128,12 @@ impl CscClient {
                 text.to_owned()
             }
         }
+        }
+        #[cfg(windows)]
+        { text.to_owned() }
     }
 
+    #[cfg(unix)]
     fn request(&self, text: &str, terms: &[String], deadline: Instant) -> Result<(String, Reply)> {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let terms: Vec<&str> = terms
@@ -172,6 +202,7 @@ impl CscClient {
     }
 }
 
+#[cfg(unix)]
 fn remaining(deadline: Instant) -> Result<Duration> {
     deadline
         .checked_duration_since(Instant::now())
@@ -179,7 +210,7 @@ fn remaining(deadline: Instant) -> Result<Duration> {
         .context("spelling deadline exceeded")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;

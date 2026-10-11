@@ -2,8 +2,8 @@ name: Desktop preview
 
 on:
   push:
-    branches: [main, feat/desktop-app]
-    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "scripts/build-desktop-*", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".github/workflows/desktop-preview.yml"]
+    branches: [main, feat/desktop-app, feat/windows-dictation-work]
+    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "scripts/build-desktop-*", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
 
 permissions:
@@ -24,7 +24,7 @@ jobs:
           - os: windows-2022
             bundle: nsis
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: desktop
@@ -40,6 +40,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Prepare project scratch
         run: python -c "from pathlib import Path; Path('target/scratch').mkdir(parents=True, exist_ok=True)"
+      - name: Project-local Windows scratch
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-ci'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          "TEMP=$scratch" >> $env:GITHUB_ENV
+          "TMP=$scratch" >> $env:GITHUB_ENV
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -65,6 +73,27 @@ jobs:
       - name: Build pinned Windows OpenCC and dictionaries
         if: runner.os == 'Windows'
         run: python ../scripts/build-desktop-opencc.py target/opencc --stage-tests target/debug/deps
+      # The ordinary command suite uses synthetic owners. Its installed Nano,
+      # spelling and Fcitx probes are ignored here and run explicitly below.
+      # Compile before the short execution timeout so a cold Rust cache does
+      # not masquerade as a hung ConPTY test.
+      - name: Compile public application command tests
+        timeout-minutes: 20
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked --no-run
+      - name: Public application command tests
+        timeout-minutes: 5
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
+      - name: Verify Windows native CPU recipe
+        if: runner.os == 'Windows'
+        run: python ../scripts/build-desktop-native-windows.py --check-recipe
+      - name: Build pinned Windows CPU Nano runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python ../scripts/build-desktop-native-windows.py --cache ../.scratch/windows-native-cache --output target/windows-native --jobs 2
+          if ($LASTEXITCODE -ne 0) { throw 'Windows source-built Nano C API failed' }
+          python ../scripts/build-desktop-runtime-windows.py --native target/windows-native --opencc target/opencc --output target/runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Nano runtime bundle failed' }
       - name: Build pinned CPU spelling bundle and notices
         shell: bash
         run: |
@@ -75,8 +104,6 @@ jobs:
             python tests/spelling_failure_diagnostic.py target/spelling --prepared target/csc-build-cache/prepared
             exit 1
           fi
-      - name: Public application command tests
-        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
       - name: Build narrow Google CLI helpers
         run: python ../scripts/build-desktop-google.py target/google
       - name: Build pinned Linux CPU runtime and native notices
@@ -97,7 +124,7 @@ jobs:
           if [[ "$RUNNER_OS" == Linux ]]; then
             python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-unknown-linux-gnu --component runtime=target/runtime --component input=target/input --component spelling=target/spelling
           else
-            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-pc-windows-msvc --component opencc=target/opencc --component spelling=target/spelling
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-pc-windows-msvc --component runtime=target/runtime --component opencc=target/opencc --component spelling=target/spelling
           fi
       - name: Build preview installer
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
@@ -122,12 +149,14 @@ jobs:
         run: |
           $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
           if (-not $installer) { throw 'Installer missing' }
-          $destination = Join-Path $env:RUNNER_TEMP 'voicetype-preview-install 語音'
+          $destination = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-ci/voicetype-preview-install 語音'
           $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
           if (-not (Test-Path "$destination/voicetype-desktop.exe")) { throw 'Installed executable missing' }
           python tests/installed_opencc.py "$destination" target/opencc/manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed OpenCC verification failed' }
+          python tests/installed_runtime_windows.py "$destination" target/runtime/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows Nano runtime verification failed' }
           python tests/installed_spelling.py "$destination" target/spelling/manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed spelling verification failed' }
           python tests/installed_google.py "$destination" target/google/manifest.json
@@ -173,6 +202,7 @@ jobs:
             desktop/target/runtime/manifest.json
             desktop/target/runtime/build-provenance.json
             desktop/target/opencc/manifest.json
+            desktop/target/windows-native/build-provenance.json
             desktop/target/spelling/manifest.json
             desktop/target/spelling/provenance/binary-origins.json
             desktop/target/rust-notices/

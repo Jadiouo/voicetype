@@ -11,7 +11,6 @@ pub mod input_install;
 mod input_lease;
 #[cfg(target_os = "linux")]
 pub mod local;
-#[cfg(target_os = "linux")]
 pub mod local_install;
 #[cfg(unix)]
 mod providers;
@@ -27,6 +26,11 @@ pub mod setup;
 mod setup_worker;
 pub mod spelling_install;
 pub mod vocabulary;
+pub mod windows_engine;
+#[cfg(any(test, windows))]
+mod windows_gesture;
+#[cfg(windows)]
+pub mod windows_input;
 #[cfg(windows)]
 pub mod windows_job;
 pub mod worker;

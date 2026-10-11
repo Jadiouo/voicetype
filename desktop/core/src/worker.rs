@@ -110,6 +110,8 @@ impl DesktopWorker {
                     spelling_status: SpellingRuntimeStatus::Inactive,
                     #[cfg(target_os = "linux")]
                     local: None,
+                    #[cfg(windows)]
+                    windows_local: None,
                     #[cfg(target_os = "linux")]
                     google: None,
                     #[cfg(target_os = "linux")]
@@ -354,6 +356,72 @@ impl DesktopWorker {
                     }
                 }
             }
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(windows)]
+    pub fn activate_windows_local(
+        &self,
+        mut paths: crate::windows_engine::EnginePaths,
+    ) -> Result<DesktopSnapshot, String> {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            if desktop.app()?.snapshot().selected_provider != Provider::Local {
+                return Err("請先選擇本機離線辨識".into());
+            }
+            if desktop.windows_local.is_none() {
+                let spelling_enabled = desktop.app()?.snapshot().spelling_enabled;
+                if !spelling_enabled {
+                    paths.spelling = None;
+                }
+                let spelling_requested = paths.spelling.is_some();
+                let engine = match crate::windows_engine::WindowsEngine::start(paths) {
+                    Ok(engine) => engine,
+                    Err(_) => {
+                        desktop.local_status = LocalRuntimeStatus::Failed;
+                        desktop.spelling_status = if spelling_enabled {
+                            SpellingRuntimeStatus::Unavailable
+                        } else {
+                            SpellingRuntimeStatus::Disabled
+                        };
+                        return Err("無法啟動 Windows 本機引擎或核對協定".into());
+                    }
+                };
+                desktop.spelling_status = if !spelling_enabled {
+                    SpellingRuntimeStatus::Disabled
+                } else if spelling_requested && engine.spelling_ready() {
+                    SpellingRuntimeStatus::Ready
+                } else {
+                    SpellingRuntimeStatus::Unavailable
+                };
+                desktop.windows_local = Some(WindowsLocal {
+                    engine,
+                    input: None,
+                    active: None,
+                });
+                desktop.local_status = LocalRuntimeStatus::WaitingForInput;
+            }
+            desktop.snapshot()
+        })
+    }
+
+    #[cfg(windows)]
+    pub fn enable_windows_input(&self) -> Result<DesktopSnapshot, String> {
+        self.call(|desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            let local = desktop.windows_local.as_mut().ok_or("請先載入本機引擎")?;
+            if local.input.is_none() {
+                local.input = Some(
+                    crate::windows_input::WindowsInput::start()
+                        .map_err(|_| "無法註冊 Ctrl＋CapsLock 快捷鍵".to_string())?,
+                );
+            }
+            desktop.local_status = LocalRuntimeStatus::Ready;
             desktop.snapshot()
         })
     }
@@ -731,6 +799,12 @@ impl DesktopWorker {
                     session.cancel(app);
                 }
             }
+            #[cfg(windows)]
+            if let (Some(local), Ok(app)) = (&mut desktop.windows_local, &mut desktop.app) {
+                if local.active.is_some() {
+                    let _ = app.cancel_dictation(&mut local.engine);
+                }
+            }
             #[cfg(target_os = "linux")]
             if let (Some(google), Ok(app)) = (&mut desktop.google, &mut desktop.app) {
                 google.cancel(app);
@@ -779,6 +853,8 @@ struct Desktop {
     google_install: crate::google::release::GoogleInstallInfo,
     #[cfg(target_os = "linux")]
     local: Option<LocalHost>,
+    #[cfg(windows)]
+    windows_local: Option<WindowsLocal>,
     #[cfg(target_os = "linux")]
     google: Option<GoogleHost>,
     #[cfg(target_os = "linux")]
@@ -830,12 +906,29 @@ impl Desktop {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    false
+                    #[cfg(windows)]
+                    {
+                        self.windows_local
+                            .as_ref()
+                            .is_some_and(|local| local.input.is_some())
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        false
+                    }
                 }
             },
         })
     }
     fn deactivate(&mut self) -> Result<(), String> {
+        #[cfg(windows)]
+        if let Some(local) = self.windows_local.as_mut() {
+            let app = self.app.as_mut().map_err(|e| e.to_string())?;
+            local
+                .shutdown(app)
+                .map_err(|_| "本機引擎尚未確認停止，請稍後再試".to_string())?;
+            self.windows_local = None;
+        }
         #[cfg(target_os = "linux")]
         if let Some(google) = self.google.as_mut() {
             let app = self.app.as_mut().map_err(|e| e.to_string())?;
@@ -863,6 +956,29 @@ impl Desktop {
         Ok(())
     }
     fn poll(&mut self) {
+        #[cfg(windows)]
+        if let (Some(local), Ok(app)) = (&mut self.windows_local, &mut self.app) {
+            if local.poll(app).is_ok() {
+                if matches!(
+                    self.spelling_status,
+                    SpellingRuntimeStatus::Ready | SpellingRuntimeStatus::Unavailable
+                ) {
+                    self.spelling_status = if local.engine.spelling_ready() {
+                        SpellingRuntimeStatus::Ready
+                    } else {
+                        SpellingRuntimeStatus::Unavailable
+                    };
+                }
+            } else {
+                self.local_status = LocalRuntimeStatus::Failed;
+                if self.spelling_status == SpellingRuntimeStatus::Ready {
+                    self.spelling_status = SpellingRuntimeStatus::Unavailable;
+                }
+                if local.shutdown(app).is_ok() {
+                    self.windows_local = None;
+                }
+            }
+        }
         #[cfg(target_os = "linux")]
         if let (Some(local), Ok(app)) = (&mut self.local, &mut self.app) {
             match local.poll(app) {
@@ -907,6 +1023,90 @@ impl Desktop {
             }
         }
         self.sync_google_availability();
+    }
+}
+
+#[cfg(windows)]
+struct WindowsLocal {
+    engine: crate::windows_engine::WindowsEngine,
+    input: Option<crate::windows_input::WindowsInput>,
+    active: Option<crate::SessionKey>,
+}
+
+#[cfg(windows)]
+struct WindowsRecovery;
+#[cfg(windows)]
+impl crate::DeliveryPort for WindowsRecovery {
+    fn commit_if_focused(
+        &mut self,
+        target: &crate::TargetLease,
+        _text: &str,
+    ) -> crate::DeliveryOutcome {
+        if crate::windows_input::focus_matches(target) {
+            // This recovery-only adapter has not attempted any insertion.
+            crate::DeliveryOutcome::NotSent
+        } else {
+            crate::DeliveryOutcome::FocusChanged
+        }
+    }
+}
+
+#[cfg(windows)]
+impl WindowsLocal {
+    fn poll(&mut self, app: &mut Application) -> io::Result<()> {
+        if let Some(input) = &self.input {
+            input.set_session_active(self.active.is_some());
+            for _ in 0..16 {
+                let Some(event) = input.poll() else {
+                    break;
+                };
+                match event {
+                    crate::windows_input::InputEvent::Start(target) if self.active.is_none() => {
+                        if let Ok(key) = app.start_dictation(target, &mut self.engine) {
+                            self.active = Some(key);
+                            input.set_session_active(true);
+                        } else {
+                            input.reject_start();
+                        }
+                    }
+                    crate::windows_input::InputEvent::Stop if self.active.is_some() => {
+                        app.stop_dictation(&mut self.engine)
+                            .map_err(io::Error::other)?;
+                    }
+                    crate::windows_input::InputEvent::Cancel if self.active.is_some() => {
+                        app.cancel_dictation(&mut self.engine)
+                            .map_err(io::Error::other)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if self.active.is_some() && app.expire_dictation(&mut self.engine) {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        if let Some((key, event)) = self.engine.poll_event()? {
+            let released = matches!(event, crate::ProviderEvent::Released);
+            app.provider_event(key, event, &mut WindowsRecovery);
+            if released && self.active == Some(key) {
+                self.active = None;
+            }
+        }
+        if let Some(input) = &self.input {
+            input.set_session_active(self.active.is_some());
+        }
+        Ok(())
+    }
+
+    fn shutdown(&mut self, app: &mut Application) -> io::Result<()> {
+        self.input.take();
+        if self.active.is_some() {
+            let _ = app.cancel_dictation(&mut self.engine);
+        }
+        self.engine.shutdown()?;
+        if let Some(key) = self.active.take() {
+            app.provider_event(key, crate::ProviderEvent::Released, &mut WindowsRecovery);
+        }
+        Ok(())
     }
 }
 
