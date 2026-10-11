@@ -100,16 +100,30 @@ def manifest_pe_rows(manifest, prefix):
             for row in manifest["files"] if row["path"].lower().endswith((".exe", ".dll", ".pyd"))]
 
 
-def verify_manifest_files(manifest, root):
+def opencc_installed_path(name):
+    if name.startswith("data/"):
+        return "opencc/" + name.removeprefix("data/")
+    if name.startswith("licenses/"):
+        return "licenses/opencc/" + name.removeprefix("licenses/")
+    return name
+
+
+def verify_manifest_files(manifest, root, path_map=None):
     """Resolve the existing scope catalog's shipped notices and other files."""
     seen = set()
+    mapped_seen = set()
     for row in manifest["files"]:
         name = row["path"]
         relative = Path(name)
         require(name and not relative.is_absolute() and ".." not in relative.parts
                 and name.casefold() not in seen, "unsafe or duplicate manifest path: " + name)
         seen.add(name.casefold())
-        path = root / relative
+        mapped = Path(path_map(name)) if path_map else relative
+        require(not mapped.is_absolute() and ".." not in mapped.parts
+                and mapped.as_posix().casefold() not in mapped_seen,
+                "unsafe or colliding installed manifest path: " + name)
+        mapped_seen.add(mapped.as_posix().casefold())
+        path = root / mapped
         require(path.is_file() and not path.is_symlink()
                 and path.stat().st_size == row["bytes"] and sha256(path) == row["sha256"],
                 "manifest file missing or bytes differ: " + name)
@@ -186,7 +200,8 @@ def audit(extracted, installed, setup, target, repo, source_commit):
             catalogs["runtime"]["id"] == "nano-runtime", "non-CSC source catalog differs")
     for name, root in (("google", extracted / "google"),
                        ("runtime", extracted / "runtime"), ("opencc", extracted)):
-        verify_manifest_files(catalogs[name], root)
+        verify_manifest_files(catalogs[name], root,
+                              opencc_installed_path if name == "opencc" else None)
     expected.extend(manifest_pe_rows(catalogs["google"], "google/"))
     expected.extend(manifest_pe_rows(catalogs["runtime"], "runtime/"))
     expected.extend(manifest_pe_rows(catalogs["opencc"], ""))

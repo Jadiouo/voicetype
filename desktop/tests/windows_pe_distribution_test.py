@@ -28,6 +28,27 @@ class DistributionInventoryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing"):
                 SCRIPT["verify_manifest_files"](manifest, root)
 
+    def test_opencc_manifest_paths_resolve_to_installed_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = {"files": []}
+            for source, installed in (("data/s2tw.json", "opencc/s2tw.json"),
+                                      ("licenses/OpenCC.txt", "licenses/opencc/OpenCC.txt"),
+                                      ("opencc.dll", "opencc.dll")):
+                path = root / installed
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(source.encode())
+                manifest["files"].append({"path": source, "bytes": path.stat().st_size,
+                                          "sha256": SCRIPT["sha256"](path)})
+            SCRIPT["verify_manifest_files"](manifest, root, SCRIPT["opencc_installed_path"])
+            duplicated = manifest["files"] + [{**manifest["files"][0], "path": "opencc/s2tw.json"}]
+            with self.assertRaisesRegex(RuntimeError, "colliding installed manifest path"):
+                SCRIPT["verify_manifest_files"]({"files": duplicated}, root,
+                                                SCRIPT["opencc_installed_path"])
+            (root / "opencc/s2tw.json").write_bytes(b"changed")
+            with self.assertRaisesRegex(RuntimeError, "bytes differ"):
+                SCRIPT["verify_manifest_files"](manifest, root, SCRIPT["opencc_installed_path"])
+
     def test_wrong_type_catalog_records_incomplete_without_blocking_ui(self):
         import os
         import subprocess
