@@ -193,12 +193,21 @@ impl OwnedLocal {
     }
 
     pub fn attach_frontend(
-        mut self,
+        self,
         peer: UnixStream,
         budget: Duration,
     ) -> io::Result<OwnedLocalSession> {
+        self.attach_frontend_with_choice(peer, budget, crate::ShortcutChoice::Default)
+    }
+
+    pub fn attach_frontend_with_choice(
+        mut self,
+        peer: UnixStream,
+        budget: Duration,
+        choice: crate::ShortcutChoice,
+    ) -> io::Result<OwnedLocalSession> {
         let connection = self.connection.take().ok_or(io::ErrorKind::NotConnected)?;
-        let dispatcher = LocalDispatcher::accept(peer, connection, budget)?;
+        let dispatcher = LocalDispatcher::accept_with_choice(peer, connection, budget, choice)?;
         Ok(OwnedLocalSession {
             runtime: self,
             dispatcher,

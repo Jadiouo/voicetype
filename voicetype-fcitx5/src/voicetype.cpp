@@ -231,14 +231,22 @@ void VoiceType::pollInputRoute() {
     if (!appInputPath_.empty() && (!ipc_->connected() ||
         (!appInputReady_ && fcitx::now(CLOCK_MONOTONIC) >= appInputDeadline_))) {
         rejectedInputPath_ = appInputPath_;
+        rejectedInputGoogleToggle_ = appGoogleToggle_;
+        rejectedInputF9_ = appCtrlShiftF9_;
     }
-    const bool useApp = route && route->socket != rejectedInputPath_;
+    const bool useApp = route && !(route->socket == rejectedInputPath_ &&
+        route->googleToggle == rejectedInputGoogleToggle_ &&
+        route->ctrlShiftF9 == rejectedInputF9_);
     const std::string desired = useApp ? route->socket : "";
     const int pid = useApp ? route->pid : 0;
     const bool googleToggle = useApp && route->googleToggle;
-    if (desired == appInputPath_ && pid == appInputPid_ && googleToggle == appGoogleToggle_) return;
+    const bool ctrlShiftF9 = useApp && route->ctrlShiftF9;
+    if (desired == appInputPath_ && pid == appInputPid_ &&
+        googleToggle == appGoogleToggle_ && ctrlShiftF9 == appCtrlShiftF9_) return;
     appInputPath_ = desired; appInputPid_ = pid;
     appGoogleToggle_ = googleToggle;
+    appCtrlShiftF9_ = ctrlShiftF9;
+    appF9Latched_ = false;
     appInputReady_ = false;
     appInputDeadline_ = fcitx::now(CLOCK_MONOTONIC) + 1000000;
     connectInput(useApp ? desired : socketPath(), pid);
@@ -263,13 +271,22 @@ std::string VoiceType::learnKeyLabel() const {
 
 bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
     auto key = event.key();
-    const bool learnPress = !event.isRelease() && key.check(learnKey_);
+    const bool routedF9 = appCtrlShiftF9_ && !appInputPath_.empty();
+    const bool f9Press = routedF9 && !event.isRelease() &&
+        key.check(fcitx::Key("Control+Shift+F9"));
+    const bool learnPress = !event.isRelease() && key.check(learnKey_) && !f9Press;
     const bool googleTogglePress = appGoogleToggle_ && !appInputPath_.empty() &&
-        !event.isRelease() && key.check(fcitx::Key("Control+Caps_Lock"));
-    if (capsLockGuard_->filter(event, learnPress || googleTogglePress)) { return true; }
+        !event.isRelease() && (routedF9 ? f9Press : key.check(fcitx::Key("Control+Caps_Lock")));
+    if (capsLockGuard_->filter(event, learnPress || (googleTogglePress && !routedF9))) { return true; }
+    if (routedF9 && appGoogleToggle_ && event.isRelease() &&
+        key.normalize().sym() == FcitxKey_F9 && appF9Latched_) {
+        appF9Latched_ = false;
+        return true;
+    }
     if (googleTogglePress) {
+        if (routedF9) appF9Latched_ = true;
         auto *ic = event.inputContext();
-        if (!capsLockGuard_->supports(ic)) return true;
+        if (!routedF9 && !capsLockGuard_->supports(ic)) return true;
         if (!ic->hasFocus() || isSensitive(ic) || !ipc_ || !ipc_->connected() || !appInputReady_) {
             return true;
         }
@@ -342,7 +359,7 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
     if (appGoogleToggle_) return false;
 
     if (!event.isRelease()) {
-        if (!isCtrlAltPress(key)) {
+        if (!(routedF9 ? f9Press : isCtrlAltPress(key))) {
             return false;
         }
         // 按下: 忽略 auto-repeat
@@ -382,7 +399,7 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
     if (!recording_) {
         return false;
     }
-    if (!isCtrlAltRelease(key)) {
+    if (!(routedF9 ? key.normalize().sym() == FcitxKey_F9 : isCtrlAltRelease(key))) {
         return false;
     }
     stopRecording(/*cancelled=*/false);
@@ -448,7 +465,10 @@ void VoiceType::onDaemonMessage(const IpcMessage &msg) {
         IpcMessage reply;
         reply.type = "desktop_hello";
         reply.setSession(msg.session);
-        reply.value = appGoogleToggle_ ? "voicetype.fcitx.google-toggle.v2" : "voicetype.fcitx.v1";
+        reply.value = appCtrlShiftF9_ ?
+            (appGoogleToggle_ ? "voicetype.fcitx.google-toggle.ctrl-shift-f9.v3" :
+                                "voicetype.fcitx.local-hold.ctrl-shift-f9.v3") :
+            (appGoogleToggle_ ? "voicetype.fcitx.google-toggle.v2" : "voicetype.fcitx.v1");
         if (ipc_->send(reply) && !appInputPath_.empty()) appInputReady_ = true;
         return;
     }

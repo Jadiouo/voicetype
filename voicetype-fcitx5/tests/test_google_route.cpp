@@ -30,6 +30,14 @@ int main() {
     write("voicetype-input-v1\n" + pid + "\n/owned/input.sock\n");
     const auto local = voicetype::desktopInputRoute();
     if (!local || local->googleToggle) return 6;
+    write("voicetype-input-v3\n" + pid + "\n/owned/input.sock\nlocal-hold-ctrl-shift-f9\n");
+    const auto localF9 = voicetype::desktopInputRoute();
+    if (!localF9 || localF9->googleToggle || !localF9->ctrlShiftF9) return 8;
+    write("voicetype-input-v3\n" + pid + "\n/owned/input.sock\ngoogle-toggle-ctrl-shift-f9\n");
+    const auto googleF9 = voicetype::desktopInputRoute();
+    if (!googleF9 || !googleF9->googleToggle || !googleF9->ctrlShiftF9) return 9;
+    write("voicetype-input-v3\n" + pid + "\n/owned/input.sock\ngoogle-toggle-unknown\n");
+    if (voicetype::desktopInputRoute()) return 10;
     using A = voicetype::GoogleToggleAction;
     using voicetype::googleToggleAction;
     // A complete toggle session: only the first physical key-down starts,

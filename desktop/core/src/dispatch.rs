@@ -5,7 +5,7 @@ use crate::{
     google::GoogleProvider,
     local::{deadline, invalid, CorrectionResult, LocalConnection, Wire},
     Application, DeliveryOutcome, DeliveryPort, DictationContext, ProviderEvent, SessionFailure,
-    SessionKey, TargetLease,
+    SessionKey, ShortcutChoice, TargetLease,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -77,9 +77,17 @@ impl GoogleDispatcher {
         budget: Duration,
         review: Option<Arc<crate::review_collector::Collector>>,
         start_permit: Arc<std::sync::atomic::AtomicBool>,
+        choice: ShortcutChoice,
     ) -> io::Result<Self> {
         Ok(Self {
-            input: FcitxConnection::accept(peer, budget, "voicetype.fcitx.google-toggle.v2")?,
+            input: FcitxConnection::accept(
+                peer,
+                budget,
+                match choice {
+                    ShortcutChoice::Default => "voicetype.fcitx.google-toggle.v2",
+                    ShortcutChoice::CtrlShiftF9 => "voicetype.fcitx.google-toggle.ctrl-shift-f9.v3",
+                },
+            )?,
             provider,
             active: None,
             last_session: 0,
@@ -288,8 +296,24 @@ impl LocalDispatcher {
     /// Authenticate and negotiate without starting capture. The caller retains
     /// the actual child handle; an error is never proof of microphone release.
     pub fn accept(peer: UnixStream, engine: LocalConnection, budget: Duration) -> io::Result<Self> {
+        Self::accept_with_choice(peer, engine, budget, ShortcutChoice::Default)
+    }
+
+    pub fn accept_with_choice(
+        peer: UnixStream,
+        engine: LocalConnection,
+        budget: Duration,
+        choice: ShortcutChoice,
+    ) -> io::Result<Self> {
         Ok(Self {
-            input: FcitxConnection::accept(peer, budget, "voicetype.fcitx.v1")?,
+            input: FcitxConnection::accept(
+                peer,
+                budget,
+                match choice {
+                    ShortcutChoice::Default => "voicetype.fcitx.v1",
+                    ShortcutChoice::CtrlShiftF9 => "voicetype.fcitx.local-hold.ctrl-shift-f9.v3",
+                },
+            )?,
             engine,
             active: None,
             last_session: 0,

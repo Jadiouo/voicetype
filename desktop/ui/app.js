@@ -5,6 +5,8 @@ const reload = document.querySelector('#reload');
 const check = document.querySelector('#check-providers');
 const cancel = document.querySelector('#cancel-dictation');
 const choices = [...document.querySelectorAll('input[name="provider"]')];
+const shortcutChoice = document.querySelector('#shortcut-choice');
+const shortcutNote = document.querySelector('#shortcut-note');
 let lastView;
 let commandBusy = false;
 let pollBusy = false;
@@ -26,6 +28,13 @@ const switchGoogle = document.querySelector('#switch-google-shortcut');
 const restoreGoogle = document.querySelector('#restore-google-shortcut');
 const googleTransferNote = document.querySelector('#google-transfer-note');
 let googleTransferPhase = 'unknown';
+
+function shortcutLabel(view, provider, choice) {
+  if (choice === 'ctrl_shift_f9') return `Ctrl＋Shift＋F9（${!view.windows_input && provider === 'local' ? '按住說話、放開結束' : '按一次開始、再按一次結束'}）`;
+  return !view.windows_input && provider === 'local'
+    ? 'Ctrl＋Alt（按住說話、放開結束）'
+    : 'Ctrl＋CapsLock（按一次開始、再按一次結束）';
+}
 const enableInput = document.querySelector('#enable-local-input');
 const spellingEnabled = document.querySelector('#spelling-enabled');
 spellingEnabled.addEventListener('change', () => command('set_spelling_enabled', { enabled: spellingEnabled.checked }));
@@ -34,6 +43,21 @@ const installModule = document.querySelector('#install-input-module');
 const restoreModule = document.querySelector('#restore-input-module');
 
 function runtimeControls(view) {
+  const provider = view?.settings.selected_provider;
+  const binding = provider ? view.settings.shortcuts[provider] : null;
+  shortcutChoice.disabled = commandBusy || !view || view.settings.dictation.busy
+    || view.local_runtime !== 'inactive' || view.google_runtime !== 'inactive'
+    || view.input_requested || googleTransferPhase !== null;
+  if (binding) {
+    shortcutChoice.value = binding.requested;
+    shortcutChoice.options[0].textContent = `預設：${shortcutLabel(view, provider, 'default')}`;
+    shortcutChoice.options[1].textContent = shortcutLabel(view, provider, 'ctrl_shift_f9');
+    shortcutNote.textContent = binding.requested === binding.effective
+      ? `已選擇 ${shortcutLabel(view, provider, binding.requested)}；啟用後才確認本次按鍵可用。`
+      : `已要求 ${shortcutLabel(view, provider, binding.requested)}；前次確認仍是 ${shortcutLabel(view, provider, binding.effective)}。下一次啟用若未通過確認，會保留前次有效鍵。`;
+  } else {
+    shortcutNote.textContent = '正在讀取快捷鍵設定…';
+  }
   spellingEnabled.disabled = commandBusy || !view || view.local_runtime !== 'inactive'
     || view.google_runtime !== 'inactive' || view.settings.dictation.busy;
   if (view) spellingEnabled.checked = view.settings.spelling_enabled;
@@ -58,10 +82,10 @@ function runtimeControls(view) {
     || view?.input_requested || !!view?.settings.dictation.busy;
   document.querySelector('#runtime-note').textContent = !view?.local_runtime_bundled
     ? '這個平台的引擎封裝仍在準備中。'
-    : view.windows_input && view.local_runtime === 'ready' ? '按一次 Ctrl＋CapsLock 開始，再按一次結束並辨識；Esc 取消。結果目前保留在待處理文字供手動複製，尚未自動送字。'
+    : view.windows_input && view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。結果目前保留在待處理文字供手動複製，尚未自動送字。`
     : view.windows_input && view.input_requested ? 'Windows 快捷鍵已啟用；目前只支援一般 Win32 Edit 欄位。'
     : view.windows_input && loaded ? '引擎已載入。啟用快捷鍵後，只在一般 Win32 Edit 欄位開始錄音。'
-    : view.local_runtime === 'ready' ? '按住 Ctrl＋Alt 說話，放開後送字；Esc 取消。停用或結束 App 後回到原服務。'
+    : view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。停用或結束 App 後回到原服務。`
     : view.input_requested ? '等待 Fcitx 接管：原聽寫結束後才切換。若持續等待，請確認已載入本版 Fcitx 模組；舊的使用者模組可能遮住安裝包版本。'
     : loaded ? '引擎已載入。按「啟用本機聽寫」後，Fcitx 才會在空閒時接管快捷鍵。'
     : '載入時會核對完整模型並使用 CPU。這一步不會開始錄音。';
@@ -101,7 +125,7 @@ function runtimeControls(view) {
     ? (view.windows_input
       ? '官方 CLI 空草稿與 Windows 快捷鍵已就緒；每句開始仍須等待 CLI 回報錄音狀態。真實麥克風及送字待驗收。'
       : '官方 CLI 空草稿與 Fcitx 路由已連接；真實麥克風及送字仍待驗收。')
-    : view?.google_runtime === 'waiting_for_input' ? 'CLI 預檢通過，等待 Fcitx 路由 v2 連接。尚未錄音。'
+    : view?.google_runtime === 'waiting_for_input' ? 'CLI 預檢通過，等待 Fcitx 路由握手。尚未錄音。'
     : view?.google_runtime === 'transfer_pending' ? 'Google 快捷鍵切換中；舊服務與跨產品鎖尚未完成確認，錄音已鎖定。可停用引擎後還原。'
     : view?.google_runtime === 'prewarming' ? '上一句已完成；正在預備下一個官方 CLI，下一句可能需要等待。'
     : view?.google_runtime === 'cleaning' ? '正在確認錄音程序完全結束；麥克風仍由 App 保留。'
@@ -194,6 +218,7 @@ async function command(name, args = {}) {
   cancel.disabled = true;
   error.hidden = true;
   status.textContent = name === 'select_provider' ? '正在儲存…'
+    : name === 'set_shortcut' ? '正在保存快捷鍵要求；尚未註冊按鍵…'
     : name === 'load_local_runtime' ? '正在核對模型並載入本機引擎，首次載入可能需要一些時間…'
     : name === 'repair_local_runtime' ? '正在核對安裝包並修復本機引擎…'
     : name === 'rollback_local_runtime' ? '正在核對上一版並保存回復選擇…'
@@ -214,6 +239,7 @@ async function command(name, args = {}) {
     await refreshRecovery().catch(reason => { recoveryNote.textContent = String(reason); });
     status.textContent = name === 'select_provider'
       ? '偏好已儲存。請確認所選方式的就緒狀態。'
+      : name === 'set_shortcut' ? '快捷鍵要求已保存；停用狀態不代表按鍵已生效，下一次啟用時會驗證。'
       : name === 'load_local_runtime' ? (view.spelling_runtime === 'unavailable'
         ? '本機辨識引擎已載入；CPU 校正器本次不可用。仍可啟用本機聽寫。'
         : '引擎已載入，可啟用本機聽寫。尚未開始錄音。')
@@ -311,6 +337,13 @@ setInterval(async () => {
 for (const choice of choices) {
   choice.addEventListener('change', () => command('select_provider', { provider: choice.value }));
 }
+shortcutChoice.addEventListener('change', () => {
+  if (!lastView) return;
+  command('set_shortcut', {
+    provider: lastView.settings.selected_provider,
+    choice: shortcutChoice.value,
+  });
+});
 reload.addEventListener('click', () => command('reload_settings'));
 check.addEventListener('click', () => command('refresh_providers'));
 cancel.addEventListener('click', () => command('cancel_dictation'));

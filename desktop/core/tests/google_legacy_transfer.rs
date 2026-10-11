@@ -15,7 +15,7 @@ use std::{
 use voicetype_app_core::google::legacy_transfer::{
     FcitxIdentity, GoogleShortcutTransfer, LegacyService, TransferPhase, UnitIdentity,
 };
-use voicetype_app_core::{google::GoogleBoundary, worker::DesktopWorker, Provider};
+use voicetype_app_core::{google::GoogleBoundary, worker::DesktopWorker, Provider, ShortcutChoice};
 
 struct FakeService {
     unit: Mutex<UnitIdentity>,
@@ -528,6 +528,166 @@ fn resident_start_gate_holds_through_handshake_failed_claim_and_restore() {
         .unwrap();
     assert_eq!(fs::read(&config).unwrap(), b"Enabled=True\n");
     assert!(!runtime.join("voicetype-app-input/owner").exists());
+    worker.shutdown().unwrap();
+}
+
+#[test]
+fn transfer_confirms_alternate_key_before_unblocking_a_google_start() {
+    let root = tempfile::tempdir().unwrap();
+    let (transfer, config, _) = fixture(root.path());
+    fs::write(&config, b"Enabled=True\n").unwrap();
+    let service = Arc::new(FakeService::new());
+    let fcitx = FcitxIdentity {
+        pid: std::process::id(),
+        start_ticks: 202,
+    };
+    transfer
+        .stage_disable(old_fcitx(), service.snapshot().unwrap())
+        .unwrap();
+    let runtime = root.path().join("app-runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let profile = root.path().join("app-profile");
+    let worker = DesktopWorker::spawn(profile.clone()).unwrap();
+    worker.select_provider(Provider::Google).unwrap();
+    worker
+        .set_shortcut(Provider::Google, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    worker.begin_google_transfer_setup().unwrap();
+    worker
+        .prepare_google_transfer(
+            runtime,
+            || Ok(CountedCli(Arc::new(AtomicUsize::new(0)))),
+            Ok,
+            false,
+            None,
+        )
+        .unwrap();
+    let peer = UnixStream::connect(worker.google_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut wire = BufReader::new(peer);
+    let hello = read_wire(&mut wire);
+    writeln!(
+        wire.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello", "session":hello["session"],
+        "value":"voicetype.fcitx.google-toggle.ctrl-shift-f9.v3"})
+    )
+    .unwrap();
+    assert!(worker.google_transfer_route_ready().unwrap());
+    assert_eq!(start_wire(&mut wire, 1)["type"], "error");
+    assert_eq!(
+        worker
+            .settings()
+            .unwrap()
+            .settings
+            .shortcuts
+            .google
+            .effective,
+        ShortcutChoice::Default
+    );
+    let ownership = transfer
+        .claim(fcitx.clone(), true, service.as_ref())
+        .unwrap();
+    let ready = worker.complete_google_transfer(ownership, fcitx).unwrap();
+    assert_eq!(
+        ready.settings.shortcuts.google.effective,
+        ShortcutChoice::CtrlShiftF9
+    );
+    assert_eq!(
+        voicetype_app_core::Application::open(&profile)
+            .unwrap()
+            .snapshot()
+            .shortcuts
+            .google
+            .effective,
+        ShortcutChoice::CtrlShiftF9
+    );
+    assert_eq!(start_wire(&mut wire, 2)["value"], "recording");
+    writeln!(wire.get_mut(), "{}", json!({"type":"cancel", "session":2})).unwrap();
+    assert_eq!(read_wire(&mut wire)["value"], "idle");
+    worker.begin_google_transfer_restore().unwrap();
+    worker.deactivate_google().unwrap();
+    worker
+        .restore_google_transfer(transfer, SharedService(service))
+        .unwrap();
+    worker.shutdown().unwrap();
+}
+
+#[test]
+fn failed_shortcut_confirmation_keeps_transfer_owner_and_start_gate_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let (transfer, config, bridge) = fixture(root.path());
+    fs::write(&config, b"Enabled=True\n").unwrap();
+    let service = Arc::new(FakeService::new());
+    let fcitx = FcitxIdentity {
+        pid: std::process::id(),
+        start_ticks: 202,
+    };
+    transfer
+        .stage_disable(old_fcitx(), service.snapshot().unwrap())
+        .unwrap();
+    let runtime = root.path().join("app-runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let profile = root.path().join("app-profile");
+    let worker = DesktopWorker::spawn(profile.clone()).unwrap();
+    worker.select_provider(Provider::Google).unwrap();
+    worker
+        .set_shortcut(Provider::Google, ShortcutChoice::CtrlShiftF9)
+        .unwrap();
+    worker.begin_google_transfer_setup().unwrap();
+    worker
+        .prepare_google_transfer(
+            runtime,
+            || Ok(CountedCli(Arc::new(AtomicUsize::new(0)))),
+            Ok,
+            false,
+            None,
+        )
+        .unwrap();
+    let peer = UnixStream::connect(worker.google_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut wire = BufReader::new(peer);
+    let hello = read_wire(&mut wire);
+    writeln!(
+        wire.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello", "session":hello["session"],
+        "value":"voicetype.fcitx.google-toggle.ctrl-shift-f9.v3"})
+    )
+    .unwrap();
+    assert!(worker.google_transfer_route_ready().unwrap());
+    let ownership = transfer
+        .claim(fcitx.clone(), true, service.as_ref())
+        .unwrap();
+    let settings = profile.join("desktop.json");
+    let mut edited = fs::read(&settings).unwrap();
+    edited.extend_from_slice(b"\n"); // Valid external edit forces a stale-writer conflict.
+    fs::write(&settings, &edited).unwrap();
+    assert!(worker.complete_google_transfer(ownership, fcitx).is_err());
+    assert_eq!(start_wire(&mut wire, 1)["type"], "error");
+    assert_eq!(
+        voicetype_app_core::Application::open(&profile)
+            .unwrap()
+            .snapshot()
+            .shortcuts
+            .google
+            .effective,
+        ShortcutChoice::Default
+    );
+    assert!(OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&bridge)
+        .unwrap()
+        .try_lock()
+        .is_err());
+    worker.begin_google_transfer_restore().unwrap();
+    worker.deactivate_google().unwrap();
+    worker
+        .restore_google_transfer(transfer, SharedService(service))
+        .unwrap();
     worker.shutdown().unwrap();
 }
 

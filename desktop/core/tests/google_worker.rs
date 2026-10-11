@@ -6,6 +6,142 @@ use voicetype_app_core::{
     Provider,
 };
 
+#[test]
+fn inactive_worker_saves_a_shortcut_request_without_claiming_input() {
+    let root = tempfile::tempdir().unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    let view = worker
+        .set_shortcut(
+            Provider::Google,
+            voicetype_app_core::ShortcutChoice::CtrlShiftF9,
+        )
+        .unwrap();
+    assert_eq!(view.google_runtime, GoogleRuntimeStatus::Inactive);
+    assert!(!view.input_requested);
+    assert_eq!(
+        view.settings.shortcuts.google.requested,
+        voicetype_app_core::ShortcutChoice::CtrlShiftF9
+    );
+    assert_eq!(
+        view.settings.shortcuts.google.effective,
+        voicetype_app_core::ShortcutChoice::Default
+    );
+    worker.shutdown().unwrap();
+}
+
+#[test]
+fn unacknowledged_alternate_route_restores_confirmed_google_key() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker.select_provider(Provider::Google).unwrap();
+    worker
+        .set_shortcut(
+            Provider::Google,
+            voicetype_app_core::ShortcutChoice::CtrlShiftF9,
+        )
+        .unwrap();
+    worker
+        .activate_google(runtime.clone(), || Ok(ReadyCli::default()), Ok, false, None)
+        .unwrap();
+    let owner = runtime.join("voicetype-app-input/owner");
+    assert!(fs::read_to_string(&owner)
+        .unwrap()
+        .contains("google-toggle-ctrl-shift-f9"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if fs::read_to_string(&owner)
+            .unwrap()
+            .starts_with("voicetype-input-v2\n")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "confirmed route was not restored"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pair = worker.settings().unwrap().settings.shortcuts.google;
+    assert_eq!(
+        pair.requested,
+        voicetype_app_core::ShortcutChoice::CtrlShiftF9
+    );
+    assert_eq!(pair.effective, voicetype_app_core::ShortcutChoice::Default);
+    worker.deactivate_google().unwrap();
+    worker.shutdown().unwrap();
+}
+
+#[test]
+fn alternate_google_key_becomes_effective_only_after_v3_fcitx_hello() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::{fs::PermissionsExt, net::UnixStream},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let worker = DesktopWorker::spawn(root.path().join("settings")).unwrap();
+    worker.select_provider(Provider::Google).unwrap();
+    worker
+        .set_shortcut(
+            Provider::Google,
+            voicetype_app_core::ShortcutChoice::CtrlShiftF9,
+        )
+        .unwrap();
+    worker
+        .activate_google(runtime, || Ok(ReadyCli::default()), Ok, false, None)
+        .unwrap();
+    assert_eq!(
+        worker
+            .settings()
+            .unwrap()
+            .settings
+            .shortcuts
+            .google
+            .effective,
+        voicetype_app_core::ShortcutChoice::Default
+    );
+    let peer = UnixStream::connect(worker.google_endpoint().unwrap().unwrap()).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut wire = BufReader::new(peer);
+    let mut line = String::new();
+    wire.read_line(&mut line).unwrap();
+    let hello: Value = serde_json::from_str(&line).unwrap();
+    writeln!(
+        wire.get_mut(),
+        "{}",
+        json!({"type":"desktop_hello",
+        "session":hello["session"],
+        "value":"voicetype.fcitx.google-toggle.ctrl-shift-f9.v3"})
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let view = worker.settings().unwrap();
+        if view.google_runtime == GoogleRuntimeStatus::Ready {
+            assert_eq!(
+                view.settings.shortcuts.google.effective,
+                voicetype_app_core::ShortcutChoice::CtrlShiftF9
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "v3 HELLO did not activate the key"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(wire);
+    worker.deactivate_google().unwrap();
+    worker.shutdown().unwrap();
+}
+
 #[derive(Default)]
 struct ReadyCli {
     closed: bool,
@@ -147,6 +283,22 @@ fn google_uses_original_fcitx_target_and_shared_coordinator_once() {
         .refresh_local(root.path().join("missing-local-socket"))
         .is_err());
     assert!(worker.select_provider(Provider::Local).is_err());
+    assert!(worker
+        .set_shortcut(
+            Provider::Google,
+            voicetype_app_core::ShortcutChoice::CtrlShiftF9
+        )
+        .is_err());
+    assert_eq!(
+        worker
+            .settings()
+            .unwrap()
+            .settings
+            .shortcuts
+            .google
+            .requested,
+        voicetype_app_core::ShortcutChoice::Default
+    );
     writeln!(wire.get_mut(), "{}", json!({"type":"stop","session":41})).unwrap();
     let delivery = read(&mut wire);
     assert_eq!(delivery["type"], "deliver");

@@ -37,8 +37,10 @@ std::optional<InputRoute> desktopInputRoute() {
     const auto length = read(record.value, bytes, sizeof(bytes));
     if (length <= 0 || length == sizeof(bytes)) return std::nullopt;
     const std::string data(bytes, length);
-    const bool googleToggle = data.rfind("voicetype-input-v2\n", 0) == 0;
-    const std::string prefix = googleToggle ? "voicetype-input-v2\n" : "voicetype-input-v1\n";
+    const bool alternate = data.rfind("voicetype-input-v3\n", 0) == 0;
+    const bool v2Google = data.rfind("voicetype-input-v2\n", 0) == 0;
+    const std::string prefix = alternate ? "voicetype-input-v3\n" :
+        (v2Google ? "voicetype-input-v2\n" : "voicetype-input-v1\n");
     if (data.rfind(prefix, 0) != 0) return std::nullopt;
     const auto end = data.find('\n', prefix.size());
     if (end == std::string::npos) return std::nullopt;
@@ -49,9 +51,13 @@ std::optional<InputRoute> desktopInputRoute() {
     const auto socketEnd = suffix.find('\n');
     if (socketEnd == std::string::npos) return std::nullopt;
     const auto socket = suffix.substr(0, socketEnd);
-    if (suffix.substr(socketEnd + 1) != (googleToggle ? "google-toggle\n" : "") ||
+    const auto mode = suffix.substr(socketEnd + 1);
+    const bool googleToggle = alternate ? mode == "google-toggle-ctrl-shift-f9\n" : v2Google;
+    if ((alternate ? (mode != "google-toggle-ctrl-shift-f9\n" &&
+                       mode != "local-hold-ctrl-shift-f9\n") :
+                     mode != (googleToggle ? "google-toggle\n" : "")) ||
         socket.empty() || socket[0] != '/' || socket.size() >= 108 ||
         socket.find_first_of("\n\r") != std::string::npos || socket.find('\0') != std::string::npos) return std::nullopt;
-    return InputRoute{socket, pid, googleToggle};
+    return InputRoute{socket, pid, googleToggle, alternate};
 }
 }

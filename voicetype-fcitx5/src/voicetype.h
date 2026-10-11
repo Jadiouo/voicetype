@@ -75,7 +75,11 @@ private:
     std::unique_ptr<fcitx::EventSourceTime> inputRouteTimer_;
     std::string appInputPath_;
     bool appGoogleToggle_ = false;
+    bool appCtrlShiftF9_ = false;
+    bool appF9Latched_ = false;
     std::string rejectedInputPath_;
+    bool rejectedInputGoogleToggle_ = false;
+    bool rejectedInputF9_ = false;
     int appInputPid_ = 0;
     bool appInputReady_ = false;
     uint64_t appInputDeadline_ = 0;

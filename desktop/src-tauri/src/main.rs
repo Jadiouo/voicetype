@@ -15,7 +15,7 @@ use voicetype_app_core::{
     setup::{ModelSetup, SetupStatus},
     vocabulary::{Vocabulary, VocabularyView},
     worker::{DesktopSnapshot, DesktopWorker, RecoveryText},
-    Provider,
+    Provider, ShortcutChoice,
 };
 
 #[cfg(any(target_os = "linux", windows))]
@@ -869,6 +869,15 @@ async fn set_spelling_enabled(enabled: bool, app: tauri::AppHandle) -> Result<Vi
 }
 
 #[tauri::command]
+async fn set_shortcut(
+    provider: Provider,
+    choice: ShortcutChoice,
+    app: tauri::AppHandle,
+) -> Result<View, String> {
+    with_desktop(app, move |worker| worker.set_shortcut(provider, choice)).await
+}
+
+#[tauri::command]
 async fn reload_settings(app: tauri::AppHandle) -> Result<View, String> {
     with_desktop(app, DesktopWorker::reload).await
 }
@@ -1059,6 +1068,7 @@ fn main() {
             set_spelling_enabled,
             get_settings,
             select_provider,
+            set_shortcut,
             reload_settings,
             refresh_providers,
             get_recovery,
