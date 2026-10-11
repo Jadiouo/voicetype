@@ -133,7 +133,7 @@
         <p>偶爾留下一段，空閒時聽聽看。錄音與文字只存在這台電腦，7 天後清理；不會突然跳出視窗。</p>
         <label class="review-opt-in"><input id="review-enabled" type="checkbox" disabled> 開啟本機抽樣校對</label>
         <p id="review-policy">每天最多 5 段，從 8 秒以上的聽寫抽樣。預設關閉，不會額外開啟麥克風。</p>
-        <p>此處使用 App 的獨立校對資料；日常版本的抽樣設定繼續保留。Google 與 Windows 語音接通後才會開始採集該路線的樣本。</p>
+        <p>此處使用 App 的獨立校對資料；日常版本的抽樣設定不變。開啟後，本機辨識與 Linux Google 可依條件保存音訊樣本；Windows Google 目前無法取得音訊，不會產生此路線的抽樣樣本。</p>
         <button id="review-reload" type="button">重新載入校對</button>
         <p id="review-status" role="status" aria-live="polite">正在讀取校對…</p>
         <div id="review-error" class="error" role="alert" hidden></div>
