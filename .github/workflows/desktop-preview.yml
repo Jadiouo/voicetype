@@ -76,6 +76,11 @@ jobs:
           python-version: '3.12'
       - name: Rust stable
         run: rustup update stable --no-self-update
+      - name: Verify locked daemon graph before native builds
+        shell: bash
+        run: |
+          set -e
+          cargo metadata --manifest-path ../voicetyped/Cargo.toml --locked --format-version 1 > target/scratch/daemon-metadata.json
       - name: Linux build and desktop dependencies
         if: runner.os == 'Linux'
         run: |
