@@ -58,7 +58,8 @@ public:
     using DisconnectCallback = std::function<void()>;
 
     IpcClient(fcitx::EventLoop *loop, std::string socketPath,
-              MessageCallback onMessage, DisconnectCallback onDisconnect);
+              MessageCallback onMessage, DisconnectCallback onDisconnect,
+              int expectedPid = 0);
     ~IpcClient();
 
     IpcClient(const IpcClient &) = delete;
@@ -72,6 +73,7 @@ public:
 
 private:
     void tryConnect();
+    bool trustedPeer() const;
     void scheduleReconnect();
     void onIo(fcitx::IOEventFlags flags);
     void onConnectResult();
@@ -83,6 +85,7 @@ private:
 
     fcitx::EventLoop *loop_;
     std::string path_;
+    int expectedPid_;
     MessageCallback onMessage_;
     DisconnectCallback onDisconnect_;
 

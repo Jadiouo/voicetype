@@ -1,0 +1,20 @@
+{
+  "portable-pty@0.9.0": {
+    "path": "desktop/vendor/portable-pty-0.9.0",
+    "archive_url": "https://static.crates.io/crates/portable-pty/portable-pty-0.9.0.crate",
+    "archive_sha256": "b4a596a2b3d2752d94f51fac2d4a96737b8705dddd311a32b9af47211f08671e",
+    "omitted": [
+      ".cargo_vcs_info.json",
+      "Cargo.lock"
+    ],
+    "added": [
+      "VOICETYPE-PROVENANCE.md"
+    ],
+    "patched": {
+      "src/win/psuedocon.rs": {
+        "upstream_sha256": "297d0622d7b0401708f1ce3b92076632dd5a0c188b4a8d09b2f4891190b0e392",
+        "sha256": "f71d17eecd201da76342dda75ccab546f51230b6a933ad28422a4648cd3e0b07"
+      }
+    }
+  }
+}

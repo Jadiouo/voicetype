@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "scope": "CSC Windows PE source candidates; current bundle and installer must be rechecked",
+  "baseline_old_run_id": 37808930921,
+  "archives": [
+    {
+      "artifact": "numpy-2.5.3-cp312-cp312-win_amd64.whl",
+      "source_url": "https://files.pythonhosted.org/packages/3c/a1/accf6d4f0c80c5d9ba9735d6b1550e444180599f34dec69ca01360f717ad/numpy-2.5.3-cp312-cp312-win_amd64.whl",
+      "source_sha256": "0a59a421a32580a009e8a1751345bf829631b990dc1794b80514ab722b435def",
+      "notice": "licenses/numpy/00-LICENSE.txt",
+      "notice_sha256": "a804dff0ead9fadc5293456410bcbfc32bf024be9c4513459663fb7b442d2341",
+      "notice_source_member": "numpy-2.5.3.dist-info/licenses/LICENSE.txt",
+      "binaries": [
+        {
+          "path": "_internal/msvcp140.dll",
+          "source_member": "numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+          "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde"
+        },
+        {
+          "path": "_internal/numpy.libs/libscipy_openblas64_-ed4f167a5330424524f45258e7ca2c8d.dll",
+          "source_member": "numpy.libs/libscipy_openblas64_-ed4f167a5330424524f45258e7ca2c8d.dll",
+          "sha256": "ed4f167a5330424524f45258e7ca2c8d7f03c0cba1f30ee4985553ac1f88ecf8"
+        },
+        {
+          "path": "_internal/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+          "source_member": "numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+          "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde"
+        },
+        {
+          "path": "_internal/numpy/_core/_multiarray_tests.cp312-win_amd64.pyd",
+          "source_member": "numpy/_core/_multiarray_tests.cp312-win_amd64.pyd",
+          "sha256": "8fdd39b1dcd81239b1fe0b10744afd76dc85c8575aa09429b392e323fb750f4b"
+        },
+        {
+          "path": "_internal/numpy/_core/_multiarray_umath.cp312-win_amd64.pyd",
+          "source_member": "numpy/_core/_multiarray_umath.cp312-win_amd64.pyd",
+          "sha256": "a9d5c4202cf109bf24305f3f1180e0509aaf661ba850612bd75df7cfd9f928b8"
+        },
+        {
+          "path": "_internal/numpy/fft/_pocketfft_umath.cp312-win_amd64.pyd",
+          "source_member": "numpy/fft/_pocketfft_umath.cp312-win_amd64.pyd",
+          "sha256": "3ed9c2f73c7dc165e41e98ecfd0a4f66481a5afec7e39148a2af317b9a4ff62e"
+        },
+        {
+          "path": "_internal/numpy/linalg/_umath_linalg.cp312-win_amd64.pyd",
+          "source_member": "numpy/linalg/_umath_linalg.cp312-win_amd64.pyd",
+          "sha256": "15884ab8ded82bc5f834e429a63cc9cfdcc24f61737a5c563efb2c2f274213a8"
+        },
+        {
+          "path": "_internal/numpy/random/_bounded_integers.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/_bounded_integers.cp312-win_amd64.pyd",
+          "sha256": "031cbd54dcbef2ff3fda13889879a6442f17c31df6d008154708b31d7582309c"
+        },
+        {
+          "path": "_internal/numpy/random/_common.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/_common.cp312-win_amd64.pyd",
+          "sha256": "8bd4fcd63a3f0643a81b4095a8221a4a3917dd86816ecbeea595db237071369f"
+        },
+        {
+          "path": "_internal/numpy/random/_generator.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/_generator.cp312-win_amd64.pyd",
+          "sha256": "8dd9ad224065d8c38d99149d6816a519eb769b3e01210164b3bcb186e7d59479"
+        },
+        {
+          "path": "_internal/numpy/random/_mt19937.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/_mt19937.cp312-win_amd64.pyd",
+          "sha256": "9b3aff503e8872d6e6b71b2d41a5a1304c02092cb75f5387194c3fa98c1a5610"
+        },
+        {
+          "path": "_internal/numpy/random/_pcg64.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/_pcg64.cp312-win_amd64.pyd",
+          "sha256": "f68a6a65df54920f091c6745694fd7adacc7311d980a429c8217385b43f8df26"
+        },
+        {
+          "path": "_internal/numpy/random/_philox.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/_philox.cp312-win_amd64.pyd",
+          "sha256": "1872654c8ade0ed9e11ca3f1b2714154f39a0cef46416b48e40c7e96a6dc2018"
+        },
+        {
+          "path": "_internal/numpy/random/_sfc64.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/_sfc64.cp312-win_amd64.pyd",
+          "sha256": "958af4dd25196f436d67b681c64a8639f0ec5a98dbb37124859def7eb353c0ab"
+        },
+        {
+          "path": "_internal/numpy/random/bit_generator.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/bit_generator.cp312-win_amd64.pyd",
+          "sha256": "1e7a030cfd348ab125a681eaf21b227be145d8329430b8d521f9bde520390267"
+        },
+        {
+          "path": "_internal/numpy/random/mtrand.cp312-win_amd64.pyd",
+          "source_member": "numpy/random/mtrand.cp312-win_amd64.pyd",
+          "sha256": "2dbf4488af25a9d6b2863b3eea53d4a39b692b3be579e970761730d310e8ea65"
+        }
+      ]
+    },
+    {
+      "artifact": "onnxruntime-1.24.4-cp312-cp312-win_amd64.whl",
+      "source_url": "https://files.pythonhosted.org/packages/8b/f4/6b89e297b93704345f0f3f8c62229bee323ef25682a3f9b4f89a39324950/onnxruntime-1.24.4-cp312-cp312-win_amd64.whl",
+      "source_sha256": "535b29475ca42b593c45fbb2152fbf1cdf3f287315bf650e6a724a0a1d065cdb",
+      "notice": "licenses/onnxruntime/00-LICENSE",
+      "notice_sha256": "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
+      "notice_source_member": "onnxruntime/LICENSE",
+      "binaries": [
+        {
+          "path": "_internal/onnxruntime/capi/onnxruntime.dll",
+          "source_member": "onnxruntime/capi/onnxruntime.dll",
+          "sha256": "87da0279ab54add397fd518f7022efe8b9a89fd968669d0adff9f9f242344b6c"
+        },
+        {
+          "path": "_internal/onnxruntime/capi/onnxruntime_providers_shared.dll",
+          "source_member": "onnxruntime/capi/onnxruntime_providers_shared.dll",
+          "sha256": "838048bae6e1d040e41e4d428a831ac9c5bc91da24abced383d42cb24f2b1376"
+        },
+        {
+          "path": "_internal/onnxruntime/capi/onnxruntime_pybind11_state.pyd",
+          "source_member": "onnxruntime/capi/onnxruntime_pybind11_state.pyd",
+          "sha256": "2e934e4bc41f0c5a61dec504705f7eae3dd5fda5a27db7a88bbe8552eb692e9a"
+        }
+      ]
+    },
+    {
+      "artifact": "python-3.12.10-embed-amd64.zip",
+      "source_url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip",
+      "source_sha256": "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
+      "notice": "licenses/Python.txt",
+      "notice_sha256": "e502c6b880ff58d614901495a9009c136539cd0b1e2a2abb8fc00b934c203419",
+      "notice_source_member": "LICENSE.txt",
+      "binaries": [
+        {
+          "path": "_internal/_asyncio.pyd",
+          "source_member": "_asyncio.pyd",
+          "sha256": "c77de90cad749087a0c5dc5e19d78d24f6ef44e7e5ac19b8420cfc0cea62395d"
+        },
+        {
+          "path": "_internal/_bz2.pyd",
+          "source_member": "_bz2.pyd",
+          "sha256": "65f610646d10d5babea080e060d244b546ec52c54012e5e937dc72dcc2e2e7bc"
+        },
+        {
+          "path": "_internal/_ctypes.pyd",
+          "source_member": "_ctypes.pyd",
+          "sha256": "0e56107a891100535f2da79d85a5ae65ff1227b4765bd108f8593ac1a1110d81"
+        },
+        {
+          "path": "_internal/_decimal.pyd",
+          "source_member": "_decimal.pyd",
+          "sha256": "aeacfead2befcc0768063a037bb64bd32109ae09cb144e5f571b04dd7965db9d"
+        },
+        {
+          "path": "_internal/_hashlib.pyd",
+          "source_member": "_hashlib.pyd",
+          "sha256": "03d233dbace599168eaffec823de6ed7beec8c2a4ebfe9b8a3d8e042a59af3ba"
+        },
+        {
+          "path": "_internal/_lzma.pyd",
+          "source_member": "_lzma.pyd",
+          "sha256": "e3deecc1f59a3b811c608861decd84de1e8df8bafd5e2b39188861318c5a38cf"
+        },
+        {
+          "path": "_internal/_multiprocessing.pyd",
+          "source_member": "_multiprocessing.pyd",
+          "sha256": "2c636df7059cb0dd7e978dd735c7c5c8ddb09cf94754cf9e232296b96c5c545a"
+        },
+        {
+          "path": "_internal/_overlapped.pyd",
+          "source_member": "_overlapped.pyd",
+          "sha256": "662126ff80c3a1b4cedf74074029c12ae4743e6d3b37376e39ac70aacb7d4d3c"
+        },
+        {
+          "path": "_internal/_queue.pyd",
+          "source_member": "_queue.pyd",
+          "sha256": "48e76e0ad63f6932b4a77b5819f41c1e7595636ca8d9e824f0943a14b8bb5035"
+        },
+        {
+          "path": "_internal/_socket.pyd",
+          "source_member": "_socket.pyd",
+          "sha256": "3efa4636cf9e350856f6927d67a4c2564bf9bd2758a00bbf17d3aece5b60016d"
+        },
+        {
+          "path": "_internal/_ssl.pyd",
+          "source_member": "_ssl.pyd",
+          "sha256": "0bc527d2dbc50009f43b2ed5d5982c4f63f4b647647ffa9eda612dcda80f6040"
+        },
+        {
+          "path": "_internal/_wmi.pyd",
+          "source_member": "_wmi.pyd",
+          "sha256": "a980f1e7a29842bd946863fc2693fbeb555a9dc0f9e1630dfed9a2fcdef3ece2"
+        },
+        {
+          "path": "_internal/libcrypto-3.dll",
+          "source_member": "libcrypto-3.dll",
+          "sha256": "ccfffddcd3defb8d899026298af9af43bc186130f8483d77e97c93233d5f27d7"
+        },
+        {
+          "path": "_internal/libffi-8.dll",
+          "source_member": "libffi-8.dll",
+          "sha256": "eff52743773eb550fcc6ce3efc37c85724502233b6b002a35496d828bd7b280a"
+        },
+        {
+          "path": "_internal/libssl-3.dll",
+          "source_member": "libssl-3.dll",
+          "sha256": "007142039f04d04e0ed607bda53de095e5bc6a8a10d26ecedde94ea7d2d7eefe"
+        },
+        {
+          "path": "_internal/pyexpat.pyd",
+          "source_member": "pyexpat.pyd",
+          "sha256": "d615e193d1affcdbfe504e90d3621cbdcff94bf72b79d899126534507fd6d27a"
+        },
+        {
+          "path": "_internal/python3.dll",
+          "source_member": "python3.dll",
+          "sha256": "fb975a606e7fbf74f64260e3f60c3490b4f74a183c0926fd6ed1ac4c52ac7b1c"
+        },
+        {
+          "path": "_internal/python312.dll",
+          "source_member": "python312.dll",
+          "sha256": "9a0e3435aaa680d868150f87ab3e388ad2eebc22f87e036155c7b4eda8cd2120"
+        },
+        {
+          "path": "_internal/select.pyd",
+          "source_member": "select.pyd",
+          "sha256": "d4d7181b11db0bd22a6cd5cda6f8583d1f5c77615fd0a6ca33350619d6e0438a"
+        },
+        {
+          "path": "_internal/unicodedata.pyd",
+          "source_member": "unicodedata.pyd",
+          "sha256": "208ee1cd3cbad0828433ca7246b05be2b1ff5569983d27d296c0b38888585488"
+        },
+        {
+          "path": "_internal/vcruntime140.dll",
+          "source_member": "vcruntime140.dll",
+          "sha256": "052ad6a20d375957e82aa6a3c441ea548d89be0981516ca7eb306e063d5027f4"
+        },
+        {
+          "path": "_internal/vcruntime140_1.dll",
+          "source_member": "vcruntime140_1.dll",
+          "sha256": "6a99bc0128e0c7d6cbbf615fcc26909565e17d4ca3451b97f8987f9c6acbc6c8"
+        }
+      ]
+    },
+    {
+      "artifact": "pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+      "source_url": "https://files.pythonhosted.org/packages/86/bf/899e81e4cce32febab4fb42bb97dcdf66bc135272882d1987881a4b519e9/pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+      "source_sha256": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
+      "notice": "licenses/pyyaml/00-LICENSE",
+      "notice_sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4",
+      "notice_source_member": "pyyaml-6.0.3.dist-info/licenses/LICENSE",
+      "binaries": [
+        {
+          "path": "_internal/yaml/_yaml.cp312-win_amd64.pyd",
+          "source_member": "yaml/_yaml.cp312-win_amd64.pyd",
+          "sha256": "4fd0e84f50261ed0886cffcdd8008b055af3352546e649c3d741b50eae1f9b5f"
+        }
+      ]
+    },
+    {
+      "artifact": "tokenizers-0.22.2-cp39-abi3-win_amd64.whl",
+      "source_url": "https://files.pythonhosted.org/packages/65/71/0670843133a43d43070abeb1949abfdef12a86d490bea9cd9e18e37c5ff7/tokenizers-0.22.2-cp39-abi3-win_amd64.whl",
+      "source_sha256": "c9ea31edff2968b44a88f97d784c2f16dc0729b8b143ed004699ebca91f05c48",
+      "notice": "licenses/tokenizers/LICENSE.txt",
+      "notice_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "notice_source_url": "https://raw.githubusercontent.com/huggingface/tokenizers/v0.22.2/LICENSE",
+      "binaries": [
+        {
+          "path": "_internal/tokenizers/tokenizers.pyd",
+          "source_member": "tokenizers/tokenizers.pyd",
+          "sha256": "7acb83f5b89136597e0d14b788d82917bf2870df94575bf77e12731c4e49c4df"
+        }
+      ]
+    }
+  ],
+  "msvc_numpy_runtime": {
+    "paths": [
+      "_internal/msvcp140.dll",
+      "_internal/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll"
+    ],
+    "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde",
+    "source_artifact": "https://aka.ms/vs/17/release/14.40.33810/VC_redist.x64.exe",
+    "source_sha256": "3642e3f95d50cc193e4b5a0b0ffbf7fe2c08801517758b4c8aeb7105a091208a",
+    "source_container_member": "a12",
+    "source_container_sha256": "8fafd6d0754ee53125902df1b67ef2db86eb7af4c097522f2fb58443501fecdd",
+    "source_member": "msvcp140.dll_amd64",
+    "notice": "licenses/msvc/00-License.rtf",
+    "notice_source_member": "u4",
+    "notice_sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b"
+  },
+  "msvc_runtime": {
+    "path": "_internal/MSVCP140_1.dll",
+    "sha256": "456aebccb449fcba35f1109c259ba0aa10923e660f4de812a490d35f37f54fc9",
+    "source_artifact": "https://download.visualstudio.microsoft.com/download/pr/c1bd4f2c-3672-468e-8480-7ed419dbb641/90E48ADE404E4576D023ABFA374F323555F233982A8805EA9AC63DCA9491A16B/VC_redist.x64.exe",
+    "source_sha256": "90e48ade404e4576d023abfa374f323555f233982a8805ea9ac63dca9491a16b",
+    "source_container_member": "a4",
+    "source_container_sha256": "99fda37db1ad396ca1049cf83e3ea5cb60c7aae315f4b94efc599c26bd54839b",
+    "source_member": "msvcp140_1.dll_amd64",
+    "notice": "licenses/msvc/00-License.rtf",
+    "notice_source_member": "u4",
+    "notice_sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b"
+  }
+}

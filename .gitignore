@@ -34,3 +34,7 @@ fbank_lfr_cmvn_feature.json
 
 # 評測用的 python venv
 .venv/
+
+# Desktop dependencies and generated Tauri schemas
+node_modules/
+desktop/src-tauri/gen/

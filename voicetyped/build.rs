@@ -81,7 +81,11 @@ fn main() {
 }
 
 fn link_nano() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        return link_nano_windows();
+    }
     println!("cargo:rerun-if-env-changed=VOICETYPE_SHERPA_NATIVE_ROOT");
+    println!("cargo:rerun-if-env-changed=VOICETYPE_SHERPA_CAPI_SHA256");
     println!("cargo:rerun-if-changed=shim/nano_shim.cpp");
     println!("cargo:rerun-if-changed=shim/nano_shim.h");
     let root = PathBuf::from(std::env::var_os("VOICETYPE_SHERPA_NATIVE_ROOT")
@@ -90,9 +94,22 @@ fn link_nano() {
     assert!(!root.to_string_lossy().contains([':', ',', '\n']), "native artifact path cannot contain colon/comma/newline");
     let include = root.join("include");
     let lib = root.join("lib");
+    // An explicit release-builder pin is necessary because compilers produce
+    // different C API bytes. Only the isolated desktop build can use it. The
+    // reviewed source-build pipeline verifies inputs and passes its exact output
+    // digest; a runtime/installer sidecar is never allowed to choose this value.
+    let capi_sha = std::env::var("VOICETYPE_SHERPA_CAPI_SHA256").unwrap_or_else(|_| {
+        "72408cc5f2407eb0ba46cd381614229107f225b8ccc4149e2f5e4b09957834dd".into()
+    });
+    if std::env::var_os("VOICETYPE_SHERPA_CAPI_SHA256").is_some() {
+        assert!(std::env::var_os("CARGO_FEATURE_RELOCATABLE_RUNTIME").is_some(),
+            "a release-builder C API pin is allowed only with relocatable-runtime");
+        assert!(capi_sha.len() == 64 && capi_sha.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "invalid release-builder C API SHA256");
+    }
     for (path, expected) in [
         (include.join("sherpa-onnx/c-api/c-api.h"), "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"),
-        (lib.join("libsherpa-onnx-c-api.so"), "72408cc5f2407eb0ba46cd381614229107f225b8ccc4149e2f5e4b09957834dd"),
+        (lib.join("libsherpa-onnx-c-api.so"), capi_sha.as_str()),
         (lib.join("libonnxruntime.so"), "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e"),
     ] {
         assert!(path.is_file(), "missing native Nano dependency: {}", path.display());
@@ -107,9 +124,45 @@ fn link_nano() {
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
     println!("cargo:rustc-link-lib=stdc++");
-    // The explicit artifact directory is intentional for an optional, reviewable build.
-    // Packaging must preserve the pinned pair instead of resolving an arbitrary system .so.
-    println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags,-rpath,{}", lib.display());
+    // The desktop bundle preserves the pinned pair in ../lib. The development
+    // profile keeps its explicit artifact path; neither resolves arbitrary
+    // libraries through LD_LIBRARY_PATH supplied by the application.
+    if std::env::var_os("CARGO_FEATURE_RELOCATABLE_RUNTIME").is_some() {
+        assert_eq!(std::env::var("CARGO_CFG_TARGET_OS").as_deref(), Ok("linux"),
+            "relocatable-runtime currently supports Linux only");
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags,-rpath,$ORIGIN/../lib");
+    } else {
+        println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags,-rpath,{}", lib.display());
+    }
+}
+
+fn link_nano_windows() {
+    use sha2::{Digest, Sha256};
+    assert!(std::env::var_os("CARGO_FEATURE_RELOCATABLE_RUNTIME").is_some(),
+        "Windows Nano must use the isolated relocatable runtime feature");
+    let root = PathBuf::from(std::env::var_os("VOICETYPE_SHERPA_NATIVE_ROOT")
+        .expect("Windows Nano requires verified VOICETYPE_SHERPA_NATIVE_ROOT"));
+    let include = root.join("include");
+    let lib = root.join("lib");
+    let capi = lib.join("sherpa-onnx-c-api.dll");
+    let capi_pin = std::env::var("VOICETYPE_SHERPA_CAPI_SHA256")
+        .expect("Windows source-build C API digest required");
+    assert!(capi_pin.len() == 64 && capi_pin.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "invalid Windows C API pin");
+    for (path, expected) in [
+        (include.join("sherpa-onnx/c-api/c-api.h"), "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"),
+        (capi, capi_pin.as_str()),
+        (lib.join("onnxruntime.dll"), "1becbd71adbf49609d33195e29c9214969db3c3de69c81425bebe5a4b69aef97"),
+    ] {
+        let data = std::fs::read(&path).expect("missing Windows native dependency");
+        assert_eq!(format!("{:x}", Sha256::digest(&data)), expected, "Windows native digest mismatch: {}", path.display());
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    assert!(lib.join("sherpa-onnx-c-api.lib").is_file(), "missing C API import library");
+    cc::Build::new().cpp(true).std("c++17").file("shim/nano_shim.cpp")
+        .include("shim").include(include).compile("nano_shim");
+    println!("cargo:rustc-link-search=native={}", lib.display());
+    println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
 }
 
 /// 連結 OpenCC (SDD §4.6 ② 的繁化)。
@@ -123,6 +176,8 @@ fn link_nano() {
 /// runtime (`libopencc1.1`) 的系統會有 `.so.1.1` 卻沒有 `.so`,
 /// `-lopencc` 因此找不到東西。這種情形下用 `-l:` 指名實際檔名。
 fn link_opencc() {
+    // voicetype-text loads the absolute bundled Windows DLL itself.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") { return; }
     println!("cargo:rerun-if-changed=build.rs");
 
     if pkg_config_ok() {
@@ -151,6 +206,7 @@ fn link_opencc() {
             let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
             let link = out.join("libopencc.so");
             let _ = std::fs::remove_file(&link);
+            #[cfg(unix)]
             if std::os::unix::fs::symlink(Path::new(dir).join(&soname), &link).is_ok() {
                 println!("cargo:rustc-link-search=native={}", out.display());
                 println!("cargo:rustc-link-lib=dylib=opencc");

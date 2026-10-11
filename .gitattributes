@@ -1,0 +1,12 @@
+# Keep pinned native sources and Rust notice texts byte-for-byte on Windows,
+# including checkouts with core.autocrlf enabled.
+desktop/assets/linux-native-sources.json text eol=lf
+desktop/assets/windows-native-sources.json text eol=lf
+patches/sherpa-onnx-1.13.8-nano-integrity.patch text eol=lf
+patches/sherpa-onnx-1.13.8-windows-cpu-ort-import.patch text eol=lf
+config/rust-notice-fallbacks/** text eol=lf
+config/csc-windows-pe-sources.json text eol=lf
+config/csc-windows-msvc-license-14.51.36231.rtf -text -diff
+# The pinned vendored crate is verified against exact upstream and patched
+# source bytes; Windows checkout must not rewrite any member to CRLF.
+desktop/vendor/portable-pty-0.9.0/** -text

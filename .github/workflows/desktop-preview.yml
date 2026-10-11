@@ -1,0 +1,327 @@
+name: Desktop preview
+
+on:
+  push:
+    branches: [main, feat/desktop-app, feat/windows-dictation-work]
+    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "config/rust-vendor-sources.json", "scripts/build-desktop-*", "scripts/catalog-windows-installer-pe.py", "scripts/catalog-windows-pe-distribution.py", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
+  workflow_dispatch:
+    inputs:
+      upgrade_new_run_id:
+        description: 'Successful Windows preview run ID for the new 0.2.1-alpha.1 package'
+        required: false
+        default: ''
+        type: string
+      upgrade_new_head_sha:
+        description: 'Full reviewed source commit SHA of that preview run'
+        required: false
+        default: ''
+        type: string
+      upgrade_new_setup_sha256:
+        description: 'Independently checked SHA-256 of its real NSIS setup'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: desktop-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.upgrade_new_run_id != '' && 'upgrade' || 'preview' }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.upgrade_new_run_id == '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundle: deb
+          - os: windows-2022
+            bundle: nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      CARGO_BUILD_JOBS: 2
+      TMPDIR: ${{ github.workspace }}/desktop/target/scratch
+      TMP: ${{ github.workspace }}/desktop/target/scratch
+      TEMP: ${{ github.workspace }}/desktop/target/scratch
+      PIP_CACHE_DIR: ${{ github.workspace }}/desktop/target/pip-cache
+      OMP_NUM_THREADS: 2
+      OPENBLAS_NUM_THREADS: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare project scratch
+        run: python -c "from pathlib import Path; Path('target/scratch').mkdir(parents=True, exist_ok=True)"
+      - name: Project-local Windows scratch
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-ci'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          "TEMP=$scratch" >> $env:GITHUB_ENV
+          "TMP=$scratch" >> $env:GITHUB_ENV
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Rust stable
+        run: rustup update stable --no-self-update
+      - name: Verify locked daemon graph before native builds
+        shell: bash
+        run: |
+          set -e
+          cargo metadata --manifest-path ../voicetyped/Cargo.toml --locked --format-version 1 > target/scratch/daemon-metadata.json
+      - name: Linux build and desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf webkit2gtk-driver xvfb dbus-x11 fonts-noto-cjk libasound2-dev libopencc-dev cmake ninja-build extra-cmake-modules libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev fcitx5-modules-dev libxcb-xkb-dev libxcb-ewmh-dev libxtst-dev fcitx5
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: desktop
+      - name: Discard restored installer and UI evidence outputs
+        run: python tests/clean_build_outputs.py
+      - name: Install locked build tools
+        run: npm ci --ignore-scripts
+      - name: Build pinned Windows OpenCC and dictionaries
+        if: runner.os == 'Windows'
+        run: python ../scripts/build-desktop-opencc.py target/opencc --stage-tests target/debug/deps
+      # The ordinary command suite uses synthetic owners. Its installed Nano,
+      # spelling and Fcitx probes are ignored here and run explicitly below.
+      # Compile before the short execution timeout so a cold Rust cache does
+      # not masquerade as a hung ConPTY test.
+      - name: Compile public application command tests
+        timeout-minutes: 20
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked --no-run
+      - name: Public application command tests
+        timeout-minutes: 5
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
+      - name: Verify Windows native CPU recipe
+        if: runner.os == 'Windows'
+        run: python ../scripts/build-desktop-native-windows.py --check-recipe
+      - name: Build pinned Windows CPU Nano runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python ../scripts/build-desktop-native-windows.py --cache ../.scratch/windows-native-cache --output target/windows-native --jobs 2
+          if ($LASTEXITCODE -ne 0) { throw 'Windows source-built Nano C API failed' }
+          python ../scripts/build-desktop-runtime-windows.py --native target/windows-native --opencc target/opencc --output target/runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Nano runtime bundle failed' }
+      - name: Build pinned CPU spelling bundle and notices
+        shell: bash
+        run: |
+          python -m pip install -r ../config/csc-build-requirements.txt
+          python tests/spelling_build_test.py
+          python ../scripts/build-desktop-spelling.py target/spelling --cache target/csc-build-cache
+          if ! cargo +stable test -p voicetype-app-core --test spelling_bundle --locked -- --ignored --nocapture; then
+            python tests/spelling_failure_diagnostic.py target/spelling --prepared target/csc-build-cache/prepared
+            exit 1
+          fi
+      - name: Build pinned Linux CPU runtime and native notices
+        if: runner.os == 'Linux'
+        run: |
+          python3 tests/native_build_test.py
+          python3 ../scripts/build-desktop-native.py --cache ../private/native-source-cache --output ../private/release-native --jobs 2
+          bash ../scripts/build-desktop-runtime.sh ../private/release-native target/runtime --source-built
+          python3 ../scripts/build-desktop-input.py target/input
+          cmake -S ../voicetype-fcitx5 -B target/input-tests -DFCITX_INSTALL_USE_FCITX_SYS_PATHS=ON
+          cmake --build target/input-tests --target test_app_frontend test_capslock_x11 -j 2
+          ctest --test-dir target/input-tests --output-on-failure -R '^capslock_native_x11(_remapped)?$'
+          VOICETYPE_TEST_FCITX="$PWD/target/input-tests/tests/test_app_frontend" VOICETYPE_TEST_INPUT_BUNDLE="$PWD/target/input" cargo test -p voicetype-app-core --test local_runtime installed_fcitx --locked -- --ignored
+      - name: Catalog locked Rust graph and native notices
+        shell: bash
+        run: |
+          python tests/rust_notices_test.py
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-unknown-linux-gnu --component runtime=target/runtime --component input=target/input --component spelling=target/spelling
+          else
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-pc-windows-msvc --component runtime=target/runtime --component opencc=target/opencc --component spelling=target/spelling
+          fi
+      - name: Prepare pinned Windows installer plugin notices
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -e
+          python tests/windows_installer_pe_test.py
+          python ../scripts/catalog-windows-installer-pe.py prepare target/installer-notices --cache target/installer-source-cache
+      - name: Build preview installer
+        run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
+      - name: Inspect and install preview (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p target/inspection
+          dpkg-deb --info target/release/bundle/deb/*.deb
+          dpkg-deb --extract target/release/bundle/deb/*.deb target/inspection
+          test -s target/inspection/usr/bin/voicetype-desktop
+          test -s "target/inspection/usr/share/applications/VoiceType Preview.desktop"
+          python3 tests/installed_runtime.py target/inspection target/runtime/manifest.json
+          python3 tests/installed_input.py target/inspection target/input/manifest.json
+          python3 tests/installed_spelling.py target/inspection target/spelling/manifest.json
+          python3 tests/installed_rust_notices.py target/inspection target/rust-notices/manifest.json
+          sudo dpkg --install target/release/bundle/deb/*.deb
+          dpkg --search /usr/bin/voicetype-desktop
+      - name: Inspect and install preview (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Installer missing' }
+          $destination = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-ci/voicetype-preview-install 語音'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          if (-not (Test-Path "$destination/voicetype-desktop.exe")) { throw 'Installed executable missing' }
+          python tests/installed_opencc.py "$destination" target/opencc/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed OpenCC verification failed' }
+          python tests/installed_runtime_windows.py "$destination" target/runtime/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows Nano runtime verification failed' }
+          python tests/installed_spelling.py "$destination" target/spelling/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed spelling verification failed' }
+          python tests/installed_rust_notices.py "$destination" target/rust-notices/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Rust notice verification failed' }
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) { throw '7z required to inspect actual NSIS plugin PEs' }
+          $extracted = Join-Path $env:GITHUB_WORKSPACE 'desktop/target/installer-extraction'
+          7z x -y $installer.FullName "-o$extracted" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS extraction failed' }
+          python ../scripts/catalog-windows-installer-pe.py verify "$extracted" target/installer-notices/plugin-origins.json $installer.FullName target/installer-pe-audit.json --installed "$destination"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual NSIS plugin or installed notice audit failed' }
+          python tests/windows_pe_distribution_test.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PE aggregate regression failed' }
+          python ../scripts/catalog-windows-pe-distribution.py "$extracted" "$destination" $installer.FullName target target/windows-pe-provenance.json
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PE aggregate could not record evidence' }
+          "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
+      - name: Record artifact checksums
+        id: artifact_manifest
+        run: python tests/artifact_manifest.py
+      - name: Install native UI driver
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: Install matching Windows WebView driver
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool --rev 8c4b34f51b45f5cf08013366d703de464ab871d1 --locked
+          msedgedriver-tool
+          $PWD.Path >> $env:GITHUB_PATH
+      - name: Exercise installed UI (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum dbus-run-session -- python3 tests/shell_smoke.py /usr/bin/voicetype-desktop
+      - name: Exercise installed UI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python tests/shell_smoke.py "$env:VOICETYPE_INSTALLED_EXE"
+      - name: Probe installed Windows Nano on pinned public speech
+        if: ${{ runner.os == 'Windows' && !cancelled() && env.VOICETYPE_INSTALLED_EXE != '' }}
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $runtime = Join-Path (Split-Path $env:VOICETYPE_INSTALLED_EXE) 'runtime'
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-nano-asr'
+          $output = python tests/windows_nano_asr.py --runtime "$runtime" --scratch "$scratch"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows prerecorded Nano ASR probe failed' }
+          $report = $output | ConvertFrom-Json -AsHashtable
+          if ($report.prerecorded_nano_cpu_asr -ne $true) { throw 'Windows Nano ASR report missing success result' }
+          $report.source_commit = $env:GITHUB_SHA
+          $report.run_id = $env:GITHUB_RUN_ID
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'target/windows-nano-asr.json'), ($report | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
+          Write-Output $output
+      - name: Upload UI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voicetype-ui-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: desktop/target/shell-evidence/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.artifact_manifest.outcome == 'success' }}
+        with:
+          name: voicetype-preview-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/target/release/bundle/deb/*.deb
+            desktop/target/release/bundle/nsis/*-setup.exe
+            desktop/target/preview-manifest.json
+            desktop/target/runtime/manifest.json
+            desktop/target/runtime/build-provenance.json
+            desktop/target/opencc/manifest.json
+            desktop/target/windows-native/build-provenance.json
+            desktop/target/spelling/manifest.json
+            desktop/target/spelling/provenance/binary-origins.json
+            desktop/target/installer-notices/plugin-origins.json
+            desktop/target/installer-pe-audit.json
+            desktop/target/windows-pe-provenance.json
+            desktop/target/windows-nano-asr.json
+            desktop/target/rust-notices/
+  windows_upgrade:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.upgrade_new_run_id != '' }}
+    runs-on: windows-2022
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      NEW_RUN_ID: ${{ inputs.upgrade_new_run_id }}
+      NEW_HEAD_SHA: ${{ inputs.upgrade_new_head_sha }}
+      NEW_SETUP_SHA256: ${{ inputs.upgrade_new_setup_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.scratch/windows-upgrade-cargo-target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare isolated Windows upgrade scratch
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-upgrade-ci'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          "TEMP=$scratch" >> $env:GITHUB_ENV
+          "TMP=$scratch" >> $env:GITHUB_ENV
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Rust stable
+        run: rustup update stable --no-self-update
+      - name: Check both CI origins and pinned setup bytes
+        shell: pwsh
+        run: |
+          python tests/windows_upgrade_isolation_test.py
+          if ($LASTEXITCODE -ne 0) { throw 'Upgrade isolation regression failed' }
+          python tests/windows_upgrade_inputs.py --new-run-id "$env:NEW_RUN_ID" --new-head-sha "$env:NEW_HEAD_SHA" --new-setup-sha256 "$env:NEW_SETUP_SHA256"
+          if ($LASTEXITCODE -ne 0) { throw 'Two-package source or byte pin failed' }
+      - name: Install native UI driver
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: Install matching Windows WebView driver
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool --rev 8c4b34f51b45f5cf08013366d703de464ab871d1 --locked
+          if ($LASTEXITCODE -ne 0) { throw 'WebView driver installer failed' }
+          msedgedriver-tool
+          if ($LASTEXITCODE -ne 0) { throw 'WebView driver setup failed' }
+          $PWD.Path >> $env:GITHUB_PATH
+      - name: Exercise real NSIS upgrade, rollback and personal-data retention
+        shell: pwsh
+        run: |
+          $inputs = Join-Path $env:GITHUB_WORKSPACE '.scratch/windows-upgrade-inputs'
+          $old = Join-Path $inputs 'old/release/bundle/nsis/VoiceType Preview_0.2.0-alpha.1_x64-setup.exe'
+          $new = Join-Path $inputs 'new/release/bundle/nsis/VoiceType Preview_0.2.1-alpha.1_x64-setup.exe'
+          python tests/windows_upgrade_smoke.py --old-installer "$old" --old-sha256 6c1b78f27df2ea8cacd44ade67c8d0c02fa69cc0d0ad8c54a005794b45c52e41 --old-version 0.2.0-alpha.1 --new-installer "$new" --new-sha256 "$env:NEW_SETUP_SHA256" --new-version 0.2.1-alpha.1
+          if ($LASTEXITCODE -ne 0) { throw 'Real two-package Windows upgrade failed' }
+      - name: Upload upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voicetype-upgrade-windows-2022
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            .scratch/windows-upgrade-inputs/input-report.json
+            .scratch/windows-upgrade-smoke/evidence/

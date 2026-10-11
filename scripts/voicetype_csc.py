@@ -4,6 +4,8 @@
 Never reconstruct a transcript from token decoding. The model sees a simplified
 shadow, while accepted edits are applied individually to the original string.
 """
+import hashlib
+import json
 import re
 import time
 
@@ -113,7 +115,7 @@ def apply_edits(text, edits):
 
 
 class Engine:
-    def __init__(self, model, tokenizer, threads=4):
+    def __init__(self, model, tokenizer, threads=4, quant_precision=True):
         import numpy as np
         import onnxruntime as ort
         from opencc import OpenCC
@@ -125,6 +127,10 @@ class Engine:
         options.inter_op_num_threads = 1
         options.add_session_config_entry("session.intra_op.allow_spinning", "0")
         options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        if quant_precision:
+            # ORT's x64 U8U8 kernel avoids the QInt8 result mismatch observed
+            # on hosted x86-64 CPUs; keep the pinned model and 100 ms policy.
+            options.add_session_config_entry("session.x64quantprecision", "1")
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self.session = ort.InferenceSession(str(model), sess_options=options,
                                             providers=["CPUExecutionProvider"])
@@ -132,6 +138,7 @@ class Engine:
             raise RuntimeError("CPU-only provider required")
         self.tokenizer = Tokenizer.from_file(str(tokenizer))
         self.to_simple, self.to_trad = OpenCC("t2s"), OpenCC("s2tw")
+        self.quant_precision = quant_precision
 
     def predict(self, text, terms=(), budget_ms=80):
         started = time.monotonic()
@@ -198,6 +205,142 @@ class Engine:
         return edits, "applied" if edits else "unchanged"
 
 
+def handle_request(engine, request):
+    """Same validated request/age budget for socket and owned-pipe transports."""
+    text, terms = request["text"], request.get("terms", [])
+    if (type(request.get("v")) is not int or request["v"] != 1
+            or type(request.get("id")) is not int
+            or not 0 <= request["id"] < 2**64
+            or not isinstance(text, str) or len(text) > 4096
+            or not isinstance(terms, list) or len(terms) > 256
+            or any(not isinstance(t, str) or not 0 < len(t) <= 64 for t in terms)
+            or type(request.get("sent_at_ms")) is not int):
+        raise ValueError("invalid request")
+    age = max(0, time.time()*1000-request["sent_at_ms"])
+    budget = min(80, 95-age)
+    if budget <= 0:
+        edits, status, calls = [], "deadline", 0
+    else:
+        edits, status = engine.predict(text, terms, budget_ms=budget)
+        calls = engine.last_calls
+    reply = dict(v=1, id=request["id"], status=status, edits=edits, model_calls=calls)
+    return reply
+
+
+def serve_stdio(engine):
+    """Private parent-owned pipe. EOF exits; malformed frames fail closed.
+
+    stdout is protocol-only UTF-8 bytes on every platform, including Windows.
+    There is no listening port, inherited socket, per-request process or log of
+    transcript content. The owner must stop waiting at its unchanged deadline.
+    """
+    import json
+    import sys
+    output = sys.stdout.buffer
+
+    def send(reply):
+        output.write(json.dumps(reply, ensure_ascii=False).encode("utf-8") + b"\n")
+        output.flush()
+
+    send(dict(v=1, status="ready", provider="CPUExecutionProvider"))
+    while True:
+        line = sys.stdin.buffer.readline(65537)
+        if not line:
+            return
+        try:
+            if len(line) > 65536 or not line.endswith(b"\n"):
+                raise ValueError("invalid request length")
+            request = json.loads(line)
+            send(handle_request(engine, request))
+        except BrokenPipeError:
+            return
+        except Exception:
+            # A corrupt frame cannot be safely associated with a caller's id.
+            # The parent observes EOF and retains its original text.
+            print("spelling pipe request failed", file=sys.stderr, flush=True)
+            raise SystemExit(2) from None
+
+
+def model_self_test(engine):
+    """Numeric diagnostics for the fixed synthetic spelling fixture only."""
+    from importlib.metadata import version
+    import os
+    import platform
+    from pathlib import Path
+
+    cpu_model = os.environ.get("PROCESSOR_IDENTIFIER", "")
+    if Path("/proc/cpuinfo").is_file():
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                cpu_model = line.split(":", 1)[1].strip()
+                break
+    cpu_model = cpu_model or platform.processor()
+
+    text = "今天新情很好。GitHub 2026"
+    simple = engine.to_simple.convert(text)
+    encoded = engine.tokenizer.encode(simple)
+    original_offset = 2
+    positions = [i for i, (left, right) in enumerate(encoded.offsets)
+                 if left <= original_offset < right]
+    if len(positions) != 1:
+        return {"diagnostic": "model_self_test", "token_position_count": len(positions)}
+    arrays = dict(input_ids=encoded.ids, attention_mask=encoded.attention_mask,
+                  token_type_ids=encoded.type_ids)
+    inputs = {item.name: engine.np.asarray([arrays[item.name]], dtype=engine.np.int64)
+              for item in engine.session.get_inputs()}
+    started = time.monotonic()
+    logits = engine.session.run(None, inputs)[0][0][positions[0]]
+    inference_ms = round((time.monotonic() - started) * 1000)
+    maximum = float(logits.max())
+    normalizer = float(engine.np.exp(logits - maximum).sum())
+    winner = int(engine.np.argmax(logits))
+    expected_id = engine.tokenizer.token_to_id("心")
+    original_id = encoded.ids[positions[0]]
+    winner_token = engine.tokenizer.id_to_token(winner)
+    probability = 1 / normalizer
+    original_probability = float(engine.np.exp(logits[original_id] - maximum)) / normalizer
+    candidate_is_han = han(winner_token)
+    translated_is_expected = False
+    guard_accepts = False
+    if candidate_is_han and winner != original_id:
+        predicted = list(simple)
+        predicted[original_offset] = winner_token
+        traditional = engine.to_trad.convert("".join(predicted))
+        if len(traditional) == len(text):
+            target = traditional[original_offset]
+            translated_is_expected = target == "心"
+            guard_accepts = bool(guard_edits(text, [dict(
+                start=original_offset, source=text[original_offset], target=target,
+                probability=probability, original_probability=original_probability)]))
+    edits, status = engine.predict(text)
+    return {"diagnostic": "model_self_test", "token_position_count": 1,
+            "input_ids_sha256": hashlib.sha256(json.dumps(encoded.ids).encode()).hexdigest(),
+            "normalized_length_same": len(simple) == len(text),
+            "normalized_position_is_original": simple[original_offset] == "新",
+            "onnxruntime_version": version("onnxruntime"),
+            "onnxruntime_build_sha256": hashlib.sha256(
+                getattr(engine.ort, "get_build_info", lambda: "")().encode()).hexdigest(),
+            "numpy_version": version("numpy"),
+            "providers": engine.session.get_providers(),
+            "quant_precision_session": engine.quant_precision,
+            "cpu_model": cpu_model,
+            "token_span_chars": encoded.offsets[positions[0]][1] - encoded.offsets[positions[0]][0],
+            "protected_position": original_offset in protected_positions(text),
+            "top_is_expected": winner == expected_id,
+            "top_is_original": winner == original_id,
+            "candidate_is_han": candidate_is_han,
+            "confidence_passes": probability >= MIN_PROBABILITY,
+            "original_confidence_passes": original_probability <= MAX_ORIGINAL_PROBABILITY,
+            "translated_is_expected": translated_is_expected,
+            "guard_accepts": guard_accepts,
+            "top_probability": round(probability, 6),
+            "expected_probability": round(float(engine.np.exp(logits[expected_id] - maximum)) /
+                                          normalizer, 6) if expected_id is not None else None,
+            "original_probability": round(original_probability, 6),
+            "inference_ms": inference_ms, "bounded_status": status,
+            "bounded_model_calls": engine.last_calls, "bounded_edits": len(edits)}
+
+
 def serve(engine, socket_path):
     """One bounded request per local connection. No text is logged or retained."""
     import json
@@ -246,23 +389,8 @@ def serve(engine, socket_path):
                             raise ValueError("invalid request length")
                         data.extend(chunk)
                     request = json.loads(data.split(b"\n", 1)[0])
-                    text, terms = request["text"], request.get("terms", [])
-                    if (type(request.get("v")) is not int or request["v"] != 1
-                            or type(request.get("id")) is not int
-                            or not 0 <= request["id"] < 2**64
-                            or not isinstance(text, str) or len(text) > 4096
-                            or not isinstance(terms, list) or len(terms) > 256
-                            or any(not isinstance(t, str) or not 0 < len(t) <= 64 for t in terms)
-                            or type(request.get("sent_at_ms")) is not int):
-                        raise ValueError("invalid request")
-                    age = max(0, time.time()*1000-request["sent_at_ms"])
-                    budget = min(80, 95-age)
-                    if budget <= 0:
-                        edits, status, calls = [], "deadline", 0
-                    else:
-                        edits, status = engine.predict(text, terms, budget_ms=budget)
-                        calls = engine.last_calls
-                    reply = dict(v=1, id=request["id"], status=status, edits=edits, model_calls=calls)
+                    reply = handle_request(engine, request)
+                    status, edits, calls = reply["status"], reply["edits"], reply["model_calls"]
                     connection.sendall(json.dumps(reply,ensure_ascii=False).encode()+b"\n")
                     print(json.dumps({"status":status, "edits":len(edits), "model_calls":calls,
                                       "elapsed_ms":round((time.monotonic()-started)*1000,3)}),flush=True)
@@ -287,16 +415,35 @@ def main():
     ap.add_argument("--tokenizer", required=True, type=Path)
     ap.add_argument("--model-sha256", required=True)
     ap.add_argument("--tokenizer-sha256", required=True)
-    ap.add_argument("--socket", required=True, type=Path)
+    transport = ap.add_mutually_exclusive_group(required=True)
+    transport.add_argument("--socket", type=Path)
+    transport.add_argument("--stdio", action="store_true", help="Use private parent-owned JSONL pipes")
+    transport.add_argument("--diagnostic-self-test", action="store_true",
+                           help="Print numeric results for a built-in synthetic fixture and exit")
+    ap.add_argument("--diagnostic-quant-precision", action="store_true",
+                    help="Only with diagnostic self-test: compare product precision with legacy QInt8")
     ap.add_argument("--threads", type=int, default=4, choices=[1,2,4,8])
     args = ap.parse_args()
+    if args.diagnostic_quant_precision and not args.diagnostic_self_test:
+        ap.error("quant precision mode is diagnostic-only")
     for path, expected in [(args.model,args.model_sha256),(args.tokenizer,args.tokenizer_sha256)]:
         with path.open("rb") as stream:
             if hashlib.file_digest(stream,"sha256").hexdigest() != expected:
                 raise SystemExit("Model/tokenizer hash mismatch")
-    engine = Engine(args.model,args.tokenizer,args.threads)
+    # Production always uses the precision kernel. The self-test alone retains
+    # the old setting as an explicit A/B control when the flag is absent.
+    engine = Engine(args.model,args.tokenizer,args.threads,
+                    quant_precision=not args.diagnostic_self_test or args.diagnostic_quant_precision)
     engine.predict("今天心情很好。",budget_ms=1000)
-    serve(engine,args.socket)
+    if args.diagnostic_self_test:
+        result = model_self_test(engine)
+        result["model_sha256"] = args.model_sha256
+        result["tokenizer_sha256"] = args.tokenizer_sha256
+        print(json.dumps(result), flush=True)
+    elif args.stdio:
+        serve_stdio(engine)
+    else:
+        serve(engine,args.socket)
 
 
 if __name__ == "__main__":

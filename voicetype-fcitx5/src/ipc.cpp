@@ -420,8 +420,8 @@ std::string socketPath() {
 // ---------------------------------------------------------------------------
 
 IpcClient::IpcClient(fcitx::EventLoop *loop, std::string socketPath,
-                     MessageCallback onMessage, DisconnectCallback onDisconnect)
-    : loop_(loop), path_(std::move(socketPath)),
+                     MessageCallback onMessage, DisconnectCallback onDisconnect, int expectedPid)
+    : loop_(loop), path_(std::move(socketPath)), expectedPid_(expectedPid),
       onMessage_(std::move(onMessage)),
       onDisconnect_(std::move(onDisconnect)) {
     tryConnect();
@@ -487,9 +487,18 @@ void IpcClient::tryConnect() {
         });
 
     if (!connecting_) {
+        if (!trustedPeer()) { dropConnection(false); return; }
         reconnectDelayUsec_ = kReconnectMinUsec;
         FCITX_DEBUG() << "voicetype: connected to daemon";
     }
+}
+
+bool IpcClient::trustedPeer() const {
+    if (!expectedPid_) return true; // Legacy transport keeps its existing contract.
+    struct ucred credentials{};
+    socklen_t size = sizeof(credentials);
+    return getsockopt(fd_, SOL_SOCKET, SO_PEERCRED, &credentials, &size) == 0 &&
+        size == sizeof(credentials) && credentials.uid == geteuid() && credentials.pid == expectedPid_;
 }
 
 void IpcClient::scheduleReconnect() {
@@ -540,6 +549,7 @@ void IpcClient::onConnectResult() {
         return;
     }
     connecting_ = false;
+    if (!trustedPeer()) { dropConnection(false); return; }
     reconnectDelayUsec_ = kReconnectMinUsec;
     FCITX_DEBUG() << "voicetype: connected to daemon";
     updateIoFlags();

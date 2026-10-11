@@ -1,0 +1,4 @@
+LIBRARY voicetype_tsf_probe
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

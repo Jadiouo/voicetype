@@ -1,0 +1,921 @@
+# Desktop app development log
+
+## 2026-10-07 — main merged; app design prepared
+
+- PR #1 merged into GitHub main as `8c67ce4`; its reviewed head remained `c3aaec0`.
+  Reused the completed validation evidence instead of rerunning the same suite.
+- Created clean `feat/desktop-app` worktree from merged main. The unrelated local
+  main edits and running dictation installation are preserved.
+- User confirmed the two selectable providers are Local offline recognition and
+  Google official CLI. Vocabulary and sampled review are common features.
+- Wrote SDD and TDD before new implementation. Tauri/Rust, Linux `.deb`, Windows
+  per-user NSIS installer; CPU default, no automatic provider fallback.
+- Existing Unix IPC/PTY/PipeWire/GTK/locking requires explicit platform adapters.
+  Official Google documentation establishes Windows availability, not acceptance
+  of our planned adapter. Windows runtime verification remains outstanding.
+- Local build environment lacks GTK/WebKit development packages and passwordless
+  package installation. Prefer native Linux/Windows CI builds to changing the
+  user's workstation. No models downloaded, microphones opened or services changed.
+- Next: agree the four public test boundaries in TDD, then implement the first
+  provider/preference command slice with red-before-green evidence.
+
+## 2026-10-07 — M1 preference commands and shell
+
+- User confirmed all four TDD boundaries. New Rust workspace is independent of the
+  Linux-only daemon so public command tests run without audio/GTK dependencies.
+- Five vertical red → green cycles completed: choose/reopen (initial unresolved
+  command interface); reject newer schema (was accepted); reject stale-window
+  overwrite (was accepted); preserve unknown settings (was dropped); reload after
+  conflict (missing command). All five now pass through public application APIs.
+- Writes use a stable per-file OS lock, compare the last-read bytes, and atomically
+  persist a same-directory temporary file. Unknown same-schema fields survive.
+  Lock-aware writers serialize; arbitrary external editors can still ignore the
+  lock, so this is not a universal filesystem transaction guarantee.
+- Added a bundled Traditional Chinese Tauri settings window, Local/Google choice,
+  explicit unavailable adapter state, error/reload feedback, tray entry and single
+  instance handling. Preview uses a separate app ID/data directory and does not
+  alter the daily dictation installation. Normal close exits the preview.
+- Added locked Rust/npm dependencies and Linux/Windows native packaging workflow.
+  Core clippy passed; native installers and UI interaction still await CI evidence.
+  No claim of complete packaged dictation or a verified Windows microphone path.
+
+## 2026-10-07 — first Linux/Windows packages built
+
+- CI run `37498271515`, source `965fd80`, succeeded on Ubuntu 24.04 and Windows
+  Server 2022 runners. Five command tests passed independently on both operating
+  systems. Linux `.deb` was extracted and its desktop entry checked; Windows NSIS
+  installer ran silently in the disposable runner and the installed `.exe` existed.
+- Downloaded the Linux artifact and verified its 4,261,590-byte package against the
+  CI SHA-256 manifest. Payload desktop command is `voicetype-desktop`; the local
+  runtime dependency check reported no missing libraries. This is package evidence,
+  not a native-window or speech test.
+- Added a real WebDriver harness for the installed shell: Local default, Google
+  selection, restart persistence, corrupt-settings error and repair/reload. Uses an
+  explicit disposable preview config directory (Windows app-data APIs do not
+  reliably honor a modified APPDATA environment). No fake Tauri commands.
+- Next CI revision adds actual Linux package installation, platform UI drivers,
+  screenshots, bundled license and preview/source documentation. UI verification
+  is pending until that workflow runs successfully. Windows 11 microphone/target
+  app acceptance remains separate from a Windows Server CI shell test.
+
+## 2026-10-07 — M1 installed settings preview verified
+
+- [CI run 37499241303](https://github.com/Jadiouo/voicetype/actions/runs/37499241303)
+  succeeded for source `9abc9a6` on both platforms. Linux installed the `.deb` using
+  dpkg and launched `/usr/bin/voicetype-desktop`; Windows installed the NSIS `.exe`
+  and launched its installed payload. Each independently passed all five public
+  command tests and the six UI checks recorded by `shell_smoke.py`.
+- UI evidence: real installed window; Local initially selected; selecting Google;
+  restarting preserves Google; corrupt config produces a visible error and disables
+  writes; restoring the file and reloading recovers. Linux WebKit and Windows
+  WebView2 screenshots were downloaded and visually checked: Traditional Chinese
+  labels render, Google is selected, and the unavailable-adapter notice is visible.
+  These checks do not verify tray visibility or dictation in other target apps.
+- Both downloadable artifacts were retrieved and matched against their CI source,
+  size and SHA-256 manifest. Linux license and preview guide contents also matched
+  the repository. The Windows executable had already run through native CI UI;
+  inspecting a PE header alone was not counted as functional verification.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux amd64 `.deb` | 4,276,970 | `0ffc1156c96b323aefd732f1830c2864bc6286662ddd2dba0ab1bbdbef23352d` |
+| Windows x64 NSIS `.exe` | 2,085,931 | `d880a25090bcbc6ff840115102db6d0b5e19f8abf4e28f6507251e0b56554457` |
+
+- Public branch `feat/desktop-app`, [draft PR #2](https://github.com/Jadiouo/voicetype/pull/2).
+  Remote source tree at `9abc9a6` matched all 161 local blob hashes. Subsequent
+  documentation updates do not change the tested desktop source.
+- No production service, hotkey, user dictionary, learning file or review data was
+  changed. No models were downloaded and no live recording was made. Preview
+  artifacts are unsigned development builds, not a production dictation release.
+
+### Next implementation slice (M2)
+
+Continue through the four already-agreed seams; do not ask for that agreement again
+or rerun PR #1's full suite. First implement real provider readiness through the
+application command boundary and the existing Linux IPC adapters. Selecting a
+preference must ultimately route the next recording through one coordinator;
+changing only this JSON file does not change the existing Fcitx hotkeys/services.
+
+Then connect session cancellation/focus/deduplication, shared vocabulary and review,
+and versioned model/runtime setup. Preserve the current Linux data formats and
+the working daily installation until migration has an actual rollback path.
+Windows requires the Nano native CPU build plus platform capture, focus/delivery
+and Google ConPTY work. A Windows Server CI settings pass is not Windows 11 real
+microphone/login/target-app acceptance. M2–M4 remain open in SDD.
+
+## 2026-10-07 — full-app goal activated; M2 in progress
+
+- User explicitly requested continued work to the full application, then asked to
+  create a goal. The active goal is recorded in [GOAL.md](GOAL.md); no token budget
+  was requested. Continue until the full acceptance criteria are satisfied.
+- Inspected existing Linux services read-only. Local IPC has a `ping`/`pong`
+  readiness request; the Google v1 bridge only accepts start/stop/cancel. Socket
+  reachability alone must not become an authenticated/ready Google status.
+- Started a public application-command readiness slice: a real temporary Unix
+  socket answers the actual local engine ping. Test first failed because the
+  command/status did not exist, then passed after implementation. Probe has a
+  bounded connect/read deadline and bounded reply. It does not request recording.
+- This first M2 slice is still in progress: negative cases, actual installed
+  read-only probe, UI wiring and a proper Google status/control adapter remain.
+  No new runtime has been deployed and no microphone has been opened.
+
+## 2026-10-07 — M2 read-only engine status
+
+- Added the settings "check services" command. Linux sends the existing bounded
+  `ping` request; all settings IO/probes run off the webview event thread. A pong
+  is labelled "service responded", not proof that capture, delivery or Google
+  login works. Windows and Google remain explicitly unconnected.
+- Public command tests: live pong, deadline, incompatible response, missing socket
+  and oversized response. The deadline and incompatible-status cases failed for
+  missing behavior first, then passed. Missing/oversized checks additionally
+  verified guards already introduced with the bounded probe.
+- The diagnostic example queried the installed local engine and received
+  `service_available`. It used a disposable application profile and sent only
+  ping; no production data, service configuration or microphone was changed.
+- Core tests: 9 passed on Linux. Added native installed-UI checks for a missing
+  provider and an OS-socket pong fixture; their CI result is still pending.
+- Next: session ownership, busy-switch rejection and cancellation/result delivery
+  through the agreed session/provider boundary. Full-app goal remains active.
+
+## 2026-10-07 — M2 provider status verified; session coordinator added
+
+- [CI run 37510781789](https://github.com/Jadiouo/voicetype/actions/runs/37510781789)
+  passed on Linux and Windows for source `f229d5b`. Both installed packages ran
+  their native WebDriver checks. The new Linux check distinguishes missing service
+  and pong over a disposable OS socket; it asserts the only request was ping.
+  Windows and Google remain visibly unconnected. Downloaded UI screenshots were
+  inspected; both display Traditional Chinese and the preview limitation.
+- Added a shared application/session boundary. Starting fixes both provider and
+  editable-context generation. Busy switching/reloading is rejected; repeated
+  stop does not send another command. Stop before capture-ready cancels preparation.
+  Cancellation invalidates results before IO and reserves the provider until an
+  explicit quiescent release event. Old sessions and duplicate results are ignored.
+- Delivery checks the original input-context lease at the OS boundary. Focus
+  rejection or partial insertion keeps the last undelivered text for recovery and
+  never automatically retries. Settings reload preserves this in-memory text.
+  Status snapshots contain failure codes, never transcripts. Empty, oversized or
+  NUL-containing final text is rejected before input delivery.
+- Eight public session scenarios were developed sequentially red → green. Two
+  runtime failures specifically exposed dropped early-stop and lost retained text
+  on reload; both were corrected. All 17 Linux core tests pass, and Clippy with
+  warnings denied passes. These session cases substitute external provider/OS
+  boundaries; they are not evidence of a real recording or focus-safe Windows input.
+- Native adapters still need explicit recording/release acknowledgements. Legacy
+  local IPC does not emit its reserved state events and Google v1 has no health
+  command. Do not infer cleanup merely from a final result, a write succeeding or
+  a socket closing. Do not connect this coordinator to daily hotkeys until those
+  ownership contracts and rollback are verified. No daily service was changed.
+- Next: connect the coordinator to actual provider transports and input-context
+  delivery, then vocabulary/review and runtime installation. M2–M4 remain open.
+
+## 2026-10-07 — local engine lifecycle IPC
+
+- [CI 37511989320](https://github.com/Jadiouo/voicetype/actions/runs/37511989320)
+  passed both native desktop builds, installed UI and core tests at `88129d4`.
+  The remote source tree matched all 167 local blobs.
+- Local daemon Start now accepts opt-in `session_events: true`. It reports
+  Recording after the capture boundary accepts the session, then Idle after
+  native inference and text processing finish. A lifecycle guard follows the
+  asynchronous work so cancellation or a stale result cannot release early.
+  Legacy Start without the flag retains its previous result stream.
+- Added a real Unix-socket daemon contract test through SessionManager/Server.
+  Only OS capture and the native ASR boundary are substituted; OpenCC and the
+  production text pipeline run normally. The first test failed for the missing
+  capture boundary, then passed with the lifecycle implementation. It verifies
+  complete Traditional Chinese/mixed-English output, event ordering and legacy
+  compatibility. A follow-up regression gates native inference, cancels it, checks
+  no premature Idle/result, then releases it and receives only Idle.
+- All 21 affected Linux protocol, IPC, capture and new desktop-contract tests pass.
+  `cargo check --features sherpa-nano --locked` also passes with the existing
+  pinned CPU native dependencies. Existing unused-code warnings remain; no live
+  recording, inference, service restart or user-data migration was performed.
+- Added isolated Ubuntu CI for these daemon contracts; its first run is pending.
+  This daemon change has not been installed in the daily service.
+- Important remaining contract: Idle ends a session, not the warm microphone's
+  30-second idle stream. Add an explicit suspend/close acknowledgement and versioned
+  capability query before a desktop adapter can hand the microphone to Google.
+  The actual app transport/input integration and M2–M4 acceptance remain open.
+
+## 2026-10-07 — explicit local microphone handoff and native CPU probe
+
+- [Engine CI 37513330768](https://github.com/Jadiouo/voicetype/actions/runs/37513330768)
+  passed the first lifecycle contract at `690a320`.
+- Added correlated `desktop_status` protocol negotiation and `desktop_suspend`.
+  Outstanding preparation/recording/inference refuses suspend; after work ends,
+  the audio thread closes the warm backend and ring before acknowledging. The
+  normal same-provider warm path stays intact. Wire semantics and ownership
+  prerequisites are documented in [LOCAL_PROTOCOL.md](LOCAL_PROTOCOL.md).
+- The handoff test first failed for the missing capture operation. The capability
+  query independently failed with a real IPC timeout, then passed. Regression
+  checks cover pending cancelled inference refusing handoff, real audio-command
+  acknowledgement, active-capture refusal, repeated suspend and reopening capture.
+  All 23 affected daemon contract/protocol/IPC/capture tests pass locally.
+- Built the real Nano feature against the pinned CPU native libraries and launched
+  that candidate with existing read-only models and a disposable HOME/XDG profile.
+  Status, suspend and ping all returned their exact expected replies. Process maps
+  contained sherpa/ONNX Runtime with no CUDA/cuDNN/TensorRT libraries; startup
+  reported `funasr-nano:int8:cpu` and `provider=cpu`. No Start was sent, no capture
+  opened and Nano's silence warmup remains disabled. SIGINT exited cleanly and
+  removed the candidate socket. This is runtime/control evidence, not a speech
+  accuracy or latency measurement. The reusable probe is in `desktop/tests/`.
+- Existing local, Google and spelling services remained active/running. No service
+  restart, hotkey change, personal-data migration or GPU operation occurred.
+- Next priority is the actual app provider transport and Fcitx delivery path,
+  using the versioned contract and explicit runtime ownership. Google status,
+  shared data UI, packaging assets and Windows work remain; Goal stays active.
+- At source `bd6f3e8`, [engine CI 37514581633](https://github.com/Jadiouo/voicetype/actions/runs/37514581633)
+  and [both desktop jobs 37514581670](https://github.com/Jadiouo/voicetype/actions/runs/37514581670)
+  passed. The remote tree matched all 171 local source blobs. Desktop speech
+  adapters are still unconnected; these green checks do not complete M2 or M3.
+
+
+## 2026-10-07 — App/local transport and Fcitx delivery acknowledgement
+
+- Added an app-side Linux local-engine connection. It authenticates the actual
+  Unix peer UID/PID before sending commands, negotiates protocol capabilities,
+  preserves partial frames across polling timeouts and retains ownership after
+  uncertain writes/disconnects. Engine errors become non-transcript app failures;
+  only an explicit idle event releases the session. Suspend still requires an
+  exact correlated microphone-close acknowledgement.
+- TDD: the actual app → Unix IPC → local daemon → OpenCC → delivery scenario
+  failed first because the transport module was absent, then passed with complete
+  `請檢查 GitHub。` delivered once. A capture-failure scenario next failed on an
+  unhandled engine error, then passed with failure reported, no insertion and
+  release only after idle. Only OS capture/native ASR/delivery are fixtures.
+- Fcitx now negotiates `voicetype.fcitx.v1` and replies to app delivery requests
+  after validating the original input context. The first real Fcitx harness test
+  timed out waiting for negotiation (red), then passed with exactly one commit
+  and `committed`, `stale` replies to duplicate requests (green). This confirms
+  Fcitx called its validated-context commit operation, not that an external app
+  visibly accepted text. Negative cases and transport hardening are underway.
+- No candidate was installed and no live microphone/input was used. The isolated
+  test build lacks optional XCB development headers; its delivery tests do not
+  establish Caps Lock restoration. Daily services and hotkeys remain untouched.
+- Still outstanding: native dispatcher/runtime ownership, app wiring, shared data
+  UI, Google and Windows adapters, runtime installation and platform acceptance.
+
+- Hardening found a fragmented oversized-frame bypass. A real Unix-peer regression
+  failed on acceptance of that frame, then passed after enforcing the byte bound
+  before parsing the terminating newline. The connection faults without releasing
+  app ownership. Core tests: 18 passed; real daemon/app contracts: 5 passed.
+- All 32 existing delivery cases plus 5 new app acknowledgement/focus/context/lost
+  target cases pass. A lost app target never invokes legacy clipboard fallback.
+  CI now also builds/runs this isolated Fcitx harness; native contract CI watches
+  `desktop/core/**` because the daemon tests exercise that actual app dependency.
+- This checkpoint supplies real transport and input-context acknowledgement, not
+  an operational desktop dictation route. Next connect the native dispatcher,
+  original frontend/provider session mapping, complete correction context and
+  owned child cleanup. Do not point it at an independently controlled daily daemon.
+
+- At source `161e003`, [engine/Fcitx CI 37518235137](https://github.com/Jadiouo/voicetype/actions/runs/37518235137)
+  and [desktop CI 37518235144](https://github.com/Jadiouo/voicetype/actions/runs/37518235144)
+  both passed. Downloaded Linux/Windows installers match their SHA-256 manifests
+  and source commit; both installed UI reports passed seven checks and explicitly
+  did not test speech adapters. All 173 remote source blobs match the local tree.
+
+
+## 2026-10-07 — Native Linux dispatcher and owned CPU process
+
+- `LocalDispatcher` now negotiates a same-user Fcitx connection, maps frontend
+  sessions to engine sessions, routes Start/Stop/Cancel and acknowledges real
+  local-engine lifecycle events. Final delivery waits for the original session
+  and context's Fcitx reply; an uncertain acknowledgement retains text and is
+  never retried. Transport failure invalidates results but does not invent release.
+- TDD: the frontend → actual dispatcher/app → actual daemon/OpenCC → acknowledged
+  frontend round trip first failed for the absent dispatcher, then passed. Only
+  OS capture/native ASR/input frontend are fixtures; both Unix transports and
+  the coordinator/text pipeline are real.
+- The next case exposed dropped correction context: `gthub`, `cmmit`, `psh`
+  remained incorrect. After forwarding program, original field, surrounding
+  text and selection, the actual scoped terminology pipeline returns complete
+  `請檢查 GitHub、commit 與 push。`. Context is redacted from Debug output.
+- Confirmed learning through the routed frontend initially failed as an unknown
+  command. Session mapping and idle control handling have now been implemented;
+  the regression checks the next actual dictation, not private stored state.
+  Contract commands use an unreachable notification bus, so OS learning notices
+  cannot appear on the user's desktop.
+- This code remains unadopted by the desktop UI. Daily services/hotkeys are
+  untouched; no live audio/input or GPU operation has been used. The remaining
+  cancellation and process-owner work is recorded below.
+
+- The confirmed-learning case passes: correcting `gthub` to `GitHub` in one
+  acknowledged frontend session affects the next actual daemon dictation.
+  Engine session IDs are translated for attribution; unacknowledged delivery
+  cannot become learning evidence. Scalar no-change replies are not called saved.
+- The rapid Stop/Cancel case failed because a final result beat a buffered cancel.
+  Draining the bounded frontend command burst before engine events fixed it;
+  the actual daemon test now attempts no delivery and retains no cancelled text.
+  Lost delivery acknowledgement retains `Unconfirmed` text and ownership.
+- Added the actual child owner: private profile/endpoint, explicit Nano CPU
+  environment, profile lock and stop/wait cleanup. An attached dispatcher losing
+  its frontend reaps even a provider that refuses to acknowledge cancellation,
+  then releases the app so another provider may be selected. Setup sends no Start.
+  Restart initially failed on a retained profile lock; shutdown now releases it.
+- App exit without destructors initially left its engine running. A Linux
+  parent-death signal and same-worker ownership fixed the real subprocess test.
+  The fixture adopts/reaps its orphan and cleans its private socket directory.
+  Three ownership tests and all 21 core cases pass (one subprocess helper is
+  intentionally ignored except when invoked by the owner-exit case).
+- All 10 actual app/daemon contracts pass with the OS notification bus isolated.
+  Rebuilt the actual Nano feature, then ran the new Rust `probe_owned_local`
+  against existing read-only assets in disposable data. Native sherpa/ONNX
+  libraries loaded, GPU libraries were absent, no Start was sent and the child
+  was reaped. No live speech/inference/latency acceptance is claimed.
+- Next: connect the long-lived Tauri worker, report idle process death, enforce
+  session deadlines, expose recovery text and prepare explicit frontend-owner
+  migration. Runtime/model/spelling setup, shared vocabulary/review UI, Google
+  and Windows integration remain. The goal is active; daily services are untouched.
+
+- `bb6da91` engine/Fcitx CI passed. The Linux installed-UI job stopped before
+  opening the app: tauri-driver's proxy accepted `/status` while its native driver
+  still refused the TCP connection, causing an uncaught `RemoteDisconnected`.
+  The saved driver log confirms the connection refusal. The existing bounded
+  read-only condition loop now handles that transient disconnect and waits for
+  the WebDriver `ready` flag; session creation/clicks are not replayed. Readiness
+  semantics follow the [WebDriver status contract](https://www.w3.org/TR/webdriver2/#status).
+  The native dispatcher/ownership tests passed in that run; UI checks must be
+  rerun after this harness fix before recording a complete desktop CI pass.
+
+### Resident app worker and recovery view
+
+- Harness fix `8fca553` passed Linux `.deb` and Windows NSIS build/install/UI CI
+  in [run 37524989608](https://github.com/Jadiouo/voicetype/actions/runs/37524989608).
+  Both downloaded UI reports contain seven passing checks and explicitly record
+  `speech_adapters_tested: false`. Actual file size/SHA-256 match their manifests:
+  Linux 4,314,316 bytes, `4fd39514653c752a86bc37ba64c9e354a4da7e246b3931b0de4f6059ff249f35`;
+  Windows 2,111,812 bytes, `abcab1c982c8af5de83cc1824285409f6bed7c79df81cd27d52b6e97110e2bd1`.
+- TDD/B: a killed idle engine with a healthy frontend first remained usable for
+  the entire observation window (**RED**). Health now checks the actual child,
+  invalidates an active session if present and reaps before returning failure
+  (**GREEN**). Keeping an old PID is no longer treated as health evidence.
+- TDD/A,B: added a resident `DesktopWorker` through the UI-facing command seam.
+  The initial test lacked the worker API (**RED**); the implementation now owns
+  private Linux frontend listening, explicit native activation, routing, child
+  health and shutdown on its spawning thread (**GREEN**). Activation sends no
+  Start; a connected idle child remains alive after command completion. Killing
+  that child changes status to Failed and removes the endpoint after cleanup.
+- TDD/A,B: through the real worker/dispatcher and external process/input fixtures,
+  a complete mixed-language final result is rejected by changed focus and retained
+  for explicit recovery. The recovery commands were missing (**RED**); retrieval,
+  reload preservation and session-matched dismissal now pass (**GREEN**). Busy
+  switches are rejected; switching away while idle reaps the local child; recovery
+  actions never resubmit text. Status JSON contains no transcript.
+- Tauri commands now use this resident worker instead of owning Application in
+  a mutex on transient blocking-pool jobs. Final app exit waits for its worker.
+  Added a separate recovery section with a read-only full result, manual select/
+  copy guidance, explicit dismissal and distinct uncertain/partial-delivery text.
+  Webview polling cannot overwrite an intervening settings operation.
+- Local verification: core suite **24 passed**, one subprocess-only helper
+  ignored as intended; JavaScript/Python syntax and diff checks passed. Local
+  Tauri check reached missing host GTK/Cairo development libraries, so it is not
+  recorded as a build pass; actual Linux/Windows installer and UI validation for
+  this new change must run in CI. No live mic, account login, input injection,
+  discrete-GPU inference or production configuration was used.
+- **Continuation:** phase deadlines, verified runtime/model setup with a concrete
+  activation UI, frontend-owner migration/rollback, shared vocabulary/review and
+  spelling setup, Google integration and Windows speech still remain. The current
+  webview does not expose executable paths or call native activation; these are
+  not yet working end-to-end speech installers. The goal stays active.
+
+### Phase deadlines and UI cancellation
+
+- `ad89d2f` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37544476912)
+  and [Linux/Windows installer/UI CI](https://github.com/Jadiouo/voicetype/actions/runs/37544476863).
+  Downloaded artifacts match their source, size and SHA-256: Linux 4,454,074 bytes,
+  `9023efa9c54d1ebefcadc29c36d22a4886eaf95689ecd4c8ccabb54232ab9875`;
+  Windows 2,151,322 bytes,
+  `f642c48f34af40660531167a0234ddfd08d90ef2c64e64ec7a33d8be155fb13c`.
+  Both installed UI reports pass eight checks; actual screenshots show the
+  recovery section on both platforms. Speech adapters remain explicitly untested.
+- TDD/B: added a monotonic OS clock boundary and phase watchdogs: prepare 6 s,
+  record 65 s, finalize 120 s, release/cancel 3 s. A stalled finalization now
+  invalidates late output and keeps ownership until actual cleanup; repeated
+  Stop/Cancel cannot renew its deadline. The first failure remains visible after
+  subsequent transport errors. This adds no wait to successful dictation.
+- TDD/B: the real owned-process test first showed that a child ignoring Cancel
+  stayed busy after the deadline (**RED**). The dispatcher now enforces deadlines
+  before polling and before accepting engine output; actual kill/wait precedes
+  release (**GREEN**). No text is delivered or retained from that cancelled work.
+- TDD/A,B: the UI-facing cancel operation initially did not exist (**RED**). It
+  now invalidates the session through the resident worker (**GREEN**). A real
+  external child that ignores cancellation is automatically reaped after 3 s
+  without more frontend input. Tauri exposes the command and a busy-only cancel
+  button; status distinguishes preparation, recording, finalization and release.
+- TDD/B: an unexpected release while still recording originally showed no
+  failure (**RED**); it now reports ProviderFailed and inserts no text (**GREEN**).
+- Local core suite: **28 passed**, one deliberately ignored subprocess helper;
+  native app/daemon contracts and the new installer/UI build are verified again
+  below when the new source reaches CI. Daily services and private user data
+  remain unchanged. Next concrete work is verified asset setup/activation, then
+  frontend migration and the shared vocabulary/review/provider integrations.
+
+### Verified asset storage and model provenance
+
+- `91cc55c` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37545231543)
+  and [both desktop installer/UI jobs](https://github.com/Jadiouo/voicetype/actions/runs/37545231537).
+  Downloaded source/size/SHA match: Linux 4,457,590 bytes,
+  `4847659e2fb70da66f89a09e4d705df8ce273454e4a12af462cb2ea76b89a7a2`;
+  Windows 2,154,596 bytes,
+  `6127b10cce6c0b6f416f5a82482566e95d6a6f908e35384fbb2aa9d84a7d6f03`.
+  Both UI reports pass eight checks and explicitly exclude speech acceptance.
+- TDD/D: the initial installation test had no asset API (**RED**); a staged
+  `AssetStore` now copies exact pinned regular files, verifies size/SHA-256,
+  preserves previous versions and publishes a complete activation atomically
+  (**GREEN**). Corrupt and incomplete updates keep the working version and
+  sibling vocabulary unchanged. Upgrade/rollback checks passed on first run.
+- An invalid previous activation record was initially overwritten (**RED**);
+  bounded/schema/path validation now preserves it and rejects installation
+  (**GREEN**). Reinstall initially required another source copy (**RED**); it now
+  reuses a fully verified identical version, while a changed version is repaired
+  into a new directory and cannot be selected for rollback (**GREEN**).
+- Five asset cases pass locally. Added only the locked sha2 dependency chain;
+  the daemon lockfile was updated for its dev dependency on the app core. These
+  tests will run natively on Windows as well as Linux in desktop CI.
+- Downloaded and verified the official GitHub Nano archive. All six model files
+  match the existing daily model; a same-name Hugging Face export has different
+  ONNX hashes and was not substituted. The pinned Silero upstream file also
+  matches the daily VAD. Public catalogs contain URLs, versions, platforms, sizes
+  and hashes only; binary downloads stay in ignored private storage.
+- The public `probe_asset_install` example actually copied and verified the six
+  Nano files and Silero into disposable stores. No inference, capture, user-data
+  migration or service change occurred. Details, source links and license-notice
+  limits are in [ASSETS.md](ASSETS.md).
+- **Continuation:** wire bounded HTTPS/archive setup and progress/cancellation,
+  native runtime manifests/relocatable packaging and explicit Tauri activation.
+  Current asset storage takes a prepared source directory; it is not yet a GUI
+  downloader. Frontend migration/rollback, shared vocabulary/review/CSC, Google
+  and Windows speech remain. Keep the full goal active.
+
+- Asset source `f17c6f6` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37546329991)
+  and [Linux/Windows desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37546330011).
+  The native Windows and Linux logs each explicitly show all five asset cases
+  passing. Both installed UI reports pass eight checks with speech untested.
+  Downloaded packages match their source, sizes and SHA-256: Linux 4,453,498 bytes,
+  `304c79c9a04b0b26b4ee11e5510dbccd7d4115852af3117ad398a3ca705dd4b2`;
+  Windows 2,155,217 bytes,
+  `a6c302d3e6c2267f09928fa89e8faf481df4b9693c1b7b7e3152f8974f11185b`.
+  All 185 remote source blobs were independently matched to the local commit.
+  This verification does not change the remaining setup/speech scope above.
+
+### Cancellable model setup work in progress
+
+- TDD/D: a missing progress/cancel API was the first RED. Copy/verification now
+  checks cancellation in 64 KiB increments and before atomic publication; the
+  passing case cancels inside one large file, removes staging and preserves the
+  old active version. Existing six asset cases pass.
+- TDD/D: the archive-install entry point was missing (RED). It now checks the
+  compressed size/hash before parsing, accepts only ordinary regular files and
+  directories under the catalog prefix, bounds decompressed bytes and entries,
+  and copies only reviewed files before the final per-file integrity check.
+  The positive archive case passes; its changed-body check also passed first run.
+- TDD/A,D: HTTPS transfer and setup-worker APIs were initially absent (RED).
+  The real TLS-stall cancellation case passes within its two-second bound. A
+  native network fixture verifies separate-thread preparation and a second
+  offline check with no download. No fixture replaces internal installer logic.
+- Tauri now exposes explicit prepare/status/cancel commands with no webview
+  paths, URLs or manifests. Setup runs outside the resident dictation worker.
+  The UI distinguishes installed model files from a connected recognizer.
+- Validation still in progress: real pinned archive and live VAD HTTPS probes,
+  cancellation/invalid-archive cases, native Linux/Windows installer/UI CI.
+  No production runtime activation, speech acceptance or service migration is
+  claimed by this milestone. Existing daily setup remains unchanged.
+
+- Validation update: the actual 842 MB Nano archive passed the production
+  decoder/install/reopen path with all six pinned files. Live upstream Silero
+  HTTPS download/install/reopen also passed. Both used disposable stores and
+  executed no model. Unsafe archive, extraction cancellation and worker
+  cancel/retry checks passed on their first behavioral runs; no RED is claimed
+  for those additional coverage cases.
+- Local full core suite: **40 passed**, one intentionally ignored subprocess
+  helper. JavaScript/Python syntax and patch whitespace checks passed. Locked
+  reqwest/rustls, Tokio and Rust bzip2/tar dependencies were added; the daemon
+  lockfile is also updated for its core dev dependency. Native Windows and
+  installed UI validation are pending the next CI run.
+
+- `14951a9` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37548257988)
+  and [both desktop jobs](https://github.com/Jadiouo/voicetype/actions/runs/37548258075).
+  All nine asset and three setup cases pass on native Windows and Linux. Each
+  installed UI report passes nine checks; screenshots were inspected. Downloaded
+  artifact source/size/hash match: Linux 6,681,312 bytes,
+  `83cc1df44ff6610a9054d6255566b8f52fbb52e64df72037c5c9785e86539248`;
+  Windows 3,496,910 bytes,
+  `f4aa3576531022ef9a2e0edd2b65d1051b69b44c8ec77c226a20024ee762edda`.
+  All 189 remote source blobs match the reviewed commit. No private artifacts
+  were tracked. Clippy found only the pre-existing large EngineOwner enum warning.
+- The added `all-download` probe completed the real compiled-catalog setup worker
+  end to end: GitHub Nano HTTPS/redirect, all six extracted files, VAD download,
+  installation and reopened matching catalogs. Its stores were disposable and
+  no model was executed. This is stronger than combining independent network
+  and extraction fixtures; it still does not constitute speech acceptance.
+
+### Linux runtime relocation
+
+- TDD/D: an actual prepared ELF layout initially retained an absolute developer
+  native-library RPATH, so the public runtime layout check failed (**RED**).
+  New opt-in `relocatable-runtime` changes it to `$ORIGIN/../lib`; the existing
+  development mode and all native header/library pins stay unchanged (**GREEN**).
+- `build-desktop-runtime.sh` makes a separate release Nano-only build, stages
+  `bin/voicetyped` plus its pinned CPU pair in `lib`, verifies actual loader paths,
+  and publishes only to a new destination. It never installs/restarts a service.
+- Moved the actual candidate to a different directory containing spaces. The
+  ELF check and real OwnedLocal probe verified the running process loaded both
+  libraries from that exact new directory, with no GPU libraries or Start
+  command, then verified child reaping. Existing daily services remain running.
+- This prepared runtime directory is not a distributable installer: clean-build
+  provenance, full notices, OpenCC/system dependency installation, trusted app
+  manifests/resources and activation still need integration. Windows runtime,
+  frontend migration/rollback, shared vocabulary/review/CSC and Google also remain.
+
+- Final `7bc040c` verification: [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37549294794)
+  and [Linux/Windows desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37549294793)
+  all passed. Both downloaded packages match their source/size/SHA, and each
+  installed UI report passes nine checks with speech adapters explicitly untested.
+  Linux: 6,681,306 bytes,
+  `205823e071eeb2ea97388b18cb0f9abd6847e54cfc9028350ebf4f2a31ec8ec2`;
+  Windows: 3,497,790 bytes,
+  `66afb91f1172ba78b4d4af74249145b179d078e0e76f30af3232f8891991b194`.
+  All 191 remote source blobs match the reviewed commit. This CI checks the
+  preview app and default engine contracts; the opt-in relocated native build
+  was independently verified locally as described above. The full app objective
+  remains unfinished; native release/activation and shared/provider integration
+  are the next implementation work.
+
+### Source-built Linux runtime and explicit app loading
+
+- Added a portable build entry point with reviewed source/dependency archive,
+  patch, ORT/header and notice pins. CMake is disconnected after verified fetch;
+  only CPU C API is enabled. No daily/private runtime is a build input. The
+  build collects native notices, patch and provenance without developer paths.
+- Release builds pass their exact newly compiled C API digest to the isolated
+  relocatable daemon build. Legacy development pins and fixed ORT/header checks
+  remain. The app embeds and verifies the build-time catalog; installed resource
+  manifests cannot replace that trust anchor. Linux resources/dependencies and
+  native CI build/installer inspection are wired.
+- Added explicit load/unload UI commands. Full model/runtime verification occurs
+  away from the dictation worker, then its existing owner loads Nano CPU. Missing
+  models prevent publication/start. No microphone, hotkey migration or daily
+  service change occurs. Windows correctly reports runtime loading unavailable.
+- TDD/D RED: corrupt-cache build entry point did not exist; GREEN rejects the
+  damaged source before output. TDD/D RED: app installation composition API did
+  not exist; GREEN refuses preparation when models are absent. Additional
+  existing-output, private-version/personal-file preservation, substituted
+  sidecar and cancelled verification cases passed on their first runs; no RED
+  claim is made for them.
+- Local core suite: 44 passed, one ignored subprocess helper; two build-entry
+  checks passed. Actual fresh native compilation and daemon package passed exact
+  loader-path/payload inspection. Real-model preparation/owned-process probe and
+  native Linux/Windows installer/UI CI are being completed. These checks do not
+  constitute microphone, recognition accuracy or delivery acceptance.
+- The real `--package` ownership probe also passed: production installer copied
+  and verified the pinned model files and new runtime into a disposable profile;
+  the actual CPU process loaded both libraries from that installed version, sent
+  no Start, loaded no GPU libraries, and was reaped on shutdown. All three daily
+  services remain active/running with zero restarts. Installed UI CI is next.
+- `4778c9e` passed [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37570751134)
+  and [both installer/UI jobs](https://github.com/Jadiouo/voicetype/actions/runs/37570751141).
+  Each installed UI report passes ten checks, with speech explicitly untested.
+  Downloaded packages match source/size/hash: Linux 18,351,852 bytes,
+  `52894573037f4eda07d2bcaa4fcd9624fb3482fc9681d81f62e4289fed680a28`;
+  Windows 3,502,337 bytes,
+  `c46f6faf8d71397420d7cb4d28030a9dca68ad6b620c1b74127655a740c6d251`.
+  Extracted Linux runtime/notices match its build catalog, loader paths and
+  declared system dependencies. The actual downloaded CI runtime also passed
+  production installation plus the CPU process/map/reaping probe with no Start.
+  Screenshots were inspected and all 199 remote source blobs match the commit.
+- Follow-up RED: source building under a path with spaces exposed both an
+  unquoted compiler flag and upstream's unquoted linker version-script path.
+  The builder now uses private space-free `/tmp` scratch, then copies to a
+  destination-volume staging directory before no-replacement publication.
+  Caller cache/output paths remain ordinary argv paths. Curl configuration is
+  disabled to keep fetch behavior defined by the build recipe. Existing-output
+  and corrupt-input checks pass; full space-path build verification is running.
+- The full native build and Rust runtime wrapper both passed with spaces in the
+  caller's native/output paths. `2bbc48a` Windows installer/UI passed; Linux CI
+  rebuilt the native library successfully, then correctly refused a runtime
+  destination restored by the Rust cache. CI now discards only generated runtime,
+  installer/extraction and UI-report outputs after cache restore, retaining Rust
+  compilation caches. This also prevents a failed run uploading an earlier run's
+  UI result as current evidence. The builder's no-overwrite rule stays intact.
+- Final `a090f7d` [Linux/Windows desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37571932283)
+  passed after clearing cached derived outputs. Both downloaded packages match
+  source/size/hash, and both newly produced installed UI reports pass ten checks.
+  Their screenshots are byte-identical to the already inspected `4778c9e` images.
+  Linux: 18,351,766 bytes,
+  `0f0fad7e0c15dc7de1c31ba413f05c77b9b797673b206f02a860d425e5d4f744`;
+  Windows: 3,503,914 bytes,
+  `03d8fb7421744733e5eb6a0b6ec9a4badac5286cd61922b6502e9fe5edcd3890`.
+  The latest extracted Linux runtime passes every catalog hash and loader check;
+  that exact CI runtime also passed real-model installation, expected CPU library
+  maps, no Start/no GPU and verified child reaping. All 200 remote source blobs
+  match the reviewed commit. Clippy reports only the existing EngineOwner size
+  warning. No daily installation changed.
+- Milestone complete: Linux runtime source build, packaged native notices/catalog
+  and explicit app loading. The full app remains unfinished: input-owner
+  migration/rollback and shortcuts, shared vocabulary/review/CSC, Google/Windows
+  speech paths, complete app/model notices and real speech acceptance are next.
+
+### Explicit Linux input ownership and reversible Fcitx setup
+
+- Added an explicit input lease to the resident worker and GUI. Loading models or
+  the runtime alone never publishes it. One login owner holds the private lease;
+  shutdown/unload removes it. Busy dictation rejects unload/provider/setup changes.
+- The existing Fcitx module now follows a private app endpoint only after its old
+  recording/pending result ends. It authenticates PID/UID and completes the desktop
+  handshake before accepting keys. A missing, crashed or unready endpoint returns
+  to the unchanged legacy service. Ctrl+Alt recording, Esc cancellation and the
+  original focus/duplicate-delivery guards remain. No second input owner is loaded.
+- Linux packages carry a separately cataloged source-built Fcitx module and license.
+  Release builds require native X11 Caps restoration. Explicit install/update saves
+  a write-ahead original registration before publishing a versioned private module;
+  restore preserves prior absence or original bytes. Drift, symlinks and oversized
+  records are refused. Running Fcitx is never restarted automatically.
+- TDD RED/GREEN: missing lease API; Fcitx handoff never occurred after the old result;
+  unready peer never fell back; missing installer API. Additional tests cover
+  exclusivity, unsafe runtime permissions, registration drift/restore and a real
+  dynamically loaded module through the production installer/worker/dispatcher.
+  That full chain sends one exact mixed Traditional-Chinese/English fixture result,
+  then removes the lease and restores registration. Only capture/model are fixtures.
+- Local core, native input/module inspection and existing Fcitx regressions are
+  passing. Linux/Windows installer and native UI CI are the next verification step.
+  No live service, microphone, GPU workload or personal data was changed.
+- Remaining: shared vocabulary/review/CSC in the app profile, Google and Windows
+  speech paths, full license inventory and live platform speech/latency acceptance.
+  This input milestone is not the complete app goal or a measured speedup.
+
+- Final local coverage is 46 core tests plus the explicit installed-module worker
+  integration, and 93 Fcitx cases. Clippy reports only the existing EngineOwner
+  enum-size warning. [Engine/Fcitx CI at `54936a0`](https://github.com/Jadiouo/voicetype/actions/runs/37575451343) passed.
+- `9195c2a` installer/UI CI passed on both platforms. Screenshot review then
+  corrected legacy-service/readiness wording and documented the Fcitx desktop
+  prerequisite. Final [`45ec5de` Linux/Windows CI](https://github.com/Jadiouo/voicetype/actions/runs/37576475135) passes, with eleven native installed UI checks per platform and Linux
+  module install/restore. No microphone or speech-quality acceptance is claimed.
+- Downloaded final installers match their source commit, size and SHA-256. Linux:
+  18,517,626 bytes,
+  `752efa7874e3565608c728ae64d1d3b6dbc452aa8b5ced288aa2aa6ba7f47cda`.
+  Windows: 3,506,623 bytes,
+  `3126bb070398251ecaf272ec4ce2709165a08ceed9773d9f2a477fee635d9307`.
+  Both final screenshots were inspected. Linux runtime hashes/notices/loader
+  inspection passes. Its input bundle is byte-identical to the downloaded
+  `9195c2a` module that passed production installer/worker/Fcitx integration.
+- The rebuilt C API differs from `9195c2a` only in its 20-byte ELF build ID; every
+  other file-backed ELF section matches. Nevertheless, the exact final package
+  also passed real-model preparation/OwnedLocal loading: expected installed CPU
+  libraries, no GPU libraries, no Start and verified child reaping. This is setup
+  evidence, not an inference benchmark. All three daily services remain running
+  with zero restarts. No live Fcitx registration or personal data was changed.
+
+
+## 2026-10-07：階段收尾，依使用者要求暫停
+
+使用者要求「先這樣吧，寫一下開發日誌」。本次到此收尾，不再繼續功能開發；完整 App 尚未完成，PR #2 保持 draft，等使用者明確續接。
+
+- **已完成：** Linux App 可明確啟用 Fcitx 本機聽寫接管；等待舊錄音及待送文字結束後才切換，連線未就緒或 App 離開時回到原服務。GUI 已有輸入模組安裝／更新／還原，保存原設定並檢查外部變更。安裝不會自動重啟正在使用的 Fcitx。
+- **已驗證：** 46 個 core 測試、93 個 Fcitx 案例，以及實際載入模組、經 worker 送出一次繁中／英文測試文字的整合驗證。Linux／Windows 安裝包 CI 通過，兩平台各有 11 項已安裝 UI 檢查；Linux 另驗證模組安裝與還原。下載包的來源、大小及 SHA-256 均已核對。詳細證據與 CI 連結見上一節。
+- **驗證界線：** 整合送字的錄音及辨識採測試替身；真實 CPU 模型僅驗證準備、載入及子程序清理。尚未完成真人麥克風、辨識品質或延遲驗收，也未宣稱此次變更加快推論。
+- **日常環境：** 原有三個服務在最後檢查時均運作中，重啟次數為 0。未修改正在使用的 Fcitx 註冊、個人詞庫或錄音，也未執行 GPU 工作。
+- **下次接續：** 先整合 App 共用詞庫、抽樣校對與錯字校正設定，再完成 Google 辨識、Windows 錄音／程序／送字介面、授權清單及真人跨平台驗收。完成遷移驗證前保留目前日常安裝。
+
+本次已驗證程式與安裝包來源為 `45ec5de`，完整驗證紀錄已於 `69f5d50` 提交。本筆只補收尾文件，不更動程式或安裝包。
+
+
+## 2026-10-08：續接 App 共用詞庫
+
+使用者已明確要求繼續，解除上一筆暫停安排。這次從已同意的 C（詞庫／校對命令）與 B（引擎輸出）邊界接續。
+
+- App 新增詞庫面板：明確匯入舊詞庫、規則新增／修改／刪除、保護名字、常用詞、已儲存規則預覽、單次備份還原。匯入只複製，已有 App 詞庫時拒絕覆蓋；開啟設定不建立詞庫、不啟動錄音。
+- 保留原 TOML 的註解、未知欄位、一般表格與 inline array 格式；儲存使用 revision 檢查、跨程序檔案鎖及原子替換。衝突、超量、無效字元與 OpenCC 衍生名字衝突不覆寫原檔。UI 錯誤時保留尚未儲存的編輯。
+- 將既有詞庫、名字保護與 s2tw 邏輯抽到 `voicetype-text`，供 App 預覽及 daemon 共用；原有比對、code/path 保護及一次掃描行為保留。Linux 使用系統 OpenCC；Windows 建置固定來源的 OpenCC 1.1.9 DLL、s2tw 字典及授權，以執行檔旁的明確位置載入。
+- 本機引擎明確接收 App 的 `vocab.toml` 路徑，保留每句自動更新機制；編輯操作不占用聽寫 worker。以實際 output 邊界驗證 `GEEHO → GitHub` 與完整片語 `把修改 coming → 把修改 commit`，並保留正常 `coming soon`；還原同樣不需重啟引擎。
+- TDD RED→GREEN 已記錄：缺少詞庫公開介面、缺少刪除／名字／匯入介面、引擎缺少明確共用詞庫路徑。初步 core、共用文字規則、實際 output 測試通過；Windows DLL 建置、兩平台安裝後 GUI 與最終打包證據仍待本輪 CI 核對。
+- 這仍不是完整 App 驗收：抽樣校對與 CSC 尚未接入新 GUI，Google／Windows 語音介面與真人錄音、品質及延遲驗收仍待完成。日常安裝未切換，未讀取私人錄音、未執行 GPU 工作。
+
+
+## 2026-10-08：詞庫打包驗證完成，接續抽樣校對
+
+詞庫程式來源 `c5cd28f` 的 [Desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37757950569)
+與 [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37757950563) 均成功。
+兩平台各有 16 項已安裝 UI 檢查；Windows 安裝到含中文字的路徑，實際載入
+OpenCC、讀取 s2tw 字典並保留中英與名字。此輪發現並修正 Windows 檔案 stamp
+比較的移動錯誤，以及 OpenCC 窄字元入口不能正確處理中文路徑的問題，改走官方寬字元入口。
+
+下載包已核對來源、大小及 SHA-256，並查看 Windows 詞庫截圖；Linux 解包後
+再檢查 CPU runtime、Fcitx 模組、授權與 catalog bytes。這份證據只對應 `c5cd28f`，
+不涵蓋後續校對修改。
+
+| `c5cd28f` 安裝包 | bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux `.deb` | 18861322 | `45f8f215e363e42c0f17e98ae179b85a51fcbcc4fefd7ba72130490f4cb31a15` |
+| Windows NSIS `.exe` | 4313255 | `e2260bb0c319c4a185206765c121adc54e81ccba760e5791805a375dcdd4168e` |
+
+接續同一個已確認的 C/B 邊界實作抽樣校對：
+
+- 新增 App 校對頁：明確開啟／關閉、待校對數、選取音訊、確認或修正整句、刪除及獨立的「加入詞庫」。資料只放在 App profile，不讀取日常安裝的私人樣本；不會自行彈窗。
+- 本機引擎明確取得 UI 的 review config/root，仍沿用送出結果後的非阻塞抽樣佇列、每天最多 5 段、8–61 秒、7 天保留與取消檢查。UI 操作不占用聽寫 worker；背景只更新待校對數與清理期限。
+- 校對保存 revision、跨程序鎖與未知欄位。播放只接受指定記錄的未到期 16 kHz mono PCM WAV，不接受 WebView 任意路徑。新增損壞／未完成錄音的到期清理。
+- 整句修正不自動學成永久規則。短詞建議保守判斷單一差異，正常英文需要上下文；不得改動其他已確認的用法。加入詞庫先保存可重試意圖，失敗不丟校對結果，重試不重複新增規則。
+- 本機離線驗證：59 個 core 測試、28 個共用文字測試、9 個 collector 測試通過；包含實際 collector thread 與 App 儲存／播放命令的合成音訊互通。Clippy 只有既有 worker enum 大小警告。TDD 缺少公開 API／明確路徑與損壞樣本未清理的 RED→GREEN 記於 TDD 文件。
+- 校對頁的 Linux／Windows 已安裝 GUI 與新版包驗證仍待 CI；未做真人錄音、品質或延遲比較，不宣稱縮短推論時間。CSC、Google／Windows 語音及完整驗收繼續列為未完成，PR #2 保持 draft。
+
+## 2026-10-08：抽樣校對安裝包驗證完成
+
+來源 `d24e7e5` 的 [Desktop CI](https://github.com/Jadiouo/voicetype/actions/runs/37760912158)
+與 [engine/Fcitx CI](https://github.com/Jadiouo/voicetype/actions/runs/37760912485) 均成功。
+Linux／Windows 各通過 22 項已安裝 UI 檢查；新增六項涵蓋明確 opt-in、
+7 天到期、合成 WAV 的原生解碼（9 秒且不自動播放）、確認／修正／獨立加入詞庫、
+版本衝突保留編輯，以及重啟／刪除／關閉抽樣。
+
+- 下載兩平台 installer/UI evidence，核對來源 commit、大小與 SHA-256；查看兩平台校對頁截圖，繁中及英文可讀，側欄在頁面捲動時可見。
+- Linux 解包後再次驗證 CPU runtime、native notices、Fcitx 模組、loader、Caps Lock symbols 與 payload catalog。Windows CI 包含中文安裝路徑的 OpenCC 驗證。
+- 表格及 GUI 證據都對應 `d24e7e5`。抽樣為合成資料，沒有使用私人錄音，沒有真人麥克風／辨識品質／速度驗收；Google、Windows 語音與 App 自動錯字校正仍未完成。PR #2 保持 draft。
+
+| `d24e7e5` 安裝包 | bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux `.deb` | 18977800 | `3c92f8ec51a95c861003e1cca1a6f33b617cb441cf1ce303de89ca0b0052d024` |
+| Windows NSIS `.exe` | 4383775 | `344aee6c613a41393b84ca8eaa2227dea736dd4a4c2cc9ce78e15757b01f895f` |
+
+## 2026-10-08：今日收尾，依使用者要求暫停
+
+使用者要求今天先到這裡，寫開發日誌後結束。本筆取代先前「接續中」的工作安排；完整 App 目標暫停，PR #2 保持 draft。
+
+- **已完成並推送：** App 共用詞庫與抽樣校對，最新已驗證程式來源為 `d24e7e5`，完整安裝包證據已於 `3178b4d` 提交。59 個 core、28 個共用文字、9 個 collector 測試通過；Linux／Windows 各有 22 項已安裝 UI 檢查，來源、雜湊與截圖已核對，詳見上文。
+- **日常校正：** 確認現行 CSC 使用 CPU、8 執行緒，並非內顯或獨顯。使用者確認的術語已在本機詞庫加入必要上下文與名字保護，實際 daemon 的 15 項文字回歸通過；正常同形詞與程式碼仍保留，不需重啟。個人詞庫、備份與診斷資料留在本機。
+- **尚未定位：** 使用者回報的句尾英文偶發漏字，在後處理探測及最新一次真人試讀中沒有重現。沒有取得失敗時的完整證據，不能宣稱問題已修好，也未因此調整停止延遲或放寬校正門檻。
+- **已保存的未完成工作：** `scripts/voicetype_csc.py`、`eval/test_csc_server.py`、`eval/test_csc_stdio.py` 為未提交的 CSC stdio 工作。2 項管線測試、7 項 socket 測試通過，獨立打包試驗完成建置；打包後真實模型、授權清單及 App 程序生命週期整合尚未驗證，不包含在上述已驗證安裝包。
+- **下次接續：** 有失敗樣本時再定位句尾漏字；完成 CSC 套件與 App 接線驗證，再處理 Google／Windows 語音、完整授權與真人跨平台驗收。今天沒有新增速度或辨識品質的通過結論。
+
+本次收尾只更新文件，保留未提交程式；不繼續開發或要求追加錄音。
+
+
+## 2026-10-08：使用者要求今日續作剩餘功能
+
+已解除上一筆暫停安排，沿用既有四個 TDD 邊界。從尚未提交的 CSC stdio 工作續接，先完成 CPU 校正器的程序生命週期、打包與實際模型驗證，再接 Google／Windows 語音與發行驗收；偶發句尾漏字仍需失敗證據，不能以單次成功結案。原日常安裝繼續保留。
+
+
+## 2026-10-08：依使用者指示改採 commander-mode
+
+主線負責規劃、審查與整合，實作分為 CSC 校正器、Windows 本機語音與 Google 官方 CLI 三項。CSC 接續既有工作樹；另兩項使用獨立工作樹，共用介面依序整合。已採納白方建議：Windows 必須驗證原輸入欄位與部分送字，不能將視窗檢查後的 SendInput 當成原子焦點保護；Google 保留完整排空、一次停止及兩次擷取流程。尚未取得的新平台語音證據持續明列待驗收，日常安裝不遷移。
+
+
+## 2026-10-08：worktree 搬入 repo，工作產物限專案內
+
+依使用者新 AGENTS.md 與「把你的work tree搬到自己的repo下面」要求，七個 worktree 已移至主 repo 的 `.claude/worktrees/`：`adaptive-core`、`desktop-app`、`fast-autocorrect`、`fast-autocorrect-public`、`google-app-integration`、`google-key-coexistence`、`windows-dictation`。使用 `git worktree move`；搬前後的 HEAD、branch、git status/diff 與非忽略未追蹤檔案雜湊一致。開發用 third_party symlink 已改相對路徑並核對目標。只在 `.git/info/exclude` 加排除規則，未修改 `.gitignore`，沒有重啟日常服務。
+
+目前權威 App checkout 是 `.claude/worktrees/desktop-app`（branch `feat/desktop-app`）；Windows 與 Google 分別在同層命名 worktree 持續實作。往後 worktree 文件用相對位置或 branch；所有工作 log、cache、venv、暫存及報告留在主 repo 內，測試 temp root 設於 `.scratch/`。GPU 規則維持 `gpujob` 排隊。這次是搬移與規範更新，沒有取消完整版 App 目標，使用者也已確認 Windows 11 候選版準備好後可測試。
+
+
+## 2026-10-08：CSC 本地驗證完成，進入獨立審查
+
+CSC 程式、安裝介面與開關已形成候選差異，尚未提交。實際安裝的 Linux CPU 校正器可載入模型、在原有時間限制內修字並清理子程序；本地 99 項 core／共用文字、9 項 Python CSC、4 項 daemon CSC、2 項 native build contract 通過。另修復 fork 繼承檔案鎖造成卸載後重啟失敗，測試已重現修正前失敗與修正後通過。
+
+打包目錄有 207 項檔案，Linux 實際原生依賴來源／授權清單已補齊；Windows 的實際依賴與授權仍待 CI 產物核對。雙平台 CI、安裝 UI 測試已接線但尚未執行，新版 Linux／Windows 安裝包與真人語音尚未驗收。現交獨立紅方審查，不以本地通過宣稱完整 App 完成。
+
+
+## 2026-10-08：補齊工作樹搬移
+
+使用者指出 repo 外仍留有工作樹，確認是 GoogleVoiceInput 的 `pcm-catchup` 與 `rust-pcm-relay`。取得指定目的地授權後，已用 `git worktree move` 搬至該 repo 的 `.claude/worktrees/`。搬前後的 HEAD、分支、Git 狀態、已暫存／未暫存 diff 雜湊、非忽略未追蹤檔案與 symlink 清單一致。root 再核對 `git worktree list` 新位置與兩個舊外置父目錄均已不存在；日常服務未重啟。VoiceType 的七個工作樹此前已搬入本 repo 的 `.claude/worktrees/`，往後持續遵守 repo 內工作樹與專案內暫存規則。
+
+這次沒有更改語音功能。CSC 兩項審查修正已完成本地驗證，正在短審；Windows 與 Google App 整合仍在進行。
+
+
+## 2026-10-08：CPU 校正候選、抽樣競態修正與 Windows 原生證據
+
+CPU 校正器候選保留原有 100ms 改字上限與 CPU 執行。準備／啟動失敗時本機 ASR 可繼續，介面顯示校正器不可用並保留偏好；ready 後 child 死亡或壞 frame 會動態更新狀態，正常的單次晚回覆不會被永久判為故障。外部設定 reload 在引擎載入時先拒絕，卸載後才能套用，避免介面與實際設定不同。健康查詢已移至有界背景工作，未完成的查詢不阻塞 App 命令；外層啟動預算也用超過30秒的失敗 fixture 核對過。
+
+完整回歸揭露抽樣校對的儲存競態：UI 輪詢持鎖時，背景 collector 的 nonblocking flock 回 EAGAIN，導致樣本未保存。新增可控制鎖競爭測試先重現失敗，再只在背景對 StoreBusy 最多重試500ms、每次重讀設定與 session；ASR 提交仍非阻塞。修正後 daemon 全套162/162通過、desktop core66項通過（4項 opt-in/helper ignored）；實際 Linux CPU bundle probe 與30秒邊界 probe 已另行通過。最後兩項修正正在獨立短審，候選尚未宣稱安裝包或真人語音驗收完成。
+
+Windows TSF 隔離試驗提交至 `feat/windows-dictation-work`，最新 commit `9281ae9`。首輪 MSVC 發現 ABI／link 問題後修正，[原生 CI run 37803699841](https://github.com/Jadiouo/voicetype/actions/runs/37803699841) 已通過 MSVC 建置與3/3 CTest：真 Msctf／ACP 一次完整 UTF-16 寫入、broker protocol、registrar唯讀檢查。實際 x64 DLL為20,480 bytes，SHA-256 `e62de9ec046ba3090c897add1110546652717b16252ad60496bee7c744c534af`。這是最小原生試驗，仍未證明跨應用 speech profile／快捷鍵、標準使用者安裝、真正麥克風或完整 Windows App。
+
+Google adapter 的獨立審查發現立即取消被重設、cleanup 失敗丟失 owner、reader stall 後 pacing 突發三項問題；作者已補測修正於本地 `feat/google-app-integration-work`，尚待短審與正式 App wiring。官方 CLI 真實語音與 Windows capture 完整性仍待驗證。Windows 依賴 notice／完整 App Rust notices 也仍待補齊，PR維持草稿，沒有替換日常安裝。
+
+
+## 2026-10-09：CSC 最後審查修正完成，準備雙平台候選 CI
+
+最後短審又補上兩項回歸：collector 與 UI 停用抽樣現在按相同 config→store 順序持鎖至音訊發布，持鎖後重讀同意狀態；barrier 測試核對停用成功後不會發布先前待存樣本。pending WAV 期間 session 已失效時不消耗每日 quota，rename 失敗會回復本次預留。健康狀態只接受明確的 ready／unavailable／disabled；缺漏或未知值視為無效回覆，不把已就緒誤降成失敗。
+
+root 抽查鎖定順序、狀態解析與實際 log：daemon 全套164/164通過（沒有略過抽樣測試），desktop core66項通過（4項opt-in/helper ignored）。既有實際 CPU bundle 與長啟動邊界 probe 證據保留。程式與開發日誌進入既有 App 草稿分支的提交／雙平台 CI；尚未以此宣稱新版安裝 UI、Windows 校正器、完整 Google／Windows 語音或全部依賴 notice 驗收完成。
+
+## 2026-10-09：Linux 安裝包實證、Windows 校正測試與輸入服務限制
+
+App 分支已推送 `95dfd61`、`852e8ad`、`7e1944f`。Linux 的實際 `.deb` 已核對來源與 SHA-256，安裝後 22 項 UI 操作、校正開關重新啟動保存及 Fcitx 安裝／回復檢查通過；root 另開啟詞庫與抽樣校對截圖，確認繁體中文與英文內容可讀。CPU 校正套件的 229 項檔案雜湊一致，83 個 ELF 檔均對應來源與 notice。此為 [run 37806714608](https://github.com/Jadiouo/voicetype/actions/runs/37806714608) 的 Linux 產物證據，manifest 仍明列尚未完成端到端語音驗收。
+
+後續 [run 37808930921](https://github.com/Jadiouo/voicetype/actions/runs/37808930921) 的 Linux job 已完成；Windows 已通過真模型校正 probe 與 App 核心測試，安裝包及 UI 測試仍在進行。冷機 probe 最多重試三秒，每次實際校正仍維持 100ms 上限；這沒有放寬產品的送字等待。Windows 冷機嘗試次數與首句結果待原始 log 核對，完整 Rust 與 Windows 原生依賴 notice 也仍在補齊。
+
+Google App 接線採用既有日常版本的流程：一句完整排空與清理後，在閒置時預備下一個空白 CLI。連續兩句的合成測試已通過，真 CLI 的錄音啟動時間與完整尾句仍待實測。保留 Google 的 Ctrl＋Caps Lock 切換開始／停止，以及本機 Linux 的 Ctrl＋Alt 按住錄音。
+
+Windows 輸入服務的最小原生一次寫入測試已通過，但 [run 37809828271](https://github.com/Jadiouo/voicetype/actions/runs/37809828271) 的跨程序啟用仍失敗：API 回報成功，五秒內卻沒有服務載入事件，結果為 4/5。已提供隔離診斷包供 Windows 11 真機回報；診斷不錄音、不送字，會核對自己的註冊清理。此限制不等於完整 Windows App 可用，其他 Windows ASR 與快捷鍵接線持續進行。PR 保持草稿，日常安裝未替換。
+
+同輪後續結果：`7e1944f` 的雙平台 preview CI 已全部成功。Windows 安裝後的 22 項 UI 操作及校正開關保存／損壞設定檢查通過；root 核對原始 `result.json` 與兩張實際截圖。真模型 probe 為 `first_fail_open=false`、第 1 次改字成功、改字 9ms；整項測試含啟動共 8.28 秒，因此 9ms 只代表模型載入後這一次改字，不能當作整句延遲或普遍速度。Windows 227 項 CSC 檔案雜湊檢查通過，原生 notice 完整旗標仍為 false，持續核對實際安裝包中的 PE 檔。這些通過結果尚未包含 Windows 語音擷取與跨應用送字。
+
+## 2026-10-11：接續平台整合與校正失敗診斷
+
+依使用者再次指定的 commander-mode 接續完整 App 目標。`3804593` 已提交 Rust 依賴來源／notice 清單及專案授權宣告一致性修正；[run 37813376351](https://github.com/Jadiouo/voicetype/actions/runs/37813376351) 的 Linux 通過，Windows 在真模型 probe 失敗，尚未進入該輪安裝測試。三秒內 28 次沒有得到預期改字，目前不足以判定是逾時、worker 故障或模型結果。正在加入不記錄轉錄文字的失敗診斷，原產品 100ms 上限與測試失敗結果保留，不藉延長等待把原因掩蓋。
+
+Windows 分支已形成本地候選 `91cfc23`：按鍵狀態明確區分待開始、錄音與收尾，第二次 Ctrl＋Caps Lock 可停止，收尾期間再次按鍵不會重複停止；校正器健康狀態在閒置時有界更新。獨立複查的 2 項按鍵、3 項子程序測試通過。另已整合 Windows daemon 的 Rust 依賴圖、CPU runtime 清單及安裝後完整性要求，仍待短審與真正 MSVC／NSIS 執行。這不是 Windows 跨應用送字驗收；TSF 啟用問題與真機回報仍待解決。
+
+Google App 的重新檢查流程正在移除錄音事件處理中的完整檔案雜湊及慢速本機狀態查詢，保留啟用前的完整性驗證。連續錄音、預備下一句、取消與清理時保留輸入 lease 的測試持續作為整合依據，真人 CLI／麥克風與切換舊服務仍待驗收。
+
+依最新 worktree 規則，已重新 fetch 並核對遠端 main 與 merged PR。目前六個工作樹的分支皆尚未合併，全部保留；已合併 PR 的工作樹不在現有清單中。本輪未移除分支、未強制刪除，也未變更日常語音服務。
+
+### 同日進展：定位模型輸出差異，推進平台建置
+
+App 已推送 `59150e5`、`eca98be`、`3f816a2`。失敗診斷只使用固定合成句，不收集使用者轉錄。[run 38126446040](https://github.com/Jadiouo/voicetype/actions/runs/38126446040) 的 Linux、Windows 均完成模型呼叫卻未改字；輸入 token 雜湊一致，模型與 tokenizer 也各自符合先前成功版本。直接呼叫約 12–16ms，原始模型輸出的期望字機率只有 0.000214，尚未通過既有信心門檻。這把問題縮小至模型輸出層，不能再歸因為 100ms 等待不足；目前也不能斷言硬體或量化是原因。下一步在失敗時比較原始、最佳化與量化模型，保留相同句子、信心門檻及失敗判定。
+
+Windows checkout 自動換行曾破壞固定來源／notice 雜湊，已對指定輸入固定 LF；Windows runtime 的解壓來源套用 patch 也以明確 Git 設定保留 LF，未更換預期雜湊。Windows 分支第二輪 Linux 建置已通過原生 CPU runtime 與 Rust notices，但 App 編譯揭露平台條件分支語法錯誤，正修正重跑；尚未取得該候選的安裝成功證據。
+
+Google App 接線已推送 `2ada6f0`、`a5838a1`，錄音事件處理中的慢速完整性檢查已移出，獨立複查的阻塞與清理問題已關閉。其 Linux CI 已通過核心命令測試及 Google helper 建置，仍待原生快捷鍵、安裝與 UI 結果。Windows PE 清單與移除系統 UCRT 副本的候選另行短審；未將來源完整旗標改為通過。上述皆未替代真人錄音、跨應用送字或日常服務遷移驗收，PR 繼續保持草稿。
+
+後續 `04a35f3`、`f6cd75b` 已提交上述 PE 清單及模型分層診斷。[run 38126833695](https://github.com/Jadiouo/voicetype/actions/runs/38126833695) 在 AMD EPYC 7763 上，同一 tokenizer／輸入與 ONNX Runtime 下，原始、基本最佳化、融合後浮點模型皆產生正確候選（機率 0.987453），QInt8 的來源 Python 與封裝執行檔卻同樣失敗（期望字機率 0.000214）。問題因此定位到目前量化模型的執行結果，具體指令機制尚待對照；不再增加等待或放寬信心門檻。本機 U8U8 候選與原基線在公開合成測例 48 次執行的輸出、修改與狀態逐項相同，兩者皆 40/48 符合預期；這不是完整語音品質驗收，候選仍待失敗平台實測。
+
+同輪 Windows 已確認移除 44 個系統 UCRT 副本後，實際封裝校正器仍能啟動，固定句於第 1 次、9ms 改字成功。後續安裝建置在 Rust 依賴 notice 缺漏停止，尚未取得去 UCRT 新版 NSIS 安裝證據。已盤點 Windows App／daemon 合計 352 個依賴，缺漏集中於三個 WebView2 同源套件，接續補確切上游授權來源。Windows Nano 原生建置則已跨過來源雜湊檢查，正在修正 pinned Sherpa CMake 的 CPU DLL／import library 對應，仍須真正 MSVC 建置核對。
+
+### 同日進展：固定 CSC 量化精度並整合 Google 候選
+
+[run 38127430002](https://github.com/Jadiouo/voicetype/actions/runs/38127430002) 的 Windows 真 CPU 再現原三秒內 28 次不改字；同一合成輸入、同一 QInt8 模型檔與 ONNX Runtime 下，只把 session 的 `x64quantprecision` 設為 1，原本期望字機率 0.000214、未改字，變成 0.998715、15ms 改字成功。據此讓正常 CPU worker 固定使用這個精度模式，保留原模型雜湊、快取、保護規則與單次 100ms 失敗開放上限；診斷仍可明確比較舊模式。新 worker 的本機封裝實測經安裝器路徑第 1 次、6ms 改字成功，Python 回歸 17/17 通過。這只定位並修正量化執行差異，仍待新版本雙平台 CI、Windows NSIS 安裝後模型／UI、依賴來源及真人語音驗收。
+
+Google 已審的 `1896bd4` 以獨立 merge 納入 App 候選，包括兩個狹義 CLI helper、合成流程測試與 Linux Caps Lock 路徑；未帶入該工作樹尚未提交的遷移資料。原 CSC 失敗診斷、Rust notice 清單及 Windows PE 完整性旗標保留。新整合 CI 與實際安裝結果待跑，PR 維持草稿，日常服務未切換。
+
+### 同日進展：整合預覽的 Linux 安裝通過，Windows 測試卡點已定位
+
+`012e758` 的 [run 38128018261](https://github.com/Jadiouo/voicetype/actions/runs/38128018261) Linux job 成功：真封裝 CSC 第 1 次修字 7ms、`first_fail_open=false`，`.deb` 抽取後 235 個 CSC 項目、Google helper、435 個鎖定 Rust 套件／766 份文字與三項原生目錄均通過位元組與清單核對；已安裝 UI 的選擇、重啟、損壞設定及重新載入測試通過。官方 Google CLI 在 runner 中不存在，故此結果不代表真人 Google 語音驗收。
+
+同 run 的 Windows job 已通過新 CSC 模型建置與修字 gate，接著在 `google_terminal_windows::conpty_delivers_only_voice_and_editor_controls_to_child` 停留超過 14 分鐘；為取得 GitHub 只在 job 結束後開放的原始 log，root 取消該 job。這是有界診斷操作，不是產品測試的失敗斷言，也沒有取得該 run 的 Windows NSIS 安裝結果。Google 作者正按原測試語義定位 ConPTY 停滯；不以加長 timeout 略過。Windows PE 來源、安裝器內插件授權及新 NSIS 全集合核對仍標為未完成。
+
+後續主 App 候選已在本地合併經審的 Windows Nano／原生輸入分支與 Google 快捷鍵服務可回復遷移；Google ConPTY 修補改由釘版 `portable-pty` 0.9.0 單一 Windows flag 調整，並保留子程序清理邊界。釘版原 crate 全檔與唯一 patch、MIT notice 已逐項核對，Rust notice 清單明列 vendored 來源而非 workspace；本機 Linux 全套 core/text、7 項 notice fixture 與完整 Rust graph／766 份文字驗證通過。Windows 預覽另接線六個 NSIS 插件的實際抽取、來源位元組與已安裝 notice 檢查，外層 setup EXE 及整包 PE 來源仍未宣稱完整。這些新整合尚待下一輪真 Windows NSIS／已安裝 daemon、UI 與真人語音驗收，PR 繼續為草稿。
+
+### 同日進展：整合後首輪 Windows 終端與 Linux Tauri 編譯回饋
+
+整合候選 `50c055d` 的 [preview run 38130204932](https://github.com/Jadiouo/voicetype/actions/runs/38130204932) 在 Windows 通過 OpenCC 與核心編譯，但 Google 合成 ConPTY 測試在三次 editor 回應後找不到 F5 控制位元組紀錄；Linux 通過公開核心測試、封裝 CSC 模型改字與原生輸入檢查，首次進入 Tauri 主程式編譯時發現 Google formatter 的輸入被推斷成無大小的 `str`。兩個 job 均未產生本輪安裝包。Windows TSF 同 HEAD 隔離測試 5 項中 4 項通過，唯一既有跨程序啟用 gate 仍是 API 回成功、五秒內沒有 TIP `Activate/HELLO`；這不是 MSVC 編譯錯誤。
+
+ConPTY fixture 已明確啟用 Windows VT 輸入模式，並在 editor 回應前記錄固定合成控制序列；單次 [Google 分支 run 38130628092](https://github.com/Jadiouo/voicetype/actions/runs/38130628092) 的 Windows 公開命令測試已通過，整個步驟約七秒，不代表麥克風、停錄或整句延遲。Tauri formatter 改為明確 `String` 入參，原作者已核對型別邊界。兩項修正已推到主 App `8ecdcb3`，[preview run 38130953571](https://github.com/Jadiouo/voicetype/actions/runs/38130953571) 曾啟動雙平台檢查；後續結果以下一候選為準。
+
+### 同日進展：Windows 原生建置與校正通過，安裝前 notice 契約失敗
+
+`0ea4422` 的 [preview run 38131407549](https://github.com/Jadiouo/voicetype/actions/runs/38131407549) 在 Windows 通過公開 App 命令測試、真 MSVC Nano CPU runtime 建置、CSC 封裝模型測試；固定合成句在已載入後第 1 次、16ms 修字，`first_fail_open=false`，不是整句或麥克風延遲。釘版 `portable-pty` 的 Windows checkout 位元組已通過來源核對，該 run 接著在 Rust native notice 整合遇到 OpenCC manifest 缺少 `id`，尚未建 NSIS、安裝或跑 UI。已讓 OpenCC builder 產生固定 `id: opencc`，collector 保留缺欄即失敗；修正仍待下一輪真 Windows 建置核對。
+
+同輪 Linux 在公開測試發現合成錄音器 PID 檔先建立、後寫入的競態，讀端可能看到空檔。Google 作者已在獨立測試修正中改為同目錄暫存檔寫完再原子發布，本地該組 4/4 通過；新版 Linux 安裝包仍待 CI。另已本地整合經審的 Windows runtime 明確修復／回復入口，以及正式預覽版號 `0.2.1-alpha.1`，用於與先前真 `0.2.0-alpha.1` NSIS 比較；兩版安裝、保留個資與回復尚未實測。PR 保持草稿，日常安裝未切換。
+
+下一候選 `58f752f` 的 [run 38132543448](https://github.com/Jadiouo/voicetype/actions/runs/38132543448) 雙平台公開命令測試通過，包含 Linux 合成 PCM 的 4 項測試與 Windows runtime 修復／回復測試。Linux 真 Nano 原生碼建完後，daemon 的獨立 `Cargo.lock` 仍指向桌面共用套件舊版號，使 `--locked` 建置明確失敗；此輪未產新 `.deb`。已只更新兩個 path 套件的鎖檔版號，完整 `cargo metadata --locked` 本地通過，並在昂貴原生建置前加入同一鎖檔檢查。Windows 公開測試通過後仍在 Nano C++ 建置，因已確定相同 daemon `--locked` gate 會阻斷，root 授權取消以節省 runner 時間；取消不是 Windows 產品斷言失敗，也沒有新版 NSIS 或安裝結果。兩項修正與實際跨版本安裝仍待下一輪 hosted 驗證。
+
+### 同日進展：0.2.1 預覽版真安裝與 Windows UI 文案回歸
+
+`a417fe8` 的 [run 38132976717](https://github.com/Jadiouo/voicetype/actions/runs/38132976717) Linux job 完整成功：真 `.deb` 安裝、已安裝 UI 的 22 項操作與校正開關、詞庫、抽樣校對測試通過。下載的 `0.2.1-alpha.1` deb 為 235,042,536 bytes、SHA-256 `3940adb7f5a8c10e38ee4555ee15196db41fd9b54044f2d55edccfeacb70d4be`，獨立重算與來源 commit／manifest 相符；manifest 仍標示端到端語音未驗證。
+
+同輪 Windows 真 MSVC／Nano、CSC 封裝與 NSIS 建置、靜默安裝、模型／DLL 載入、OpenCC、Google helper、365 個 Rust 套件的 notice 及實際 NSIS 六插件／已安裝 notice 核對通過。CSC 固定合成句在模型載入後第 1 次、10ms 改字，`first_fail_open=false`；這不是整句或麥克風延遲。安裝後 UI 測試在開始階段發現待載入引擎說明少了測試要求的「引擎」二字而失敗，故本輪沒有通過完整 Windows UI，也沒有上傳可獨立核對的 NSIS 產物；run log 的安裝包雜湊不能代替下載後重算。Windows CSC 原生 notice 與整包 PE 來源仍標示未完整；真人錄音、跨應用送字與兩個實包的升級／回復測試尚未執行。正在按實際 UI 文案失敗定點修正，下一輪仍須真 Windows 安裝與 UI 驗證。
+
+已在本地整合經原作者複查的 Google Windows 原生 CLI／單一輸入 owner 候選 `ae9539c`；Linux core／文字全套、本機格式與 JavaScript 語法檢查通過，但這些 Linux 測試沒有執行 Windows 平台分支，新整合仍待真 Windows CI。PR 保持草稿，日常服務未切換。
+
+### 同日進展：新預覽正在驗收，校正 PE 來源與快捷鍵本地整合
+
+`faa44cc` 的 [run 38134306970](https://github.com/Jadiouo/voicetype/actions/runs/38134306970) Linux job 已成功；Windows 已越過公開命令、真 Nano、CSC 與 Google helper 建置，正在建新 NSIS。仍須取得 Windows 最終安裝／UI 結果，下載新安裝包獨立核來源、雜湊、版本與實際 PE 集合，才能以兩個真版本執行升級／回復測試；目前沒有把進行中的 job 算通過。
+
+本地已獨立提交並經 Windows 作者短審的 CSC Windows PE 來源候選 `4dcced3`：舊真 NSIS 的 44 個系統 UCRT 副本依精確清單排除後，43 個 CPython／wheel PE 對上原始 archive/member、SHA-256 和隨包 notice；另核到單獨 MSVC runtime 的官方 redistributable 成員及 EULA 來源。舊包暫存實例補入這份來源 EULA 後安裝驗證通過，改動已知 DLL 位元組會回到待查；生成的 PyInstaller EXE 另記其來源與建置過程。這些是舊包的候選映射，新的 NSIS 與整包 PE 來源旗標仍維持 `false`。已在本地正常合併經雙作者審查的可選快捷鍵 `1cbc120`，修正抽樣校對說明以區分本機、Linux Google 與目前不回傳音訊的 Windows Google；本機 core／text 測試、格式及 JS 語法檢查通過，尚未推送這批、未取消正在跑的 CI，也未接觸日常安裝或私人資料。
+
+`faa44cc` 的上述雙平台 job 後來都正式成功。Windows 真 NSIS 靜默安裝及 22 項已安裝 UI 操作通過，CSC 模型載入後固定句第 1 次、16ms 修字（非整句延遲）；Rust 365 個套件／648 份文字、OpenCC、Nano 原生 DLL 載入、Google helper 與六個實際 NSIS 插件核對通過。下載的新 `0.2.1-alpha.1` setup 為 188,003,752 bytes、SHA-256 `220362fd435f1d1aedb81c7aed1cea4532a498c004574a4d8e205dc21003878a`，獨立重算與 source／manifest 相同；外層 setup 及抽出 App 的 PE 固定版號都是 `0.2.1.0`，字串版號都是 `0.2.1-alpha.1`。實包 magic 掃描：抽出 60 個 PE（CSC 45、NSIS 插件 6、其他安裝內容 9），另加外層 setup。當輪 CSC 的 43 個 CPython／wheel 成員與 notice吻合；MSVC DLL 位元組對上來源但當輪尚無本地新候選補入的 EULA，生成 EXE 與外層 NSIS 另有 provenance 範圍，因此 CSC／整包 PE 完整旗標仍是 `false`。真人音訊、TSF 跨應用送字與 Windows Google 錄音仍未驗。
+
+已使用獨立確認的新包來源與雜湊派出 [雙真包升級 run 38135973071](https://github.com/Jadiouo/voicetype/actions/runs/38135973071)，舊版仍固定先前 `0.2.0-alpha.1` 真包。該 job 在**第一個來源 API gate** 讀舊 run JSON 時，Python 以 Windows cp1252 解讀 GitHub UTF-8 回覆而失敗，未下載雙包、未執行升級或個資保留斷言。最小解碼修正在本地重現紅／綠並交獨立短審；不放寬來源、版號或雜湊 pin。本地另合入經審的 Google 啟動失敗 owner 保留修正，Linux core／text 整合測試通過；新一輪 Windows／Linux preview 與真雙包重測仍待推送和執行。
+
+修正來源 API 解碼後，同三個固定輸入的 [升級 run 38136155878](https://github.com/Jadiouo/voicetype/actions/runs/38136155878) 通過兩版真 CI 來源、安裝包 SHA-256 與 PE 版號檢查，也備妥 WebDriver；但第一個舊版 NSIS 安裝程序回傳 0 後，指定含空格及「語音」的隔離安裝目錄內沒有 App EXE。此輪 `phases=[]`，未進入升級、資料保留或回復斷言。原 harness 以 Python argv list 傳 `/D=...`，Windows 會將含空格的整項加引號；NSIS 文件要求 `/D=` 為最後且不加引號。已按此修正 harness，保留目標 EXE 必須存在的斷言，並以同參數的紅／綠 fixture 驗證、經 Windows 作者短審；真 Windows 安裝仍待獨立 ref 重測。另整合了經雙作者短審的已安裝 UI 快捷鍵選擇／重載測試，尚未由 hosted runner 執行。`6016358` 的新預覽仍在建置，沒有為這些本地修正取消。
+
+`6016358` 的 [preview run 38136141006](https://github.com/Jadiouo/voicetype/actions/runs/38136141006) 後來雙平台成功。Windows 真 NSIS／安裝檢查通過 OpenCC、Nano DLL、CSC 192 檔、Google helper、Rust 365 包／648 份文字與六個安裝器插件；固定合成句在模型載入後第 1 次、9ms 修字，完整測試 8.82 秒包含啟動，兩者不能混作語音延遲。已安裝 UI 的 22 項操作通過，但沒有跑**下一候選才加入**的快捷鍵 per-provider 情境；`speech_adapters_tested=false`，真人麥克風及 TSF 送字仍未驗。新 setup 下載後獨立重算為 188,019,415 bytes、SHA-256 `a14444a9ae071551cebd6567e59a53f68a34f84db9769aca93ec7a06a319b018`，與 source／manifest 相同；真 NSIS 抽出 60 個 PE（CSC 45、插件 6、其他安裝內容 9），另有外層 setup。CSC 的 44 個原始成員（43 個 CPython／wheel 和一個獨立 MSVC）來源／位元組對上，生成的 PyInstaller EXE 另記建置 recipe；安裝目錄 192 個 CSC 成員與來源清單的 PE 集合／雜湊雙向核對通過。manifest 仍如實標示 CSC 原生 notice 與整包 PE 來源不完整、端到端語音未驗。
+
+已審的 `/D=` 修正以隔離 ref 跑 [升級 run 38136716931](https://github.com/Jadiouo/voicetype/actions/runs/38136716931)：同兩版固定來源、雜湊、PE 版號與**舊版 NSIS 真安裝**均通過，已安裝 App EXE／registry 也匹配舊版，先前缺檔問題關閉；但第一個公開 App 命令 `set_spelling_enabled` 經 native WebDriver async endpoint 回 HTTP 500。原 harness 未保存 HTTP 回覆 body，這次仍是 `phases=[]`，沒有開始升級／資料保留。只增加 HTTP 失敗原始回覆的有界 evidence 保存，原命令、60 秒 timeout 與斷言不變；已從隔離 ref 用同一對 faa 實包再派 [run 38137258982](https://github.com/Jadiouo/voicetype/actions/runs/38137258982) 取得確切原因，不先猜 endpoint 或放寬測試。
+
+該 [38137258982](https://github.com/Jadiouo/voicetype/actions/runs/38137258982) 的 HTTP 500 沒有重現，舊版已安裝 App 的公開命令與合成個人資料讀寫走過；接著嚴格隔離檢查發現 Windows 真 `LocalApplicationData/io.github.jadiouo.voicetype.preview` 從不存在變為存在，故仍失敗於舊版階段、`phases=[]`。目前未取得該新目錄的檔案類型，不能斷定是五類個資還是 Tauri／WebView 快取；不刪外部目錄、不放寬隔離斷言，也不把這輪當跨版本資料保留通過。下一步只記有界檔案樹與原本指定在 repo 內的 WebView 資料夾狀態，再針對實際寫入來源修正。
+
+### 同日進展：已安裝快捷鍵與升級隔離路徑的真實回饋
+
+`f310801` 的 [preview run 38137750986](https://github.com/Jadiouo/voicetype/actions/runs/38137750986) 在 Windows 真 NSIS 安裝後通過 24 項 UI 操作，新增情境確認 Local／Google 分別保存 F9 要求、重啟後讀回，再恢復預設；狀態仍明示按鍵「尚未確認有效」，本輪沒有注入真鍵或驗證 TSF／麥克風。Linux 同一新增情境在 Local F9 保存成功後，切到 Google 再選 F9 時，30 秒內磁碟要求值未更新；目前 log 未顯示是 WebDriver 選項變更事件、App 命令或產品拒絕哪一層。經獨立短審的下一候選只在原逾時失敗時保存限長、無轉錄的 UI 狀態、設定值與截圖，原判定和時限不變，仍待 hosted 復驗。
+
+隔離的 [升級 run 38138065457](https://github.com/Jadiouo/voicetype/actions/runs/38138065457) 證實舊 App 只在 OS LocalAppData 預建一個空的產品目錄，沒有子檔；原期待的 repo 內 WebView 資料夾當時不存在。釘版 WebDriver 的 session 原先沒有指定 UDF，[Microsoft 的 WebView2 WebDriver 規格](https://learn.microsoft.com/en-us/microsoft-edge/webdriver/capabilities-edge-options) 說這時會另建臨時資料夾。加上明確 repo UDF 後，[run 38138783747](https://github.com/Jadiouo/voicetype/actions/runs/38138783747) 看見所要求的 repo 目錄已建立，但 WebView2 session 未回報 `msedge.userDataDir`，新嚴格核對在舊版公開命令前失敗。這不等於已證實瀏覽資料落點；下一步要在 App 運行時限定該 driver／App 的 WebView2 子程序、核實際 `--user-data-dir`，原 OS 目錄斷言仍保留。兩輪都未進入新版安裝、資料保留與回復，不能宣稱升級通過。
+
+[升級 run 38139520407](https://github.com/Jadiouo/voicetype/actions/runs/38139520407) 的真行程證據已限定到該 WebDriver 啟動的舊 App：六個 WebView2 後裔的資料目錄皆是 repo 內所請求路徑的直屬 `EBWebView` 子目錄；session capability 仍未回值。舊版 NSIS 安裝與版本檢查通過，但新檢查原先要求路徑與父目錄完全相等，故仍在公開命令前失敗、`phases=[]`。下一候選只接受父目錄或該直屬子目錄，拒絕 reparse／路徑逃逸；在真行程驗證成立時，對先前不存在、僅 Tauri 預建且即時精確為空的 OS identifier 目錄做**唯讀**工具狀態記錄，不刪除 repo 外目錄。其他 OS 路徑、有內容及 baseline 已存在均維持失敗；真升級／回復與資料保留尚待 hosted 實跑。
+
+### 同日進展：雙版資料讀回與 Windows PE 聚合候選
+
+`e66183b` 的 [preview run 38139513120](https://github.com/Jadiouo/voicetype/actions/runs/38139513120) Windows job 成功；Linux 已安裝快捷鍵情境仍失敗。失敗時 Google F9 選項點擊後沒有 Google `change` 事件，磁碟仍是 Google 預設值，不能據此判斷後端拒絕。已審的 UI 候選只在 provider／requested 值或文案真正改變時重繪選單，避免每秒狀態輪詢覆寫互動；原 30 秒斷言保留，Linux 真 GREEN 待新 preview。
+
+隔離 [升級 run 38140075066](https://github.com/Jadiouo/voicetype/actions/runs/38140075066) 以固定來源與雜湊的兩個真 NSIS 包通過舊版及新版安裝、PE／registry 版號和公開命令資料讀回，報告已有 `old-installed-public-data`、`new-installed-public-data` 兩階段。WebView2 實際子程序的資料目錄在 repo 內；唯一新增的 OS 產品目錄即時精確為空，只讀保留且未刪除。新版卸載程式以 `/S` 回傳 0 後，10 秒內安裝目錄仍有檔案，故整項升級／回復測試失敗；尚未通過卸載、回復與最終資料保留。下一次僅在原失敗時記安裝目錄剩餘項目、產品登錄數及本次安裝路徑內的行程 PID／名稱，不加長 gate、不處理未知程序。
+
+Windows PE 聚合候選已經異作者短審及本機 12 項定點測試：對實包抽出的 CSC、NSIS 插件、Google、原生 runtime、OpenCC、主程式與外層 setup 做雙向路徑／位元組／notice 核對；生成的卸載程式另記實際輸出與來源 recipe。舊 `6016358` 實包仍回報 `complete=false`，新候選必須等真 NSIS 產生後讀 `complete/unresolved`，不能把原始碼審查當成來源完整。Microsoft runtime 的來源／條款文本與「是否具有散裝轉發資格」分欄，後者維持 `not_assessed`。Windows Google 目前由官方 CLI 持有擷取，App 沒有 PCM／audioReview；這仍是 GOAL／SDD APP-05 的未完成要求，不因 UI 如實告知而視為平台豁免。真人語音、TSF 跨應用送字亦未驗，PR 維持草稿。
+
+後續 [升級 run 38140967388](https://github.com/Jadiouo/voicetype/actions/runs/38140967388) 同樣通過舊／新版真安裝與公開資料讀回，新卸載 `/S` 回傳 0 且登錄已清、安裝目錄內沒有存活程序，卻留下精確 44 個 `spelling/_internal` UCRT／API-set 檔。這 44 個路徑及大小與舊 `0.2.0-alpha.1` 實包全數相同，新版實包全數不含，且恰是新版建置時排除的 OS 提供清單。釘版 Tauri 2.12.1 的新卸載程式只刪新包列出的檔案，因此無法清理覆寫安裝前的舊檔。經 Windows 作者定點短審的候選只在 registry 版本、產品及安裝路徑精確對上這一舊版時，使用其原卸載程式的 `/S /UPDATE _?=` 路線先清舊資源；退出碼與舊主程式／44 類別檔案清除不符即讓安裝失敗。未知檔案和個人 profile 不遞迴清理，舊 `0.2.1` 候選安裝不在此窄修範圍。這仍是原 `381409` RED 對應的原始碼候選，需新真包 old→new→卸載→回復實測才能記為 GREEN。
+
+`559f67f` 的 [preview run 38140803904](https://github.com/Jadiouo/voicetype/actions/runs/38140803904) Linux job 在原生測試階段由 Xvfb 啟動工具等候 5 秒超時而失敗，未到已安裝 UI，不能把快捷鍵 UI 修正判成通過或失敗。Xvfb 原作者已交經獨立短審的有界 readiness／早退／stderr 診斷，本機假子程序測試 5/5；沒有更動原 5 秒判定，真 runner 結果待下一輪。Windows job 成功完成真 NSIS 安裝與已安裝 UI 的 24 項操作，含各 provider 快捷鍵要求保存／重啟／還原；截圖可讀，`speech_adapters_tested=false` 且 `shortcut_registration_tested=false`。新 PE 聚合在安裝步驟正常產出 `complete=false`，首個未解項是 OpenCC manifest `data/s2tw.json` 對安裝路徑 `opencc/s2tw.json` 的既有映射沒有套入聚合；manifest 旗標仍是 false。定點候選沿用已通過的 OpenCC 安裝檢查映射，保留實檔大小／雜湊驗證和錯檔負例，尚須下一真包才能看到後續未解項或完整結果。
+
+### 同日進展：新版真包安裝與雙版回復驗證
+
+`cecac71` 的 [preview run 38142202595](https://github.com/Jadiouo/voicetype/actions/runs/38142202595) Windows job 成功建置並安裝含舊 UCRT 升級 hook 的 NSIS，OpenCC、Nano DLL 載入、CSC 192 項、Rust 與原生 notices、已安裝 UI 均通過；固定合成句在已載入後第 1 次 15ms 修字，非整句或麥克風延遲。實包 188,020,444 bytes、SHA-256 `a32e482b87141afbd611ded7f5674228c905acc805a1a267b79903c9ae86c828`，與 manifest 同源，setup 的數字版號為 `0.2.1.0`、字串版號 `0.2.1-alpha.1`。PE 聚合仍是 `complete=false`：Windows NSIS 抽取比原 60 項預期多 `uninstall.exe`，實際抽取與已安裝卸載程式的位元組關係須下一 hosted 核對；不以猜測將其列為完整。
+
+同輪 Linux 已越過先前的 Xvfb 啟動故障並完成真 deb 安裝，但已安裝 UI 的 Google F9 WebDriver 選項仍未送出新的 `change` 事件：畫面選單已是 F9，磁碟上的 Google 要求仍是預設，故 job 失敗。跨作者短審的下一候選改用真 WebDriver 鍵盤 Actions 選項，不用 JavaScript 合成事件；原 30 秒與磁碟斷言不變，真 hosted GREEN 尚待測。
+
+新舊固定真包的 [升級 run 38143838772](https://github.com/Jadiouo/voicetype/actions/runs/38143838772) 已通過舊／新安裝、PE 與登錄版號及兩階段公開資料讀回；新版 `/S` 卸載回傳 0、安裝目錄清空後，立即查 HKCU 時仍有產品註冊，因此未到回復。只加失敗時有界登錄身分診斷、保留原判定，以同兩包重跑 [run 38144360729](https://github.com/Jadiouo/voicetype/actions/runs/38144360729) 則五階段全通過：新版卸載保留個人資料、舊版回裝讀回及最終卸載保留資料，六類公開測試資料雜湊未變。兩輪同包不同註冊結果支持卸載收尾時序競態，但尚未量到子程序／登錄先後；不能把一次成功當作時序缺口已修。日常安裝與個人資料未動，真人語音、TSF 跨應用送字及 Windows Google PCM／audioReview 仍未驗，PR 維持草稿。
+
+### 2026-10-11 收斂：使用者撤回 App 的 Google 路線
+
+使用者要求盡快把工作樹合入 main 並清理佔空間的產物，明確表示 App 只需目前好用的本機路線。舊雙 provider 完整目標暫停；本候選移除 Google 辨識入口、helper 資源與 CI 建置／下載，但保留未完成舊快捷鍵交接的顯式還原入口。預覽 profile 若曾選 Google，啟動或重新載入時以原子設定寫入改回 Local，保留其他偏好、詞庫和抽樣校對資料；不自動更動日常 Google 服務。Linux／Windows 本機 Nano、CPU 校字與共用功能仍在。Windows 自動送字、真人麥克風及端到端語音尚未完成驗收，PR 保持 draft；本輪 source 檢查後可合併，新的 local-only 真包驗證留待 CI，不冒稱已通過。
+
+同版 `0.2.1-alpha.1` 舊預覽曾打包 Google helper；新候選沿用經驗證的 NSIS 舊版 `/UPDATE` 路徑，對精確產品登錄及安裝目錄執行原卸載器，確認舊 helper 與已退役 UCRT 均不存在後才覆寫，不刪未知檔或 profile。此同版遷移及舊交接 UI 尚待真安裝驗證，不能以 source 審查代替。
+
+舊 Linux 快捷鍵交接的受控 resident fixture 已確認：`DisableStaged` 還原後仍待 Fcitx 真重新載入，只有 `RestoreStaged` 完成並清 journal 才放行 Local 快捷鍵；失敗維持阻擋。舊 Google transfer 全測中 10 項安全邊界通過、4 項 Google 啟動測因本機官方 CLI availability 未過而失敗，未改動的 baseline 亦相同；不把這些測試當本機 App 安裝驗收。
+
+前一候選 `8cc0735` 的 [run 38144712770](https://github.com/Jadiouo/voicetype/actions/runs/38144712770) Linux 已安裝 UI 24 項通過（含舊 Google 路線的快捷鍵測試），但這不是 local-only 新包的結果；Windows 當時仍在建置。雙真包 [upgrade run 38144360729](https://github.com/Jadiouo/voicetype/actions/runs/38144360729) 五階段與六項合成資料 hash 通過；前次同包註冊時序失敗仍未證明已修。

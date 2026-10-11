@@ -69,6 +69,71 @@ mod tests {
     }
 
     #[test]
+    fn desktop_dictionary_edits_reach_the_actual_output_boundary_without_reload() {
+        use voicetype_app_core::vocabulary::Vocabulary;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("vocab.toml");
+        let vocab = Vocab::load_or_empty(&path);
+        let mut editor = Vocabulary::open(path).unwrap();
+        let traditional = Traditional::load().expect("OpenCC data required");
+        let assistant = Assistant::new(Personalization::memory(), None);
+        let input = "请把修改 coming，然后 push 到 GEEHO，coming soon。";
+        editor
+            .put(
+                &editor.snapshot().revision,
+                None,
+                vec!["geeho".into()],
+                "GitHub".into(),
+            )
+            .unwrap();
+        assert_eq!(
+            process(
+                Some(&traditional),
+                &vocab,
+                &assistant,
+                input,
+                &ContextSnapshot::default(),
+                None
+            )
+            .unwrap(),
+            "請把修改 coming，然後 push 到 GitHub，coming soon。"
+        );
+        editor
+            .put(
+                &editor.snapshot().revision,
+                None,
+                vec!["把修改 coming".into()],
+                "把修改 commit".into(),
+            )
+            .unwrap();
+        assert_eq!(
+            process(
+                Some(&traditional),
+                &vocab,
+                &assistant,
+                input,
+                &ContextSnapshot::default(),
+                None
+            )
+            .unwrap(),
+            "請把修改 commit，然後 push 到 GitHub，coming soon。"
+        );
+        editor.restore(&editor.snapshot().revision).unwrap();
+        assert_eq!(
+            process(
+                Some(&traditional),
+                &vocab,
+                &assistant,
+                input,
+                &ContextSnapshot::default(),
+                None
+            )
+            .unwrap(),
+            "請把修改 coming，然後 push 到 GitHub，coming soon。"
+        );
+    }
+
+    #[test]
     fn explicit_name_spellings_survive_both_conversion_boundaries_and_simplified_input() {
         let traditional = Traditional::load().expect("OpenCC data required");
         let assistant = Assistant::new(Personalization::memory(), None);

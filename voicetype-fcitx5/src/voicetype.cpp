@@ -1,4 +1,5 @@
 #include "voicetype.h"
+#include "input_route.h"
 
 #include <fcitx-config/iniparser.h>
 #include <fcitx-utils/log.h>
@@ -202,10 +203,53 @@ VoiceType::VoiceType(fcitx::Instance *instance, NotificationSink notification,
 
     // --- 3. 連線 daemon, 並把 socket fd 掛進 fcitx5 的事件迴圈 ---
     // 不開執行緒。回呼在主執行緒執行, 可以安全呼叫 commitString()。
+    connectInput(socketPath());
+    inputRouteTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + 100000, 0,
+        [this](fcitx::EventSourceTime *source, uint64_t now) {
+            pollInputRoute();
+            source->setTime(now + 100000); source->setOneShot(); return true;
+        });
+}
+
+void VoiceType::connectInput(const std::string &path, int pid) {
+    // Called only from construction or the routing timer, never an IPC callback.
+    ipc_.reset();
+    onDaemonDisconnected();
     ipc_ = std::make_unique<IpcClient>(
-        &instance_->eventLoop(), socketPath(),
+        &instance_->eventLoop(), path,
         [this](const IpcMessage &m) { onDaemonMessage(m); },
-        [this]() { onDaemonDisconnected(); });
+        [this]() { onDaemonDisconnected(); }, pid);
+}
+
+void VoiceType::pollInputRoute() {
+    // Includes recognition/delivery waiting after release. An old result can
+    // never cross into the next route: switching replaces the whole connection.
+    if (recording_ || deliveryPending_) return;
+    const auto route = desktopInputRoute();
+    if (!route) rejectedInputPath_.clear();
+    if (!appInputPath_.empty() && (!ipc_->connected() ||
+        (!appInputReady_ && fcitx::now(CLOCK_MONOTONIC) >= appInputDeadline_))) {
+        rejectedInputPath_ = appInputPath_;
+        rejectedInputGoogleToggle_ = appGoogleToggle_;
+        rejectedInputF9_ = appCtrlShiftF9_;
+    }
+    const bool useApp = route && !(route->socket == rejectedInputPath_ &&
+        route->googleToggle == rejectedInputGoogleToggle_ &&
+        route->ctrlShiftF9 == rejectedInputF9_);
+    const std::string desired = useApp ? route->socket : "";
+    const int pid = useApp ? route->pid : 0;
+    const bool googleToggle = useApp && route->googleToggle;
+    const bool ctrlShiftF9 = useApp && route->ctrlShiftF9;
+    if (desired == appInputPath_ && pid == appInputPid_ &&
+        googleToggle == appGoogleToggle_ && ctrlShiftF9 == appCtrlShiftF9_) return;
+    appInputPath_ = desired; appInputPid_ = pid;
+    appGoogleToggle_ = googleToggle;
+    appCtrlShiftF9_ = ctrlShiftF9;
+    appF9Latched_ = false;
+    appInputReady_ = false;
+    appInputDeadline_ = fcitx::now(CLOCK_MONOTONIC) + 1000000;
+    connectInput(useApp ? desired : socketPath(), pid);
 }
 
 VoiceType::~VoiceType() { capsLockGuard_.reset(); selectionReader_.reset(); clearFeedback(); }
@@ -227,8 +271,36 @@ std::string VoiceType::learnKeyLabel() const {
 
 bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
     auto key = event.key();
-    const bool learnPress = !event.isRelease() && key.check(learnKey_);
-    if (capsLockGuard_->filter(event, learnPress)) { return true; }
+    const bool routedF9 = appCtrlShiftF9_ && !appInputPath_.empty();
+    const bool f9Press = routedF9 && !event.isRelease() &&
+        key.check(fcitx::Key("Control+Shift+F9"));
+    const bool learnPress = !event.isRelease() && key.check(learnKey_) && !f9Press;
+    const bool googleTogglePress = appGoogleToggle_ && !appInputPath_.empty() &&
+        !event.isRelease() && (routedF9 ? f9Press : key.check(fcitx::Key("Control+Caps_Lock")));
+    if (capsLockGuard_->filter(event, learnPress || (googleTogglePress && !routedF9))) { return true; }
+    if (routedF9 && appGoogleToggle_ && event.isRelease() &&
+        key.normalize().sym() == FcitxKey_F9 && appF9Latched_) {
+        appF9Latched_ = false;
+        return true;
+    }
+    if (googleTogglePress) {
+        if (routedF9) appF9Latched_ = true;
+        auto *ic = event.inputContext();
+        if (!routedF9 && !capsLockGuard_->supports(ic)) return true;
+        if (!ic->hasFocus() || isSensitive(ic) || !ipc_ || !ipc_->connected() || !appInputReady_) {
+            return true;
+        }
+        // Only the original target can stop. Final delivery still rechecks
+        // the target in the shared Coordinator.
+        switch (googleToggleAction(true,
+                                   event.rawKey().states().test(fcitx::KeyState::Repeat),
+                                   recording_, deliveryPending_, targetIc_.get() == ic)) {
+        case GoogleToggleAction::Start: startRecording(ic); break;
+        case GoogleToggleAction::Stop: stopRecording(/*cancelled=*/false); break;
+        case GoogleToggleAction::None: break;
+        }
+        return true;
+    }
     if (learnPress) {
         auto *ic = event.inputContext();
         clearFeedback();
@@ -236,7 +308,7 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
             notify(ic, "此欄位無法學習", "請在一般文字欄位使用詞彙學習。");
         } else if (recording_) {
             notify(ic, "正在錄音，尚未學習", "請先放開語音鍵，等文字送出並修正後再按 " + learnKeyLabel() + "。");
-        } else if (!ipc_ || !ipc_->connected()) {
+        } else if (!ipc_ || !ipc_->connected() || (!appInputPath_.empty() && !appInputReady_)) {
             notify(ic, "語音服務未連線", "這次修正尚未送出，請確認 VoiceType 服務已啟動後再試。");
         } else {
             maybeLearnCorrection(ic, true);
@@ -282,8 +354,12 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
         return true;
     }
 
+    // The routed Google gesture is toggle-only. Ctrl+Alt remains Local's
+    // press/release shortcut and cannot start an unexpected Google session.
+    if (appGoogleToggle_) return false;
+
     if (!event.isRelease()) {
-        if (!isCtrlAltPress(key)) {
+        if (!(routedF9 ? f9Press : isCtrlAltPress(key))) {
             return false;
         }
         // 按下: 忽略 auto-repeat
@@ -293,7 +369,7 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
 
         // SDD §4.3: daemon 不可用時不攔截熱鍵, 直接放行給輸入法,
         // 使用者不會感覺到按鍵失效。
-        if (!ipc_ || !ipc_->connected()) {
+        if (!ipc_ || !ipc_->connected() || (!appInputPath_.empty() && !appInputReady_)) {
             FCITX_DEBUG() << "voicetype: daemon unavailable, passing key through";
             notify(event.inputContext(), "語音服務未連線", "尚未開始錄音，請確認 VoiceType 服務已啟動後再試。");
             return false;
@@ -323,7 +399,7 @@ bool VoiceType::onKeyEvent(fcitx::KeyEvent &event) {
     if (!recording_) {
         return false;
     }
-    if (!isCtrlAltRelease(key)) {
+    if (!(routedF9 ? key.normalize().sym() == FcitxKey_F9 : isCtrlAltRelease(key))) {
         return false;
     }
     stopRecording(/*cancelled=*/false);
@@ -385,6 +461,35 @@ void VoiceType::clearDelivery() {
 }
 
 void VoiceType::onDaemonMessage(const IpcMessage &msg) {
+    if (msg.type == "desktop_hello" && msg.hasSession) {
+        IpcMessage reply;
+        reply.type = "desktop_hello";
+        reply.setSession(msg.session);
+        reply.value = appCtrlShiftF9_ ?
+            (appGoogleToggle_ ? "voicetype.fcitx.google-toggle.ctrl-shift-f9.v3" :
+                                "voicetype.fcitx.local-hold.ctrl-shift-f9.v3") :
+            (appGoogleToggle_ ? "voicetype.fcitx.google-toggle.v2" : "voicetype.fcitx.v1");
+        if (ipc_->send(reply) && !appInputPath_.empty()) appInputReady_ = true;
+        return;
+    }
+    if (msg.type == "deliver" && msg.hasSession) {
+        IpcMessage reply;
+        reply.type = "delivered";
+        reply.setSession(msg.session);
+        reply.contextId = msg.contextId;
+        if (!deliveryPending_ || msg.session != sessionId_) {
+            reply.code = "stale";
+        } else if (msg.contextId.empty() || msg.contextId != sessionContextId_) {
+            clearDelivery();
+            reply.code = "focus_changed";
+        } else {
+            reply.code = deliver(msg.text, false);
+        }
+        // The acknowledgement describes the original request even when a
+        // synchronous frontend callback starts another session during commit.
+        ipc_->send(reply);
+        return;
+    }
     if (msg.type == "result") {
         // 丟棄過期結果: 使用者已經開始下一次錄音, 舊結果不該蓋掉新的。
         if (!deliveryPending_ || !msg.hasSession || msg.session != sessionId_) {
@@ -417,27 +522,32 @@ void VoiceType::onDaemonDisconnected() {
     clearCorrection();
 }
 
-void VoiceType::deliver(const std::string &text) {
+const char *VoiceType::deliver(const std::string &text, bool allowLegacyFallback) {
     const auto expectedContext = sessionContextId_;
     const auto expectedSession = sessionId_;
     auto target = targetIc_;
     auto *ic = target.get();
     // Consume before commit/IPC callbacks: one result has at most one effect.
     clearDelivery();
-    if (text.empty()) { return; }
+    if (text.empty() || (!allowLegacyFallback &&
+        (text.size() > 64 * 1024 || text.find('\0') != std::string::npos || !fcitx::utf8::validate(text)))) {
+        return "invalid_text";
+    }
     if (!ic) {
         // 目標視窗已消失 → 降級鏈② (SDD §4.8): 交給 daemon 放進剪貼簿並通知。
-        IpcMessage msg;
-        msg.type = "fallback_clipboard";
-        msg.text = text;
-        ipc_->send(msg);
-        return;
+        if (allowLegacyFallback) {
+            IpcMessage msg;
+            msg.type = "fallback_clipboard";
+            msg.text = text;
+            ipc_->send(msg);
+        }
+        return "focus_changed";
     }
 
     // The field may have become sensitive while CPU decoding was in progress.
     if (!ic->hasFocus() || contextId(ic) != expectedContext || isSensitive(ic)) {
         clearCorrection();
-        return;
+        return "focus_changed";
     }
 
     // commitString 是唯一的正規路徑 (SDD §2/C1, §4.8)。
@@ -454,7 +564,7 @@ void VoiceType::deliver(const std::string &text) {
     ic = target.get();
     if (!ic || !ic->hasFocus() || contextId(ic) != expectedContext ||
         isSensitive(ic) || sessionId_ != expectedSession) {
-        return;
+        return "focus_changed";
     }
     clearCorrection();
     if (fcitx::utf8::validate(text) && fcitx::utf8::length(text) <= 512) {
@@ -467,6 +577,7 @@ void VoiceType::deliver(const std::string &text) {
         }
     }
     ic->commitString(text);
+    return "committed";
 }
 
 std::string VoiceType::contextId(fcitx::InputContext *ic) const {

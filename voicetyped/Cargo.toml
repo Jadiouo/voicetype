@@ -3,19 +3,24 @@ name = "voicetyped"
 version = "0.1.0"
 edition = "2021"
 description = "VoiceType ASR daemon — push-to-talk speech input for Fcitx5"
-license = "MIT"
+license = "GPL-3.0-only"
 
 [features]
 default = []
+shared-review-in-app = []
 # 啟用 SenseVoice 引擎 (需要先建好 third_party/SenseVoice.cpp)
 sensevoice = []
 # Optional CPU accuracy profile; native artifacts must be supplied explicitly.
 sherpa-nano = []
+# Linux desktop bundle: find the pinned native pair beside the executable.
+relocatable-runtime = ["sherpa-nano"]
 
 [build-dependencies]
 cc = "1"
+sha2 = "0.10.9"
 
 [dependencies]
+voicetype-text = { path = "../desktop/text" }
 anyhow = "1.0.104"
 libc = "0.2"
 cpal = "0.18.1"
@@ -24,7 +29,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 socket2 = "0.6.5"
 thiserror = "2.0.19"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "signal"] }
 toml = "1.1.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
@@ -33,3 +38,10 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+[dev-dependencies]
+tempfile = "3"
+voicetype-app-core = { path = "../desktop/core" }
+
+[target.'cfg(windows)'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
