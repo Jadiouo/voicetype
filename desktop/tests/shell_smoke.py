@@ -102,6 +102,7 @@ def main():
                 click("#spelling-enabled")
                 spelling_config = Path(profile) / "desktop.json"
                 eventually(lambda: spelling_config.exists() and json.loads(spelling_config.read_text())["spelling_enabled"] is False)
+                eventually(lambda: js("return !document.querySelector('#spelling-enabled').checked && document.querySelector('#status').textContent.includes('已讀取你的偏好設定')"))
                 assert not js("return document.querySelector('#spelling-enabled').checked")
                 assert js("return document.querySelector('#recovery-note').textContent.includes('沒有待處理')")
                 assert js("return document.querySelector('#recovery-content').hidden")
@@ -133,8 +134,16 @@ def main():
                     click("#reload")
                     eventually(ready)
                 else:
-                    assert js("return document.querySelector('#load-local-runtime').disabled")
-                    assert js("return document.querySelector('#runtime-note').textContent.includes('仍在準備中')")
+                    assert js("return document.querySelector('#input-module-setup').hidden")
+                    assert js("return document.querySelector('#runtime-note').textContent.includes('引擎')")
+                    eventually(lambda: js("return !document.querySelector('#load-local-runtime').disabled"))
+                    click("#load-local-runtime")
+                    eventually(lambda: js("return !document.querySelector('#error').hidden"))
+                    assert js("return document.querySelector('#error').textContent.includes('請先下載／檢查模型')")
+                    assert not (Path(profile) / "runtime-assets").exists()
+                    assert not (Path(profile) / "local-profile").exists()
+                    click("#reload")
+                    eventually(ready)
                 assert js("return document.querySelectorAll('.availability').length") == 2
                 click("#check-providers")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
@@ -278,6 +287,7 @@ def main():
                 assert not js("return document.querySelector('#spelling-enabled').checked"), "CSC choice did not survive restart"
                 click("#spelling-enabled")
                 eventually(lambda: json.loads(spelling_config.read_text())["spelling_enabled"] is True)
+                eventually(lambda: js("return document.querySelector('#spelling-enabled').checked && document.querySelector('#status').textContent.includes('已讀取你的偏好設定')"))
                 assert js("return document.querySelector('#spelling-enabled').checked")
 
                 eventually(lambda: js("return document.querySelector('#vocab-list').textContent.includes('geeho、git hub → GitHub')"))

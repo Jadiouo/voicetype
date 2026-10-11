@@ -62,5 +62,23 @@
     "source_url": "https://www.mozilla.org/media/MPL/2.0/index.txt",
     "note": "The pinned selectors source files refer to MPL-2.0 but do not ship the full text.",
     "files": {"selectors-0.38.0-MPL-2.0": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"}
+  },
+  "webview2-com@0.39.1": {
+    "vcs_sha": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+    "source_url": "https://github.com/wravery/webview2-rs/blob/edc2caf886175ccaebe86078c9cfe1ae2a187328/LICENSE",
+    "note": "The locked crate omits the repository MIT text; this file is from its exact VCS revision.",
+    "files": {"webview2-rs-LICENSE-MIT": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"}
+  },
+  "webview2-com-macros@0.8.1": {
+    "vcs_sha": "dffa41a8a46d3f5565eefbff2de57d38d399f158",
+    "source_url": "https://github.com/wravery/webview2-rs/blob/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE",
+    "note": "The locked crate omits the repository MIT text; this file is from its exact VCS revision.",
+    "files": {"webview2-rs-LICENSE-MIT": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"}
+  },
+  "webview2-com-sys@0.39.1": {
+    "vcs_sha": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+    "source_url": "https://github.com/wravery/webview2-rs/blob/edc2caf886175ccaebe86078c9cfe1ae2a187328/LICENSE",
+    "note": "The locked crate omits the repository MIT text; this file is from its exact VCS revision.",
+    "files": {"webview2-rs-LICENSE-MIT": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"}
   }
 }

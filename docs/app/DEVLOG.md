@@ -805,3 +805,39 @@ Google App 接線採用既有日常版本的流程：一句完整排空與清理
 Windows 輸入服務的最小原生一次寫入測試已通過，但 [run 37809828271](https://github.com/Jadiouo/voicetype/actions/runs/37809828271) 的跨程序啟用仍失敗：API 回報成功，五秒內卻沒有服務載入事件，結果為 4/5。已提供隔離診斷包供 Windows 11 真機回報；診斷不錄音、不送字，會核對自己的註冊清理。此限制不等於完整 Windows App 可用，其他 Windows ASR 與快捷鍵接線持續進行。PR 保持草稿，日常安裝未替換。
 
 同輪後續結果：`7e1944f` 的雙平台 preview CI 已全部成功。Windows 安裝後的 22 項 UI 操作及校正開關保存／損壞設定檢查通過；root 核對原始 `result.json` 與兩張實際截圖。真模型 probe 為 `first_fail_open=false`、第 1 次改字成功、改字 9ms；整項測試含啟動共 8.28 秒，因此 9ms 只代表模型載入後這一次改字，不能當作整句延遲或普遍速度。Windows 227 項 CSC 檔案雜湊檢查通過，原生 notice 完整旗標仍為 false，持續核對實際安裝包中的 PE 檔。這些通過結果尚未包含 Windows 語音擷取與跨應用送字。
+
+## 2026-10-11：接續平台整合與校正失敗診斷
+
+依使用者再次指定的 commander-mode 接續完整 App 目標。`3804593` 已提交 Rust 依賴來源／notice 清單及專案授權宣告一致性修正；[run 37813376351](https://github.com/Jadiouo/voicetype/actions/runs/37813376351) 的 Linux 通過，Windows 在真模型 probe 失敗，尚未進入該輪安裝測試。三秒內 28 次沒有得到預期改字，目前不足以判定是逾時、worker 故障或模型結果。正在加入不記錄轉錄文字的失敗診斷，原產品 100ms 上限與測試失敗結果保留，不藉延長等待把原因掩蓋。
+
+Windows 分支已形成本地候選 `91cfc23`：按鍵狀態明確區分待開始、錄音與收尾，第二次 Ctrl＋Caps Lock 可停止，收尾期間再次按鍵不會重複停止；校正器健康狀態在閒置時有界更新。獨立複查的 2 項按鍵、3 項子程序測試通過。另已整合 Windows daemon 的 Rust 依賴圖、CPU runtime 清單及安裝後完整性要求，仍待短審與真正 MSVC／NSIS 執行。這不是 Windows 跨應用送字驗收；TSF 啟用問題與真機回報仍待解決。
+
+Google App 的重新檢查流程正在移除錄音事件處理中的完整檔案雜湊及慢速本機狀態查詢，保留啟用前的完整性驗證。連續錄音、預備下一句、取消與清理時保留輸入 lease 的測試持續作為整合依據，真人 CLI／麥克風與切換舊服務仍待驗收。
+
+依最新 worktree 規則，已重新 fetch 並核對遠端 main 與 merged PR。目前六個工作樹的分支皆尚未合併，全部保留；已合併 PR 的工作樹不在現有清單中。本輪未移除分支、未強制刪除，也未變更日常語音服務。
+
+### 同日進展：定位模型輸出差異，推進平台建置
+
+App 已推送 `59150e5`、`eca98be`、`3f816a2`。失敗診斷只使用固定合成句，不收集使用者轉錄。[run 38126446040](https://github.com/Jadiouo/voicetype/actions/runs/38126446040) 的 Linux、Windows 均完成模型呼叫卻未改字；輸入 token 雜湊一致，模型與 tokenizer 也各自符合先前成功版本。直接呼叫約 12–16ms，原始模型輸出的期望字機率只有 0.000214，尚未通過既有信心門檻。這把問題縮小至模型輸出層，不能再歸因為 100ms 等待不足；目前也不能斷言硬體或量化是原因。下一步在失敗時比較原始、最佳化與量化模型，保留相同句子、信心門檻及失敗判定。
+
+Windows checkout 自動換行曾破壞固定來源／notice 雜湊，已對指定輸入固定 LF；Windows runtime 的解壓來源套用 patch 也以明確 Git 設定保留 LF，未更換預期雜湊。Windows 分支第二輪 Linux 建置已通過原生 CPU runtime 與 Rust notices，但 App 編譯揭露平台條件分支語法錯誤，正修正重跑；尚未取得該候選的安裝成功證據。
+
+Google App 接線已推送 `2ada6f0`、`a5838a1`，錄音事件處理中的慢速完整性檢查已移出，獨立複查的阻塞與清理問題已關閉。其 Linux CI 已通過核心命令測試及 Google helper 建置，仍待原生快捷鍵、安裝與 UI 結果。Windows PE 清單與移除系統 UCRT 副本的候選另行短審；未將來源完整旗標改為通過。上述皆未替代真人錄音、跨應用送字或日常服務遷移驗收，PR 繼續保持草稿。
+
+後續 `04a35f3`、`f6cd75b` 已提交上述 PE 清單及模型分層診斷。[run 38126833695](https://github.com/Jadiouo/voicetype/actions/runs/38126833695) 在 AMD EPYC 7763 上，同一 tokenizer／輸入與 ONNX Runtime 下，原始、基本最佳化、融合後浮點模型皆產生正確候選（機率 0.987453），QInt8 的來源 Python 與封裝執行檔卻同樣失敗（期望字機率 0.000214）。問題因此定位到目前量化模型的執行結果，具體指令機制尚待對照；不再增加等待或放寬信心門檻。本機 U8U8 候選與原基線在公開合成測例 48 次執行的輸出、修改與狀態逐項相同，兩者皆 40/48 符合預期；這不是完整語音品質驗收，候選仍待失敗平台實測。
+
+同輪 Windows 已確認移除 44 個系統 UCRT 副本後，實際封裝校正器仍能啟動，固定句於第 1 次、9ms 改字成功。後續安裝建置在 Rust 依賴 notice 缺漏停止，尚未取得去 UCRT 新版 NSIS 安裝證據。已盤點 Windows App／daemon 合計 352 個依賴，缺漏集中於三個 WebView2 同源套件，接續補確切上游授權來源。Windows Nano 原生建置則已跨過來源雜湊檢查，正在修正 pinned Sherpa CMake 的 CPU DLL／import library 對應，仍須真正 MSVC 建置核對。
+
+### 同日進展：固定 CSC 量化精度並整合 Google 候選
+
+[run 38127430002](https://github.com/Jadiouo/voicetype/actions/runs/38127430002) 的 Windows 真 CPU 再現原三秒內 28 次不改字；同一合成輸入、同一 QInt8 模型檔與 ONNX Runtime 下，只把 session 的 `x64quantprecision` 設為 1，原本期望字機率 0.000214、未改字，變成 0.998715、15ms 改字成功。據此讓正常 CPU worker 固定使用這個精度模式，保留原模型雜湊、快取、保護規則與單次 100ms 失敗開放上限；診斷仍可明確比較舊模式。新 worker 的本機封裝實測經安裝器路徑第 1 次、6ms 改字成功，Python 回歸 17/17 通過。這只定位並修正量化執行差異，仍待新版本雙平台 CI、Windows NSIS 安裝後模型／UI、依賴來源及真人語音驗收。
+
+Google 已審的 `1896bd4` 以獨立 merge 納入 App 候選，包括兩個狹義 CLI helper、合成流程測試與 Linux Caps Lock 路徑；未帶入該工作樹尚未提交的遷移資料。原 CSC 失敗診斷、Rust notice 清單及 Windows PE 完整性旗標保留。新整合 CI 與實際安裝結果待跑，PR 維持草稿，日常服務未切換。
+
+### 同日進展：整合預覽的 Linux 安裝通過，Windows 測試卡點已定位
+
+`012e758` 的 [run 38128018261](https://github.com/Jadiouo/voicetype/actions/runs/38128018261) Linux job 成功：真封裝 CSC 第 1 次修字 7ms、`first_fail_open=false`，`.deb` 抽取後 235 個 CSC 項目、Google helper、435 個鎖定 Rust 套件／766 份文字與三項原生目錄均通過位元組與清單核對；已安裝 UI 的選擇、重啟、損壞設定及重新載入測試通過。官方 Google CLI 在 runner 中不存在，故此結果不代表真人 Google 語音驗收。
+
+同 run 的 Windows job 已通過新 CSC 模型建置與修字 gate，接著在 `google_terminal_windows::conpty_delivers_only_voice_and_editor_controls_to_child` 停留超過 14 分鐘；為取得 GitHub 只在 job 結束後開放的原始 log，root 取消該 job。這是有界診斷操作，不是產品測試的失敗斷言，也沒有取得該 run 的 Windows NSIS 安裝結果。Google 作者正按原測試語義定位 ConPTY 停滯；不以加長 timeout 略過。Windows PE 來源、安裝器內插件授權及新 NSIS 全集合核對仍標為未完成。
+
+後續主 App 候選已在本地合併經審的 Windows Nano／原生輸入分支與 Google 快捷鍵服務可回復遷移；Google ConPTY 修補改由釘版 `portable-pty` 0.9.0 單一 Windows flag 調整，並保留子程序清理邊界。釘版原 crate 全檔與唯一 patch、MIT notice 已逐項核對，Rust notice 清單明列 vendored 來源而非 workspace；本機 Linux 全套 core/text、7 項 notice fixture 與完整 Rust graph／766 份文字驗證通過。Windows 預覽另接線六個 NSIS 插件的實際抽取、來源位元組與已安裝 notice 檢查，外層 setup EXE 及整包 PE 來源仍未宣稱完整。這些新整合尚待下一輪真 Windows NSIS／已安裝 daemon、UI 與真人語音驗收，PR 繼續為草稿。

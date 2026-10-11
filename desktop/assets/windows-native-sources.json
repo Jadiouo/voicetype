@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "platform": "windows-x86_64",
+  "provider": "cpu",
+  "shared_source_recipe": "linux-native-sources.json",
+  "shared_source_recipe_sha256": "325f1a509fba95a0fa5acfd3d6faca7b772afe8274c2e61afef05dd95255bedd",
+  "source_commit": "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf",
+  "patch_sha256": "5206aa456897f13e04c32a3184f80048167b81d528d57c4bdd294b10f64f3812",
+  "windows_ort_import_patch_sha256": "2c0ca4a114ca1e97dfa26ebe4e598180c11a6277e50ef1ea88555c1f9fbe2389",
+  "onnxruntime": {
+    "id": "onnxruntime-windows",
+    "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-win-x64-1.28.2.zip",
+    "bytes": 78620837,
+    "sha256": "c4eedd29489d5feca21866d054638416f3655bf6b18851b3b6b85c8313e95c35",
+    "members": {
+      "lib/onnxruntime.dll": "1becbd71adbf49609d33195e29c9214969db3c3de69c81425bebe5a4b69aef97",
+      "lib/onnxruntime.lib": "b9fc3cd678257d88a111b0773ede4bfceaf0fe95daab4379f2b2b37348a68781",
+      "lib/onnxruntime_providers_shared.dll": "2e3a2a3903f1d4b1b15cd6887593ed2f269cd2b24e3d729fead45406ec9a25ac",
+      "licenses/onnxruntime/LICENSE": "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
+      "licenses/onnxruntime/ThirdPartyNotices.txt": "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866"
+    }
+  }
+}

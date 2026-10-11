@@ -125,6 +125,8 @@ pub struct DictationStatus {
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryOutcome {
     Delivered,
+    /// The adapter deliberately made no OS insertion attempt.
+    NotSent,
     FocusChanged,
     Partial,
     Unconfirmed,

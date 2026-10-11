@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Catalog licenses for the Rust graphs and native bundles in this installer.
 
-The app uses its build/default features. Linux also ships voicetyped built with
---no-default-features --features relocatable-runtime. Only normal/build edges
+The app uses its build/default features. Linux and Windows also ship voicetyped
+built with --no-default-features --features relocatable-runtime. Only normal/build edges
 from those roots are included; Cargo.lock's unused or dev-only crates are not.
 """
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ import sys
 import tarfile
 import tempfile
 import tomllib
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -112,7 +114,78 @@ def lock_checksums(path):
     return result
 
 
-def license_sources(package, crate_checksum=None):
+def vendored_archive(url, expected_sha256, filename):
+    """Read an upstream crate from Cargo cache or project-local verified cache."""
+    project_cache = ROOT / "desktop/target/rust-vendor-cache"
+    candidates = list((Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) /
+                       "registry/cache").glob("*/" + filename))
+    candidates.append(project_cache / filename)
+    for candidate in candidates:
+        if candidate.is_file():
+            if digest(candidate) != expected_sha256:
+                raise RuntimeError("vendored crate cached archive differs from source pin: " + filename)
+            return candidate.read_bytes()
+    with urllib.request.urlopen(url, timeout=60) as response:
+        body = response.read()
+    if hashlib.sha256(body).hexdigest() != expected_sha256:
+        raise RuntimeError("vendored crate upstream archive hash mismatch: " + filename)
+    project_cache.mkdir(parents=True, exist_ok=True)
+    (project_cache / filename).write_bytes(body)
+    return body
+
+
+def verify_vendored_source(package, root=ROOT, pins=None, archive_bytes=None):
+    """Prove every vendored file against a pinned crate plus explicit patch/omission."""
+    if pins is None:
+        pins = json.loads((root / "config/rust-vendor-sources.json").read_text())
+    key = f"{package['name']}@{package['version']}"
+    pin = pins.get(key)
+    if pin is None:
+        raise RuntimeError("unreviewed vendored crate: " + key)
+    folder = Path(package["manifest_path"]).parent.resolve()
+    if folder != (root / pin["path"]).resolve():
+        raise RuntimeError("vendored crate path differs from pinned source: " + key)
+    body = archive_bytes if archive_bytes is not None else vendored_archive(
+        pin["archive_url"], pin["archive_sha256"], f"{package['name']}-{package['version']}.crate")
+    if hashlib.sha256(body).hexdigest() != pin["archive_sha256"]:
+        raise RuntimeError("vendored crate archive differs from source pin: " + key)
+    upstream = {}
+    prefix = key.replace("@", "-") + "/"
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
+        for member in archive:
+            if not member.isfile():
+                continue
+            if not member.name.startswith(prefix):
+                raise RuntimeError("vendored crate archive member outside package: " + key)
+            relative = member.name[len(prefix):]
+            if not relative or ".." in Path(relative).parts or relative in upstream:
+                raise RuntimeError("vendored crate archive member invalid: " + key)
+            upstream[relative] = archive.extractfile(member).read()
+    omitted = set(pin["omitted"])
+    added = set(pin["added"])
+    patched = pin["patched"]
+    if not omitted <= upstream.keys() or not set(patched) <= upstream.keys() or added & upstream.keys():
+        raise RuntimeError("vendored crate declared diff differs from upstream: " + key)
+    expected = (upstream.keys() - omitted) | added
+    actual = {path.relative_to(folder).as_posix(): path for path in folder.rglob("*") if path.is_file()}
+    if set(actual) != expected:
+        raise RuntimeError("vendored crate file set differs from pinned archive: " + key)
+    for relative, source in upstream.items():
+        if relative in omitted:
+            continue
+        current = actual[relative].read_bytes()
+        if relative in patched:
+            if (hashlib.sha256(source).hexdigest() != patched[relative]["upstream_sha256"]
+                    or hashlib.sha256(current).hexdigest() != patched[relative]["sha256"]):
+                raise RuntimeError("vendored crate patch differs from pin: " + key)
+        elif current != source:
+            raise RuntimeError("vendored crate file differs from upstream: " + key + "/" + relative)
+    return dict(path=pin["path"], source_url=pin["archive_url"],
+                archive_sha256=pin["archive_sha256"], patched=patched,
+                omitted=sorted(omitted), added={name: digest(actual[name]) for name in sorted(added)})
+
+
+def license_sources(package, crate_checksum=None, vendor=None):
     folder = Path(package["manifest_path"]).parent
     archive = None
     if package["source"]:
@@ -159,8 +232,9 @@ def license_sources(package, crate_checksum=None):
     return [(path, fallback["source_url"] if fallback else
              (f"crate:{package['name']}@{package['version']}/{path.relative_to(folder)}"
               if package["source"] else
-              ("repository:LICENSE" if path == ROOT / "LICENSE"
-               else f"workspace:{path.relative_to(folder)}")),
+              (f"crate:{package['name']}@{package['version']}/{path.relative_to(folder)} (vendored)" if vendor else
+               ("repository:LICENSE" if path == ROOT / "LICENSE"
+                else f"workspace:{path.relative_to(folder)}"))),
              fallback.get("note") if fallback else None)
             for path in sorted(found)]
 
@@ -170,16 +244,15 @@ def build(output, target, components):
     graphs = {key: {"package": entry, "scope_features": {"desktop-app": entry["_resolved_features"]}}
               for key, entry in app.items()}
     locks = {**lock_checksums(ROOT / "desktop/Cargo.lock")}
-    if target == "x86_64-unknown-linux-gnu":
-        daemon = cargo_graph(ROOT / "voicetyped/Cargo.toml", target, "voicetyped",
-                             ("--no-default-features", "--features", "relocatable-runtime"))
-        locks.update(lock_checksums(ROOT / "voicetyped/Cargo.lock"))
-        for key, entry in daemon.items():
-            if key in graphs:
-                graphs[key]["scope_features"]["owned-daemon"] = entry["_resolved_features"]
-            else:
-                graphs[key] = {"package": entry,
-                               "scope_features": {"owned-daemon": entry["_resolved_features"]}}
+    daemon = cargo_graph(ROOT / "voicetyped/Cargo.toml", target, "voicetyped",
+                         ("--no-default-features", "--features", "relocatable-runtime"))
+    locks.update(lock_checksums(ROOT / "voicetyped/Cargo.lock"))
+    for key, entry in daemon.items():
+        if key in graphs:
+            graphs[key]["scope_features"]["owned-daemon"] = entry["_resolved_features"]
+        else:
+            graphs[key] = {"package": entry,
+                           "scope_features": {"owned-daemon": entry["_resolved_features"]}}
 
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists() or output.is_symlink():
@@ -195,12 +268,16 @@ def build(output, target, components):
                 raise RuntimeError("missing Rust license expression: " + key)
             choice = selected_license(expression)
             source = package["source"]
-            checksum = locks.get((package["name"], package["version"], source)) if source else None
+            folder = Path(package["manifest_path"]).parent.resolve() if package.get("manifest_path") else None
+            vendor = (verify_vendored_source(package) if folder is not None and
+                      folder.is_relative_to(ROOT / "desktop/vendor") else None)
+            checksum = (locks.get((package["name"], package["version"], source)) if source else
+                        vendor["archive_sha256"] if vendor else None)
             if source and (not checksum or not source.startswith("registry+")):
                 raise RuntimeError("unlocked/unsupported Rust source: " + key)
             slug = f"{package['name']}-{package['version']}-{(checksum or 'workspace')[:12]}"
             notices = []
-            sources = license_sources(package, checksum)
+            sources = license_sources(package, checksum, vendor) if vendor else license_sources(package, checksum)
             if not sources:
                 raise RuntimeError("Rust source has no packaged license text: " + key)
             for number, (license_path, provenance, note) in enumerate(sources):
@@ -215,10 +292,12 @@ def build(output, target, components):
                 notices.append({**record, "origin": provenance,
                                 **({"source_note": note} if note else {})})
             records.append({"name": package["name"], "version": package["version"],
-                            "source": source or "workspace", "crate_checksum": checksum,
+                            "source": source or ("vendored:" + vendor["source_url"] if vendor else "workspace"),
+                            "crate_checksum": checksum,
                             "license_expression": expression, "selected_license": choice,
                             "scopes": sorted(scope_features), "scope_features": scope_features,
-                            "notices": notices})
+                            "notices": notices,
+                            **({"vendored_source": vendor} if vendor else {})})
 
         native = []
         for name, directory in components:
@@ -239,10 +318,9 @@ def build(output, target, components):
                            "notice_count": len(license_files)})
 
         manifest = {"schema_version": 1, "target": target,
-                    "roots": ["desktop-app"] + (["owned-daemon"] if target == "x86_64-unknown-linux-gnu" else []),
+                    "roots": ["desktop-app", "owned-daemon"],
                     "locks": {"desktop": digest(ROOT / "desktop/Cargo.lock"),
-                              **({"owned-daemon": digest(ROOT / "voicetyped/Cargo.lock")}
-                                 if target == "x86_64-unknown-linux-gnu" else {})},
+                              "owned-daemon": digest(ROOT / "voicetyped/Cargo.lock")},
                     "packages": records, "files": sorted(files, key=lambda item: item["path"]),
                     "native_components": native, "complete": True}
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -264,7 +342,7 @@ def main():
         if name not in {"runtime", "input", "spelling", "opencc"}:
             parser.error("unknown native component: " + name)
         components.append((name, Path(path).resolve()))
-    required = {"runtime", "input", "spelling"} if args.target.endswith("linux-gnu") else {"opencc", "spelling"}
+    required = {"runtime", "input", "spelling"} if args.target.endswith("linux-gnu") else {"runtime", "opencc", "spelling"}
     if {name for name, _ in components} != required:
         parser.error("native component set differs from installer")
     build(args.output.resolve(), args.target, components)

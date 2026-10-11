@@ -1,0 +1,7 @@
+# Keep pinned native sources and Rust notice texts byte-for-byte on Windows,
+# including checkouts with core.autocrlf enabled.
+desktop/assets/linux-native-sources.json text eol=lf
+desktop/assets/windows-native-sources.json text eol=lf
+patches/sherpa-onnx-1.13.8-nano-integrity.patch text eol=lf
+patches/sherpa-onnx-1.13.8-windows-cpu-ort-import.patch text eol=lf
+config/rust-notice-fallbacks/** text eol=lf

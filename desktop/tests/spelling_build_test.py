@@ -6,13 +6,141 @@ import tempfile
 import sys
 import sysconfig
 import unittest
+import hashlib
+import json
+import runpy
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = runpy.run_path(str(ROOT / "scripts/build-desktop-spelling.py"))
+INSTALLED = runpy.run_path(str(ROOT / "desktop/tests/installed_spelling.py"))
 
 
 class SpellingBuildTests(unittest.TestCase):
+    def test_generated_windows_executable_records_pinned_bootloader_and_recipe(self):
+        def pe(text, resource):
+            data = bytearray(0x400)
+            data[:2] = b"MZ"
+            data[0x3c:0x40] = (0x80).to_bytes(4, "little")
+            data[0x80:0x84] = b"PE\0\0"
+            data[0x86:0x88] = (2).to_bytes(2, "little")
+            data[0x94:0x96] = (0xe0).to_bytes(2, "little")
+            table = 0x80 + 24 + 0xe0
+            for index, (name, value, offset) in enumerate(((b".text", text, 0x200),
+                                                           (b".rsrc", resource, 0x300))):
+                section = table + index * 40
+                data[section:section + len(name)] = name
+                data[section + 16:section + 20] = len(value).to_bytes(4, "little")
+                data[section + 20:section + 24] = offset.to_bytes(4, "little")
+                data[offset:offset + len(value)] = value
+            return bytes(data)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "run.exe"
+            output = root / "voicetype-csc.exe"
+            spec = root / "voicetype-csc.spec"
+            entry = root / "voicetype_csc.py"
+            source.write_bytes(pe(b"source-code", b"old-resource"))
+            output.write_bytes(pe(b"source-code", b"new-resource"))
+            spec.write_text("generated spec")
+            entry.write_text("app entry")
+            record = BUILDER["generated_windows_executable_origin"](
+                output, source, spec, entry, ["--onedir", "--noupx"],
+                expected_bootloader_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+            self.assertEqual(record["path"], "voicetype-csc.exe")
+            self.assertEqual(record["source_member"], "PyInstaller/bootloader/Windows-64bit-intel/run.exe")
+            self.assertEqual(record["bootloader_sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
+            self.assertEqual(record["entry_sha256"], hashlib.sha256(entry.read_bytes()).hexdigest())
+            self.assertEqual(record["spec_sha256"], hashlib.sha256(spec.read_bytes()).hexdigest())
+            self.assertEqual(record["unchanged_bootloader_sections"], [".text"])
+            self.assertEqual(record["notice"], "licenses/pyinstaller/00-COPYING.txt")
+            changed = bytearray(output.read_bytes())
+            changed[0x200] ^= 1
+            output.write_bytes(changed)
+            with self.assertRaisesRegex(RuntimeError, "bootloader code section"):
+                BUILDER["generated_windows_executable_origin"](
+                    output, source, spec, entry, ["--onedir", "--noupx"],
+                    expected_bootloader_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+
+    def test_windows_bundle_omits_only_os_ucrt_forwarders(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory)
+            internal = bundle / "_internal"
+            internal.mkdir()
+            for name in ("api-ms-win-crt-runtime-l1-1-0.dll",
+                         "api-ms-win-core-file-l1-1-0.dll", "ucrtbase.dll",
+                         "MSVCP140_1.dll", "vcruntime140.dll", "python312.dll"):
+                data = bytearray(128)
+                data[:2] = b"MZ"
+                data[0x3c:0x40] = (64).to_bytes(4, "little")
+                data[64:68] = b"PE\0\0"
+                (internal / name).write_bytes(data)
+            nested = internal / "onnxruntime/capi/api-ms-win-crt-time-l1-1-0.dll"
+            nested.parent.mkdir(parents=True)
+            nested.write_bytes(data)
+            excluded = BUILDER["remove_windows_os_ucrt"](bundle)
+            self.assertEqual({path.name for path in internal.rglob("*") if path.is_file()},
+                             {"MSVCP140_1.dll", "vcruntime140.dll", "python312.dll"})
+            self.assertEqual({entry["path"] for entry in excluded},
+                             {"_internal/api-ms-win-crt-runtime-l1-1-0.dll",
+                              "_internal/api-ms-win-core-file-l1-1-0.dll", "_internal/ucrtbase.dll",
+                              "_internal/onnxruntime/capi/api-ms-win-crt-time-l1-1-0.dll"})
+            self.assertTrue(all(entry["bytes"] == 128 and
+                                entry["sha256"] == hashlib.sha256(data).hexdigest()
+                                for entry in excluded))
+            (internal / "api-ms-win-unreviewed.dll").write_bytes(data)
+            with self.assertRaisesRegex(RuntimeError, "unreviewed Windows API-set"):
+                BUILDER["remove_windows_os_ucrt"](bundle)
+
+    def test_windows_pe_inventory_includes_frozen_executable_by_magic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory)
+            for name in ("voicetype-csc.exe", "_internal/native.pyd", "_internal/other.bin"):
+                path = bundle / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                data = bytearray(128)
+                data[:2] = b"MZ"
+                data[0x3c:0x40] = (64).to_bytes(4, "little")
+                data[64:68] = b"PE\0\0"
+                path.write_bytes(data)
+            with mock.patch.object(sys, "platform", "win32"):
+                origins = BUILDER["binary_origins"](bundle)
+            self.assertFalse(origins["complete"])
+            self.assertEqual({entry["path"] for entry in origins["binaries"]},
+                             {"voicetype-csc.exe", "_internal/native.pyd", "_internal/other.bin"})
+            for entry in origins["binaries"]:
+                self.assertEqual(entry["sha256"], hashlib.sha256((bundle / entry["path"]).read_bytes()).hexdigest())
+                self.assertEqual(entry["bytes"], 128)
+
+    def test_installed_windows_pe_set_rejects_missing_executable_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            install = Path(directory) / "install"
+            bundle = install / "spelling"
+            bundle.mkdir(parents=True)
+            pe = bytearray(128)
+            pe[:2] = b"MZ"
+            pe[0x3c:0x40] = (64).to_bytes(4, "little")
+            pe[64:68] = b"PE\0\0"
+            (bundle / "voicetype-csc.exe").write_bytes(pe)
+            (bundle / "provenance").mkdir()
+            (bundle / "provenance/binary-origins.json").write_text(
+                json.dumps({"complete": False, "binaries": []}))
+            for name in ("models/model-int8-fused.onnx", "models/tokenizer.json",
+                         "licenses/MacBERT-Apache-2.0.txt"):
+                path = bundle / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+            files = [{"path": path.relative_to(bundle).as_posix(),
+                      "bytes": path.stat().st_size,
+                      "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                     for path in bundle.rglob("*") if path.is_file()]
+            expected = Path(directory) / "expected.json"
+            expected.write_text(json.dumps({"platform": "windows-x86_64", "files": files}))
+            (bundle / "manifest.json").write_bytes(expected.read_bytes())
+            with self.assertRaisesRegex(AssertionError, "PE.*origin|origin.*PE"):
+                INSTALLED["verify"](install, expected)
+
     @unittest.skipUnless(sys.platform == "linux", "Linux provenance fixture")
     def test_hosted_python_runtime_is_matched_by_bytes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -57,9 +57,9 @@ struct DesktopState {
     worker: DesktopWorker,
     models: ModelSetup,
     tray_available: AtomicBool,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     local_installer: voicetype_app_core::local_install::LocalInstaller,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     runtime_resources: PathBuf,
     config_dir: PathBuf,
     legacy_vocabulary: PathBuf,
@@ -197,7 +197,7 @@ async fn configure_input_module(restore: bool, app: tauri::AppHandle) -> Result<
 
 #[tauri::command]
 async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         with_desktop(app.clone(), move |worker| {
             let state = app.state::<DesktopState>();
@@ -220,11 +220,18 @@ async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
                     .prepare(&state.spelling_resources)
                     .ok();
             }
-            worker.activate_local(paths)
+            #[cfg(target_os = "linux")]
+            {
+                worker.activate_local(paths)
+            }
+            #[cfg(windows)]
+            {
+                worker.activate_windows_local(paths)
+            }
         })
         .await
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = app;
         Err("此平台的本機引擎封裝仍在準備中。".into())
@@ -645,7 +652,11 @@ async fn enable_local_input(app: tauri::AppHandle) -> Result<View, String> {
                 .ok_or("無法找到登入環境，請從桌面重新開啟 App")?;
             worker.enable_local_input(PathBuf::from(runtime))
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            worker.enable_windows_input()
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             let _ = worker;
             Err("此平台的輸入整合仍在準備中。".into())
@@ -684,6 +695,7 @@ struct View {
     desktop: DesktopSnapshot,
     tray_available: bool,
     local_runtime_bundled: bool,
+    windows_input: bool,
 }
 
 #[tauri::command]
@@ -784,7 +796,8 @@ async fn with_desktop(
     Ok(View {
         desktop: with_worker(app, operation).await?,
         tray_available,
-        local_runtime_bundled: cfg!(target_os = "linux"),
+        local_runtime_bundled: cfg!(any(target_os = "linux", windows)),
+        windows_input: cfg!(windows),
     })
 }
 
@@ -823,7 +836,7 @@ fn main() {
                     )))?,
                 )?,
                 spelling_resources: app.path().resource_dir()?.join("spelling"),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", windows))]
                 local_installer: voicetype_app_core::local_install::LocalInstaller::bundled(
                     config_dir.clone(),
                     serde_json::from_str(include_str!(concat!(
@@ -831,7 +844,7 @@ fn main() {
                         "/runtime-catalog.json"
                     )))?,
                 )?,
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", windows))]
                 runtime_resources: app.path().resource_dir()?.join("runtime"),
                 review_monitor: std::sync::Mutex::new(None),
                 config_dir: config_dir.clone(),
