@@ -18,15 +18,22 @@ use voicetype_app_core::{
     Provider,
 };
 
+#[cfg(any(target_os = "linux", windows))]
+use voicetype_app_core::google::{
+    release::GoogleCliRelease, terminal::TerminalLaunch, GoogleInstallState, GoogleSetup,
+    GoogleText,
+};
+
+#[cfg(windows)]
+use voicetype_app_core::google::native::GoogleNativeBoundary;
+
 #[cfg(target_os = "linux")]
 use voicetype_app_core::google::{
     adapter::GoogleCliBoundary,
     legacy_systemd::{fcitx_identity, SystemdLegacyService},
     legacy_transfer::{GoogleShortcutTransfer, LegacyService, TransferPhase},
     linux_audio::LinuxPcmAudio,
-    release::{inspect_linux_install, GoogleCliRelease},
-    terminal::TerminalLaunch,
-    GoogleInstallState, GoogleSetup, GoogleText,
+    release::inspect_linux_install,
 };
 
 #[cfg(target_os = "linux")]
@@ -331,13 +338,28 @@ fn official_google_path() -> Result<PathBuf, String> {
     Ok(home.join(".local/bin/agy"))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(windows)]
+fn official_google_path() -> Result<PathBuf, String> {
+    let local =
+        PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("找不到登入者的 LocalAppData")?);
+    if !local.is_absolute() {
+        return Err("登入者的 LocalAppData 無效".into());
+    }
+    Ok(local.join("agy/bin/agy.exe"))
+}
+
+#[cfg(any(target_os = "linux", windows))]
 fn bundled_google_helper(app: &tauri::AppHandle, name: &str) -> Result<(PathBuf, String), String> {
     let catalog: voicetype_app_core::assets::AssetManifest = serde_json::from_str(include_str!(
         concat!(env!("OUT_DIR"), "/google-catalog.json")
     ))
     .map_err(|_| "Google 輔助程式目錄無效")?;
-    if catalog.id != "google-helpers" || catalog.platform != "linux-x86_64" {
+    let expected_platform = if cfg!(windows) {
+        "windows-x86_64"
+    } else {
+        "linux-x86_64"
+    };
+    if catalog.id != "google-helpers" || catalog.platform != expected_platform {
         return Err("Google 輔助程式平台不相容".into());
     }
     let item = catalog
@@ -490,7 +512,61 @@ async fn load_google_runtime_mode(
         })
         .await
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        if transfer_mode {
+            return Err("Windows 不使用 Fcitx 快捷鍵交接".into());
+        }
+        let official = official_google_path()?;
+        let install = voicetype_app_core::google::release::inspect_windows_install(&official);
+        if install.state != GoogleInstallState::OfficialCheckRequired {
+            return Err(
+                "請依官方說明安裝相容的 Windows Antigravity CLI；完整檔案尚未通過核對".into(),
+            );
+        }
+        let (editor, _) = bundled_google_helper(&app, "voicetype-google-editor.exe")?;
+        let state = app.state::<DesktopState>();
+        let config_dir = state.config_dir.clone();
+        let spelling = if state.worker.settings()?.settings.spelling_enabled {
+            state
+                .spelling_installer
+                .prepare(&state.spelling_resources)
+                .ok()
+                .and_then(|paths| paths.command().ok())
+                .and_then(|command| {
+                    voicetype_text::spelling::OwnedSpelling::start(
+                        command,
+                        std::time::Duration::from_secs(30),
+                    )
+                    .ok()
+                })
+        } else {
+            None
+        };
+        let spelling_ready = spelling.is_some();
+        let launch = TerminalLaunch {
+            executable: official,
+            sha256: GoogleCliRelease::Windows131.reviewed_sha256().into(),
+            workspace: config_dir.clone(),
+            profile: config_dir.clone(),
+            editor,
+        };
+        let vocab = config_dir.join("vocab.toml");
+        with_desktop(app, move |worker| {
+            let create =
+                move || GoogleNativeBoundary::open(launch, std::time::Duration::from_secs(18));
+            let format = move |raw: String| {
+                GoogleText::open(&vocab)?.apply(&raw, |text, terms| {
+                    spelling
+                        .as_ref()
+                        .map_or_else(|| text.to_owned(), |worker| worker.correct(text, terms))
+                })
+            };
+            worker.activate_windows_google(create, format, spelling_ready)
+        })
+        .await
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = app;
         Err("此平台的 Google 錄音完整性尚未通過驗證。".into())
@@ -711,11 +787,11 @@ async fn restore_google_shortcut(app: tauri::AppHandle) -> Result<View, String> 
 
 #[tauri::command]
 async fn unload_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         with_desktop(app, DesktopWorker::deactivate_google).await
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = app;
         Err("此平台的 Google 引擎尚未載入。".into())
@@ -847,7 +923,18 @@ async fn refresh_providers(app: tauri::AppHandle) -> Result<View, String> {
             worker.refresh_local(socket)?;
             worker.refresh_google_install(official_google_path()?)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            let current = worker.settings()?;
+            if current.settings.dictation.busy
+                || current.google_runtime
+                    == voicetype_app_core::worker::GoogleRuntimeStatus::Cleaning
+            {
+                return Err("錄音或清理進行中，請稍後重新檢查".into());
+            }
+            worker.refresh_windows_google_install(official_google_path()?)
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         worker.settings()
     })
     .await

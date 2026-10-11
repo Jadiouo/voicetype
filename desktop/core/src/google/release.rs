@@ -42,6 +42,36 @@ pub fn inspect_linux_install(path: &Path) -> GoogleInstallInfo {
     }
 }
 
+/// The official Windows installer places agy.exe under %LOCALAPPDATA%\agy\bin.
+/// Hashing is read-only and must run off the resident dictation thread.
+pub fn inspect_windows_install(path: &Path) -> GoogleInstallInfo {
+    let digest = match GoogleSetup::image_digest(path) {
+        Ok(digest) => digest,
+        Err(error) => {
+            return GoogleInstallInfo {
+                state: if error.kind() == io::ErrorKind::NotFound {
+                    GoogleInstallState::Missing
+                } else {
+                    GoogleInstallState::Incompatible
+                },
+                version: None,
+            }
+        }
+    };
+    let release = GoogleCliRelease::Windows131;
+    if release.supported_on_current_os() && digest == release.reviewed_sha256() {
+        GoogleInstallInfo {
+            state: GoogleInstallState::OfficialCheckRequired,
+            version: Some(release.version()),
+        }
+    } else {
+        GoogleInstallInfo {
+            state: GoogleInstallState::Incompatible,
+            version: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoogleCliRelease {
     Linux1212,

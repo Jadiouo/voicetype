@@ -93,7 +93,18 @@ impl DesktopWorker {
                         state: crate::google::GoogleInstallState::Missing,
                         version: None,
                     });
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(windows)]
+                let google_install = std::env::var_os("LOCALAPPDATA")
+                    .map(|home| {
+                        crate::google::release::inspect_windows_install(
+                            &PathBuf::from(home).join("agy/bin/agy.exe"),
+                        )
+                    })
+                    .unwrap_or(crate::google::release::GoogleInstallInfo {
+                        state: crate::google::GoogleInstallState::Missing,
+                        version: None,
+                    });
+                #[cfg(not(any(target_os = "linux", windows)))]
                 let google_install = crate::google::release::GoogleInstallInfo {
                     state: crate::google::GoogleInstallState::Missing,
                     version: None,
@@ -112,6 +123,8 @@ impl DesktopWorker {
                     local: None,
                     #[cfg(windows)]
                     windows_local: None,
+                    #[cfg(windows)]
+                    windows_google: None,
                     #[cfg(target_os = "linux")]
                     google: None,
                     #[cfg(target_os = "linux")]
@@ -279,6 +292,29 @@ impl DesktopWorker {
         self.refresh_google_install_with(executable, crate::google::release::inspect_linux_install)
     }
 
+    #[cfg(windows)]
+    pub fn refresh_windows_google_install(
+        &self,
+        executable: PathBuf,
+    ) -> Result<DesktopSnapshot, String> {
+        let before = self.settings()?;
+        if before.settings.dictation.busy || before.google_runtime == GoogleRuntimeStatus::Cleaning
+        {
+            return Err(AppError::DictationBusy.to_string());
+        }
+        let inspected = crate::google::release::inspect_windows_install(&executable);
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy
+                || desktop.google_status == GoogleRuntimeStatus::Cleaning
+            {
+                return desktop.snapshot();
+            }
+            desktop.google_install = inspected;
+            desktop.sync_google_availability();
+            desktop.snapshot()
+        })
+    }
+
     #[cfg(target_os = "linux")]
     fn refresh_google_install_with(
         &self,
@@ -372,6 +408,9 @@ impl DesktopWorker {
             if desktop.app()?.snapshot().selected_provider != Provider::Local {
                 return Err("請先選擇本機離線辨識".into());
             }
+            if desktop.windows_google.is_some() {
+                return Err("請先確認 Google 錄音完全停止，再載入本機引擎".into());
+            }
             if desktop.windows_local.is_none() {
                 let spelling_enabled = desktop.app()?.snapshot().spelling_enabled;
                 if !spelling_enabled {
@@ -403,6 +442,59 @@ impl DesktopWorker {
                     active: None,
                 });
                 desktop.local_status = LocalRuntimeStatus::WaitingForInput;
+            }
+            desktop.snapshot()
+        })
+    }
+
+    /// The selected Windows provider alone owns the global Ctrl+CapsLock hook.
+    /// Native Google audio remains inside the official CLI; no App PCM sample
+    /// or recorder-drain ACK is claimed by this route.
+    #[cfg(windows)]
+    pub fn activate_windows_google<B, F, M>(
+        &self,
+        create: F,
+        format: M,
+        spelling_ready: bool,
+    ) -> Result<DesktopSnapshot, String>
+    where
+        B: crate::google::GoogleBoundary + Send + 'static,
+        F: FnOnce() -> io::Result<B> + Send + 'static,
+        M: Fn(String) -> io::Result<String> + Send + 'static,
+    {
+        self.call(move |desktop| {
+            if desktop.app()?.snapshot().dictation.busy {
+                return Err(AppError::DictationBusy.to_string());
+            }
+            if desktop.app()?.snapshot().selected_provider != Provider::Google {
+                return Err("請先選擇 Google 官方辨識".into());
+            }
+            if desktop.google_install.state
+                != crate::google::GoogleInstallState::OfficialCheckRequired
+            {
+                return Err("Google 官方 CLI 未通過完整檔案核對".into());
+            }
+            if desktop.windows_local.is_some() || desktop.windows_google.is_some() {
+                return Err("請先卸載目前的聽寫引擎".into());
+            }
+            match WindowsGoogle::start(create, format) {
+                Ok(host) => {
+                    desktop.windows_google = Some(host);
+                    desktop.google_status = GoogleRuntimeStatus::Ready;
+                    desktop.spelling_status = if !desktop.app()?.snapshot().spelling_enabled {
+                        SpellingRuntimeStatus::Disabled
+                    } else if spelling_ready {
+                        SpellingRuntimeStatus::Ready
+                    } else {
+                        SpellingRuntimeStatus::Unavailable
+                    };
+                    desktop.sync_google_availability();
+                }
+                Err(_) => {
+                    desktop.google_status = GoogleRuntimeStatus::Failed;
+                    desktop.sync_google_availability();
+                    return Err("Google CLI、登入或 Windows 快捷鍵預檢失敗；未啟動錄音".into());
+                }
             }
             desktop.snapshot()
         })
@@ -717,7 +809,7 @@ impl DesktopWorker {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     pub fn deactivate_google(&self) -> Result<DesktopSnapshot, String> {
         self.call(|desktop| {
             if desktop.app()?.snapshot().dictation.busy {
@@ -805,6 +897,10 @@ impl DesktopWorker {
                     let _ = app.cancel_dictation(&mut local.engine);
                 }
             }
+            #[cfg(windows)]
+            if let (Some(google), Ok(app)) = (&mut desktop.windows_google, &mut desktop.app) {
+                google.cancel(app);
+            }
             #[cfg(target_os = "linux")]
             if let (Some(google), Ok(app)) = (&mut desktop.google, &mut desktop.app) {
                 google.cancel(app);
@@ -855,6 +951,8 @@ struct Desktop {
     local: Option<LocalHost>,
     #[cfg(windows)]
     windows_local: Option<WindowsLocal>,
+    #[cfg(windows)]
+    windows_google: Option<WindowsGoogle>,
     #[cfg(target_os = "linux")]
     google: Option<GoogleHost>,
     #[cfg(target_os = "linux")]
@@ -911,6 +1009,7 @@ impl Desktop {
                         self.windows_local
                             .as_ref()
                             .is_some_and(|local| local.input.is_some())
+                            || self.windows_google.is_some()
                     }
                     #[cfg(not(windows))]
                     {
@@ -921,6 +1020,15 @@ impl Desktop {
         })
     }
     fn deactivate(&mut self) -> Result<(), String> {
+        #[cfg(windows)]
+        if let Some(google) = self.windows_google.as_mut() {
+            let app = self.app.as_mut().map_err(|e| e.to_string())?;
+            google.shutdown(app).map_err(|_| {
+                self.google_status = GoogleRuntimeStatus::Cleaning;
+                "Google 錄音尚未確認停止，快捷鍵仍保留；請稍後再試".to_string()
+            })?;
+            self.windows_google = None;
+        }
         #[cfg(windows)]
         if let Some(local) = self.windows_local.as_mut() {
             let app = self.app.as_mut().map_err(|e| e.to_string())?;
@@ -956,6 +1064,22 @@ impl Desktop {
         Ok(())
     }
     fn poll(&mut self) {
+        #[cfg(windows)]
+        if let (Some(google), Ok(app)) = (&mut self.windows_google, &mut self.app) {
+            self.google_status = match google.poll(app) {
+                Ok(status) => status,
+                Err(_) => {
+                    if google.shutdown(app).is_ok() {
+                        GoogleRuntimeStatus::Failed
+                    } else {
+                        GoogleRuntimeStatus::Cleaning
+                    }
+                }
+            };
+            if google.hook_released && google.provider.is_none() {
+                self.windows_google = None;
+            }
+        }
         #[cfg(windows)]
         if let (Some(local), Ok(app)) = (&mut self.windows_local, &mut self.app) {
             if local.poll(app).is_ok() {
@@ -1098,15 +1222,185 @@ impl WindowsLocal {
     }
 
     fn shutdown(&mut self, app: &mut Application) -> io::Result<()> {
-        self.input.take();
         if self.active.is_some() {
             let _ = app.cancel_dictation(&mut self.engine);
         }
         self.engine.shutdown()?;
+        if let Some(input) = self.input.as_mut() {
+            input.stop()?;
+        }
+        self.input.take();
         if let Some(key) = self.active.take() {
             app.provider_event(key, crate::ProviderEvent::Released, &mut WindowsRecovery);
         }
         Ok(())
+    }
+}
+
+#[cfg(windows)]
+struct WindowsGoogle {
+    // The provider's boundary owns a clone of this Arc. A failed shutdown or
+    // resident worker exit cannot drop the sole hotkey hook while the official
+    // CLI may still own the microphone.
+    input: std::sync::Arc<Mutex<crate::windows_input::WindowsInput>>,
+    provider: Option<crate::google::GoogleProvider>,
+    released: std::sync::Arc<AtomicBool>,
+    hook_released: bool,
+    active: Option<crate::SessionKey>,
+    pending_release: Option<crate::SessionKey>,
+}
+
+#[cfg(windows)]
+impl WindowsGoogle {
+    fn start<B, F, M>(create: F, format: M) -> io::Result<Self>
+    where
+        B: crate::google::GoogleBoundary + Send + 'static,
+        F: FnOnce() -> io::Result<B>,
+        M: Fn(String) -> io::Result<String> + Send + 'static,
+    {
+        let boundary = create()?;
+        // The official CLI may spend seconds in login/editor preflight. Do not
+        // consume Ctrl+CapsLock before the CLI is ready to accept a Start.
+        let input = match crate::windows_input::WindowsInput::start() {
+            Ok(input) => std::sync::Arc::new(Mutex::new(input)),
+            Err(error) => {
+                crate::google::owned::retire_unpublished_boundary(boundary);
+                return Err(error);
+            }
+        };
+        let released = std::sync::Arc::new(AtomicBool::new(false));
+        let unpublished = crate::google::owned::OwnedGoogleBoundary::new(
+            boundary,
+            input.clone(),
+            released.clone(),
+        );
+        {
+            // A toggle pressed during CLI login/editor preflight is not an
+            // authorized Start. Discard it before publishing this route.
+            let input = input.lock().map_err(|_| io::ErrorKind::Other)?;
+            for _ in 0..32 {
+                if input.poll().is_none() {
+                    break;
+                }
+            }
+            if input.poll().is_some() {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            input.reject_start();
+        }
+        let provider = crate::google::GoogleProvider::spawn_with_text(unpublished, format)?;
+        Ok(Self {
+            input,
+            provider: Some(provider),
+            released,
+            hook_released: false,
+            active: None,
+            pending_release: None,
+        })
+    }
+
+    fn poll(&mut self, app: &mut Application) -> io::Result<GoogleRuntimeStatus> {
+        let Some(provider) = self.provider.as_mut() else {
+            if self.finish_cleanup(app).is_ok() {
+                return Ok(GoogleRuntimeStatus::Inactive);
+            }
+            return Ok(GoogleRuntimeStatus::Cleaning);
+        };
+        let mut commands = Vec::new();
+        {
+            let input = self.input.lock().map_err(|_| io::ErrorKind::Other)?;
+            input.set_session_active(self.active.is_some());
+            for _ in 0..16 {
+                let Some(command) = input.poll() else { break };
+                commands.push(command);
+            }
+        }
+        for command in commands {
+            match command {
+                crate::windows_input::InputEvent::Start(target) if self.active.is_none() => {
+                    if let Ok(key) = app.start_dictation(target, provider) {
+                        self.active = Some(key);
+                    } else {
+                        self.input
+                            .lock()
+                            .map_err(|_| io::ErrorKind::Other)?
+                            .reject_start();
+                    }
+                }
+                crate::windows_input::InputEvent::Stop if self.active.is_some() => {
+                    app.stop_dictation(provider).map_err(io::Error::other)?;
+                }
+                crate::windows_input::InputEvent::Cancel if self.active.is_some() => {
+                    app.cancel_dictation(provider).map_err(io::Error::other)?;
+                }
+                _ => {}
+            }
+        }
+        if self.active.is_some() && app.expire_dictation(provider) {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        if let Some((key, event)) = provider.try_event() {
+            let released = matches!(event, crate::ProviderEvent::Released);
+            // Until a target-bound TSF commit exists, preserve the result for
+            // manual recovery exactly as Windows Local does.
+            app.provider_event(key, event, &mut WindowsRecovery);
+            if released && self.active == Some(key) {
+                self.active = None;
+            }
+        }
+        self.input
+            .lock()
+            .map_err(|_| io::ErrorKind::Other)?
+            .set_session_active(self.active.is_some());
+        Ok(match provider.warm_state() {
+            1 => GoogleRuntimeStatus::Prewarming,
+            2 => GoogleRuntimeStatus::Failed,
+            _ => GoogleRuntimeStatus::Ready,
+        })
+    }
+
+    fn cancel(&mut self, app: &mut Application) {
+        if self.active.is_some() {
+            if let Some(provider) = self.provider.as_mut() {
+                let _ = app.cancel_dictation(provider);
+            }
+        }
+    }
+
+    fn release_pending(&mut self, app: &mut Application) {
+        if let Some(key) = self.pending_release.take() {
+            app.provider_event(key, crate::ProviderEvent::Released, &mut WindowsRecovery);
+        }
+    }
+
+    fn finish_cleanup(&mut self, app: &mut Application) -> io::Result<()> {
+        if !self.released.load(Ordering::Acquire) {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        if !self.hook_released {
+            self.input
+                .lock()
+                .map_err(|_| io::ErrorKind::Other)?
+                .stop()?;
+            self.hook_released = true;
+        }
+        self.release_pending(app);
+        Ok(())
+    }
+
+    fn shutdown(&mut self, app: &mut Application) -> io::Result<()> {
+        if let Some(mut provider) = self.provider.take() {
+            if self.active.is_some() {
+                let _ = app.cancel_dictation(&mut provider);
+                self.pending_release = self.active.take();
+            }
+            self.input
+                .lock()
+                .map_err(|_| io::ErrorKind::Other)?
+                .set_session_active(true);
+            drop(provider);
+        }
+        self.finish_cleanup(app)
     }
 }
 

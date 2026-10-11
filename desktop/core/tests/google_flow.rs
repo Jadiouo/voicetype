@@ -1,5 +1,7 @@
 use std::time::Duration;
-use voicetype_app_core::google::{GoogleAttempt, GoogleBoundary, GoogleProvider, GoogleText};
+use voicetype_app_core::google::{
+    GoogleAttempt, GoogleBoundary, GoogleCaptureOwnership, GoogleProvider, GoogleText,
+};
 use voicetype_app_core::{
     Application, DeliveryOutcome, DeliveryPort, Provider, ProviderCommand, ProviderEvent,
     ProviderPort, TargetLease,
@@ -72,6 +74,59 @@ fn stopped_google_voice_drains_before_one_official_stop_and_two_draft_captures()
             "cleanup",
             "check_errors",
         ]
+    );
+}
+
+#[test]
+fn official_native_capture_stops_once_without_claiming_app_pcm_drain() {
+    struct NativeCli {
+        steps: Vec<&'static str>,
+        drafts: Vec<&'static str>,
+    }
+    impl GoogleBoundary for NativeCli {
+        fn capture_ownership(&self) -> GoogleCaptureOwnership {
+            GoogleCaptureOwnership::OfficialCliNative
+        }
+        fn start_capture(&mut self) -> std::io::Result<()> {
+            self.steps.push("start");
+            Ok(())
+        }
+        fn stop_capture_and_drain(&mut self) -> std::io::Result<()> {
+            panic!("native CLI capture has no App PCM drain")
+        }
+        fn stop_official_voice(&mut self) -> std::io::Result<()> {
+            self.steps.push("f5_stop");
+            Ok(())
+        }
+        fn wait_official_recorder(&mut self) -> std::io::Result<()> {
+            panic!("native CLI exposes no recorder exit acknowledgement")
+        }
+        fn capture_editor(&mut self) -> std::io::Result<String> {
+            self.steps.push("editor");
+            Ok(self.drafts.remove(0).into())
+        }
+        fn settle(&mut self, _: Duration) -> std::io::Result<()> {
+            self.steps.push("settle");
+            Ok(())
+        }
+        fn reject_known_voice_errors(&mut self) -> std::io::Result<()> {
+            self.steps.push("errors");
+            Ok(())
+        }
+        fn cleanup(&mut self) -> std::io::Result<()> {
+            self.steps.push("cleanup");
+            Ok(())
+        }
+    }
+    let mut cli = NativeCli {
+        steps: Vec::new(),
+        drafts: vec!["部分", "完整句子"],
+    };
+    let mut attempt = GoogleAttempt::start(&mut cli).unwrap();
+    assert_eq!(attempt.finish(&mut cli).unwrap(), "完整句子");
+    assert_eq!(
+        cli.steps,
+        ["start", "f5_stop", "editor", "settle", "editor", "cleanup", "errors"]
     );
 }
 
