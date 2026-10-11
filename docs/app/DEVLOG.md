@@ -833,3 +833,9 @@ Google App 接線已推送 `2ada6f0`、`a5838a1`，錄音事件處理中的慢�
 [run 38127430002](https://github.com/Jadiouo/voicetype/actions/runs/38127430002) 的 Windows 真 CPU 再現原三秒內 28 次不改字；同一合成輸入、同一 QInt8 模型檔與 ONNX Runtime 下，只把 session 的 `x64quantprecision` 設為 1，原本期望字機率 0.000214、未改字，變成 0.998715、15ms 改字成功。據此讓正常 CPU worker 固定使用這個精度模式，保留原模型雜湊、快取、保護規則與單次 100ms 失敗開放上限；診斷仍可明確比較舊模式。新 worker 的本機封裝實測經安裝器路徑第 1 次、6ms 改字成功，Python 回歸 17/17 通過。這只定位並修正量化執行差異，仍待新版本雙平台 CI、Windows NSIS 安裝後模型／UI、依賴來源及真人語音驗收。
 
 Google 已審的 `1896bd4` 以獨立 merge 納入 App 候選，包括兩個狹義 CLI helper、合成流程測試與 Linux Caps Lock 路徑；未帶入該工作樹尚未提交的遷移資料。原 CSC 失敗診斷、Rust notice 清單及 Windows PE 完整性旗標保留。新整合 CI 與實際安裝結果待跑，PR 維持草稿，日常服務未切換。
+
+### 同日進展：整合預覽的 Linux 安裝通過，Windows 測試卡點已定位
+
+`012e758` 的 [run 38128018261](https://github.com/Jadiouo/voicetype/actions/runs/38128018261) Linux job 成功：真封裝 CSC 第 1 次修字 7ms、`first_fail_open=false`，`.deb` 抽取後 235 個 CSC 項目、Google helper、435 個鎖定 Rust 套件／766 份文字與三項原生目錄均通過位元組與清單核對；已安裝 UI 的選擇、重啟、損壞設定及重新載入測試通過。官方 Google CLI 在 runner 中不存在，故此結果不代表真人 Google 語音驗收。
+
+同 run 的 Windows job 已通過新 CSC 模型建置與修字 gate，接著在 `google_terminal_windows::conpty_delivers_only_voice_and_editor_controls_to_child` 停留超過 14 分鐘；為取得 GitHub 只在 job 結束後開放的原始 log，root 取消該 job。這是有界診斷操作，不是產品測試的失敗斷言，也沒有取得該 run 的 Windows NSIS 安裝結果。Google 作者正按原測試語義定位 ConPTY 停滯；不以加長 timeout 略過。Windows PE 來源、安裝器內插件授權及新 NSIS 全集合核對仍標為未完成。
