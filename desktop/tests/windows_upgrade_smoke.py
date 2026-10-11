@@ -10,13 +10,16 @@ Example (after building two genuinely different versions):
     --new-installer target/new/setup.exe --new-sha256 HASH --new-version 0.2.1-alpha.1
 """
 import argparse
+from collections import deque
 import hashlib
 import http.client
+from itertools import islice
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import time
 import urllib.error
@@ -110,12 +113,66 @@ def known_folder_product_paths(env, scratch):
             if not (root / name).is_relative_to(scratch)}
 
 
+def bounded_folder_metadata(root):
+    """Record names/types only; never read product or WebView file contents."""
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return {"exists": False, "entries": [], "truncated": False}
+    except OSError as error:
+        return {"exists": True, "entries": [{"path": ".", "error": type(error).__name__}],
+                "truncated": False}
+    entries = []
+    pending = deque([(root, 0)])
+    truncated = False
+    while pending and len(entries) < 80:
+        path, depth = pending.popleft()
+        entry = None
+        try:
+            info = path.lstat()
+            reparse = bool(getattr(info, "st_file_attributes", 0) &
+                           getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+            kind = ("reparse" if reparse else
+                    "dir" if stat.S_ISDIR(info.st_mode) else
+                    "file" if stat.S_ISREG(info.st_mode) else "other")
+            entry = {"path": "." if path == root else path.relative_to(root).as_posix(),
+                     "kind": kind, "bytes": info.st_size if kind == "file" else None}
+            entries.append(entry)
+            if kind == "dir" and depth < 3:
+                children = list(islice(path.iterdir(), 81 - len(entries)))
+                pending.extend((child, depth + 1) for child in children[:80 - len(entries)])
+                truncated |= len(children) > 80 - len(entries)
+            elif kind == "dir" and next(path.iterdir(), None) is not None:
+                truncated = True
+        except OSError as error:
+            if entry is None:
+                entries.append({"path": "." if path == root else path.relative_to(root).as_posix(),
+                                "error": type(error).__name__})
+            else:
+                entry["error"] = type(error).__name__
+    return {"exists": True, "entries": entries, "truncated": truncated or bool(pending)}
+
+
 def assert_known_folders_unchanged(env, scratch, before, report, phase):
     current = known_folder_product_paths(env, scratch)
     report[f"known_folder_candidates_{phase}"] = current
-    if current.keys() != before.keys() or any(
-        not existed and current[name] for name, existed in before.items()
-    ):
+    added = [name for name, existed in before.items() if not existed and current.get(name)]
+    if current.keys() != before.keys() or added:
+        try:
+            locations = powershell_json(
+                "@{roaming=[Environment]::GetFolderPath('ApplicationData');"
+                "local=[Environment]::GetFolderPath('LocalApplicationData')}|ConvertTo-Json -Compress",
+                env,
+            )
+            diagnostic = {"new_known_folders": {
+                name: bounded_folder_metadata(Path(locations[name.split('/', 1)[0]]) /
+                                              name.split('/', 1)[1]) for name in added},
+                "repo_webview": bounded_folder_metadata(Path(env["WEBVIEW2_USER_DATA_FOLDER"]))}
+            name = f"{phase}-known-folder-metadata.json"
+            (scratch / "evidence" / name).write_text(json.dumps(diagnostic, indent=2) + "\n")
+            report["known_folder_diagnostic"] = name
+        except Exception as error:
+            report["known_folder_diagnostic_error"] = type(error).__name__
         raise RuntimeError(f"product data appeared in an OS known folder outside test profile during {phase}")
 
 
