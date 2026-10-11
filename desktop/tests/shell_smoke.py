@@ -24,6 +24,8 @@ def main():
     binary = Path(sys.argv[1]).resolve(strict=True)
     output = Path("target/shell-evidence")
     output.mkdir(parents=True, exist_ok=True)
+    profile_root = Path("target/shell-profiles").resolve()
+    profile_root.mkdir(parents=True, exist_ok=True)
     executable = shutil.which("tauri-driver")
     if not executable:
         raise SystemExit("tauri-driver is required")
@@ -51,7 +53,7 @@ def main():
             time.sleep(0.2)
         raise AssertionError(f"UI condition timed out: {last_error}")
 
-    with tempfile.TemporaryDirectory(prefix="voicetype-shell-") as profile:
+    with tempfile.TemporaryDirectory(prefix="voicetype-shell-", dir=profile_root) as profile:
         env = os.environ.copy()
         env["VOICETYPE_PREVIEW_CONFIG_DIR"] = profile
         env["XDG_DATA_HOME"] = str(Path(profile) / "data")
@@ -99,14 +101,64 @@ def main():
 
                 def choose_shortcut(value, provider):
                     eventually(lambda: ready() and js("return !document.querySelector('#shortcut-choice').disabled"))
+                    before = js("""
+if (!window.__shortcutChangeEvents) {
+  window.__shortcutChangeEvents = [];
+  document.querySelector('#shortcut-choice').addEventListener('change', event => {
+    window.__shortcutChangeEvents.push({
+      provider: document.querySelector('input[name=provider]:checked')?.value,
+      value: event.target.value,
+    });
+    if (window.__shortcutChangeEvents.length > 8) window.__shortcutChangeEvents.shift();
+  });
+}
+return window.__shortcutChangeEvents.length;
+""")
                     # WebDriver selects the real option, exercising the UI's
                     # change handler and public Tauri command.
-                    click(f"#shortcut-choice option[value='{value}']")
-                    eventually(lambda: (Path(profile) / "desktop.json").exists()
-                               and shortcut_binding(provider)["requested"] == value)
-                    eventually(lambda: ready() and js(
-                        f"return !document.querySelector('#shortcut-choice').disabled && "
-                        f"document.querySelector('#shortcut-choice').value === '{value}'"))
+                    try:
+                        click(f"#shortcut-choice option[value='{value}']")
+                        eventually(lambda: (Path(profile) / "desktop.json").exists()
+                                   and shortcut_binding(provider)["requested"] == value)
+                        eventually(lambda: ready() and js(
+                            f"return !document.querySelector('#shortcut-choice').disabled && "
+                            f"document.querySelector('#shortcut-choice').value === '{value}'"))
+                    except Exception:
+                        # Preserve the original failure. This bounded evidence
+                        # separates a missing DOM change from a rejected native
+                        # command or a later render that reverted the choice.
+                        diagnostic = {"provider": provider, "requested": value,
+                                      "change_events_before": before}
+                        try:
+                            diagnostic["ui"] = js("""
+const choice=document.querySelector('#shortcut-choice');
+const clipped=selector => document.querySelector(selector)?.textContent.slice(0, 300);
+return {provider:document.querySelector('input[name=provider]:checked')?.value,
+  choice:choice?.value, disabled:choice?.disabled,
+  changes:window.__shortcutChangeEvents || [], status:clipped('#status'),
+  error_hidden:document.querySelector('#error')?.hidden,
+  error:clipped('#error'), note:clipped('#shortcut-note')};
+""")
+                        except Exception as error:
+                            diagnostic["ui_error"] = type(error).__name__
+                        try:
+                            diagnostic["disk"] = json.loads(
+                                (Path(profile) / "desktop.json").read_text(encoding="utf-8"))[
+                                    "shortcuts"]
+                        except Exception as error:
+                            diagnostic["disk_error"] = type(error).__name__
+                        try:
+                            (output / "shortcut-failure.json").write_text(
+                                json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n",
+                                encoding="utf-8")
+                        except Exception:
+                            pass
+                        try:
+                            (output / "shortcut-failure.png").write_bytes(base64.b64decode(
+                                request("GET", f"/session/{session}/screenshot")))
+                        except Exception:
+                            pass
+                        raise
 
                 session = open_app()
                 eventually(ready)
