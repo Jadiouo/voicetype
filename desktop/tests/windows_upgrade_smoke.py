@@ -177,14 +177,14 @@ if ($items.Count -ne 1) { throw "Expected exactly one owned NSIS registration; f
     return powershell_json(script, child_env)
 
 
-def product_registration_count(env):
+def product_registration_count(env, timeout=30):
     script = r'''
 $items = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
   ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath } |
   Where-Object { $_.DisplayName -like 'VoiceType Preview*' })
 @{count=$items.Count}|ConvertTo-Json -Compress
 '''
-    return powershell_json(script, env)["count"]
+    return powershell_json(script, env, timeout=timeout)["count"]
 
 
 def known_folder_product_paths(env, scratch):
@@ -323,6 +323,21 @@ def assert_app_stopped(env, phase):
         time.sleep(0.2)
 
 
+def owned_installed_processes(destination, env):
+    """Record PID/parent/name only for executables inside this owned install."""
+    child_env = {**env, "VT_UPGRADE_DEST": str(destination)}
+    return powershell_json(r'''
+$root=[IO.Path]::GetFullPath($env:VT_UPGRADE_DEST).TrimEnd('\')+'\'
+$owned=@(Get-CimInstance Win32_Process |
+  Where-Object { $_.ExecutablePath -and
+    $_.ExecutablePath.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) })
+$items=@($owned | Select-Object -First 32 |
+  ForEach-Object { @{pid=[int]$_.ProcessId; parent_pid=[int]$_.ParentProcessId;
+                     name=$_.Name} })
+@{processes=$items; truncated=($owned.Count -gt 32)}|ConvertTo-Json -Compress -Depth 4
+''', child_env, timeout=5)
+
+
 def uninstall(registry, destination, env, evidence, label):
     command = registry["uninstall"] or ""
     match = re.match(r'^\s*(?:"([^"]+\.exe)"|(.+?\.exe))(?:\s|$)', command, re.I)
@@ -342,6 +357,20 @@ def uninstall(registry, destination, env, evidence, label):
     deadline = time.monotonic() + 10
     while destination.exists() and any(destination.iterdir()):
         if time.monotonic() >= deadline:
+            try:
+                diagnostic = {"installation": bounded_folder_metadata(destination)}
+                try:
+                    diagnostic["product_registration_count"] = product_registration_count(env, timeout=5)
+                except Exception as error:
+                    diagnostic["registration_diagnostic_error"] = type(error).__name__
+                try:
+                    diagnostic["owned_installed_processes"] = owned_installed_processes(destination, env)
+                except Exception as error:
+                    diagnostic["process_diagnostic_error"] = type(error).__name__
+                (evidence / f"{label}-uninstall-residual.json").write_text(
+                    json.dumps(diagnostic, indent=2) + "\n", encoding="utf-8")
+            except Exception:
+                pass
             raise RuntimeError(f"{label} uninstall left installed product files")
         time.sleep(0.2)
 
