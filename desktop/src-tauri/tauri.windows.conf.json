@@ -9,7 +9,8 @@
       "../target/opencc/licenses/": "licenses/opencc/",
       "../target/opencc/manifest.json": "opencc-manifest.json",
       "../target/runtime/": "runtime/",
-      "../target/spelling": "spelling"
+      "../target/spelling": "spelling",
+      "../target/rust-notices": "licenses/rust"
     }
   }
 }

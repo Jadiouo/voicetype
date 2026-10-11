@@ -1,0 +1,66 @@
+{
+  "audio-core@0.2.1": {
+    "vcs_sha": "10489fc46bea493755dcd0195b7d7d605e5b72a8",
+    "source_url": "https://github.com/udoprog/audio/tree/10489fc46bea493755dcd0195b7d7d605e5b72a8",
+    "note": "Crate VCS metadata marks a dirty packaging tree; license text is from the pinned revision.",
+    "files": {
+      "audio-core-0.2.1-LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "audio-core-0.2.1-LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    }
+  },
+  "alloc-stdlib@0.3.0": {
+    "vcs_sha": "0a81fd6928ea3b33c8cd484aa4575d50ffb98012",
+    "source_url": "https://github.com/dropbox/rust-alloc-no-stdlib/blob/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE",
+    "files": {"alloc-stdlib-0.3.0-LICENSE": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"}
+  },
+  "defmt-parser@1.0.0": {
+    "vcs_sha": "4a8cdb44891ed57b8ff5a023b6bec7137c48708f",
+    "source_url": "https://github.com/knurling-rs/defmt/tree/4a8cdb44891ed57b8ff5a023b6bec7137c48708f",
+    "files": {
+      "defmt-parser-1.0.0-LICENSE-MIT": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50",
+      "defmt-parser-1.0.0-LICENSE-APACHE": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+    }
+  },
+  "dasp_sample@0.11.0": {
+    "vcs_sha": "97c3bb9b2363c0b46ac1633858bf1054fd02a980",
+    "source_url": "https://github.com/rustaudio/sample/tree/97c3bb9b2363c0b46ac1633858bf1054fd02a980",
+    "files": {
+      "dasp_sample-0.11.0-LICENSE-MIT": "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0",
+      "dasp_sample-0.11.0-LICENSE-APACHE": "756c8d2ab2dc24f256e1455b5f03937f4933d83d7bc9f2d55009fc962377d512"
+    }
+  },
+  "dlopen2@0.8.2": {
+    "vcs_sha": "cc80e4a0a90d499b677fdf7743699b4b3a43a989",
+    "source_url": "https://github.com/OpenByteDev/dlopen2/blob/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE",
+    "files": {"dlopen2-LICENSE": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2"}
+  },
+  "dlopen2_derive@0.4.3": {
+    "vcs_sha": "cc80e4a0a90d499b677fdf7743699b4b3a43a989",
+    "source_url": "https://github.com/OpenByteDev/dlopen2/blob/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE",
+    "files": {"dlopen2-LICENSE": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2"}
+  },
+  "libappindicator-sys@0.9.0": {
+    "vcs_sha": "eafd1e3682a1247f595410266091e9684021cb6f",
+    "source_url": "https://crates.io/api/v1/crates/libappindicator/0.9.0/download",
+    "note": "License files from the sibling crate at the same VCS revision as libappindicator-sys.",
+    "files": {
+      "libappindicator-sys-0.9.0-LICENSE-MIT": "eb227437252b2a7a9c1fc342c93ade1f3d7ce38cc6dd754f613db07d53ceff0b",
+      "libappindicator-sys-0.9.0-LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    }
+  },
+  "realfft@3.5.0": {
+    "vcs_sha": "d0d4eee0525fd27c96c8a046d6d107acd5ed84a6",
+    "source_url": "https://github.com/HEnquist/realfft/tree/d0d4eee0525fd27c96c8a046d6d107acd5ed84a6",
+    "note": "MIT declared in Cargo.toml.orig and README.md; full text supplemented from SPDX v3.28.0 template and author attribution. See bundled NOTICE.",
+    "files": {
+      "realfft-3.5.0-LICENSE-MIT": "95b1ae0f8a6c53c9dbb03f3803a6c745009783648c4768fbe51b26a8115e9b35",
+      "realfft-3.5.0-NOTICE.txt": "f2e94763035fdcf5f19036dddb04431cb00e24da620a82d49e72b19102cbf9f8"
+    }
+  },
+  "selectors@0.38.0": {
+    "vcs_sha": "572ecba2d1600e7c3d490586692a209faf703baa",
+    "source_url": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+    "note": "The pinned selectors source files refer to MPL-2.0 but do not ship the full text.",
+    "files": {"selectors-0.38.0-MPL-2.0": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"}
+  }
+}

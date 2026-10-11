@@ -2,7 +2,7 @@ name: Desktop preview
 
 on:
   push:
-    branches: [main, feat/desktop-app]
+    branches: [main, feat/desktop-app, feat/windows-dictation-work]
     paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "scripts/build-desktop-*", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
 
@@ -102,6 +102,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows source-built Nano C API failed' }
           python ../scripts/build-desktop-runtime-windows.py --native target/windows-native --opencc target/opencc --output target/runtime
           if ($LASTEXITCODE -ne 0) { throw 'Windows Nano runtime bundle failed' }
+      - name: Catalog locked Rust graph and native notices
+        shell: bash
+        run: |
+          python tests/rust_notices_test.py
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-unknown-linux-gnu --component runtime=target/runtime --component input=target/input --component spelling=target/spelling
+          else
+            python ../scripts/build-desktop-rust-notices.py target/rust-notices --target x86_64-pc-windows-msvc --component runtime=target/runtime --component opencc=target/opencc --component spelling=target/spelling
+          fi
       - name: Build preview installer
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundle }} -- --locked
       - name: Inspect and install preview (Linux)
@@ -115,6 +124,7 @@ jobs:
           python3 tests/installed_runtime.py target/inspection target/runtime/manifest.json
           python3 tests/installed_input.py target/inspection target/input/manifest.json
           python3 tests/installed_spelling.py target/inspection target/spelling/manifest.json
+          python3 tests/installed_rust_notices.py target/inspection target/rust-notices/manifest.json
           sudo dpkg --install target/release/bundle/deb/*.deb
           dpkg --search /usr/bin/voicetype-desktop
       - name: Inspect and install preview (Windows)
@@ -133,6 +143,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed Windows Nano runtime verification failed' }
           python tests/installed_spelling.py "$destination" target/spelling/manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed spelling verification failed' }
+          python tests/installed_rust_notices.py "$destination" target/rust-notices/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Rust notice verification failed' }
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
         run: python tests/artifact_manifest.py
@@ -174,3 +186,5 @@ jobs:
             desktop/target/opencc/manifest.json
             desktop/target/windows-native/build-provenance.json
             desktop/target/spelling/manifest.json
+            desktop/target/spelling/provenance/binary-origins.json
+            desktop/target/rust-notices/

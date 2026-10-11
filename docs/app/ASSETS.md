@@ -166,9 +166,8 @@ runs off the resident dictation worker; warm recording never rehashes assets.
 
 CI rebuilds the native dependencies, checks extracted installer bytes against the
 build-time catalog and verifies real loader paths. Windows still has no packaged
-speech runtime. Shared input integration, complete app/model/Rust dependency notice
-inventory and real speech acceptance remain release work; this preview is not a
-production dictation installer.
+speech runtime. Real speech acceptance and complete Windows native binary notices
+remain release work; this preview is not a production dictation installer.
 
 
 ### Windows vocabulary conversion
@@ -207,10 +206,28 @@ versions and includes package copyright texts, including the GCC runtime library
 exception. NumPy's wheel license contains its OpenBLAS, libgfortran and libquadmath
 terms. Python distribution notices, the MacBERT Apache-2.0 notice and model card
 are included. Unknown Linux native binaries fail the build. The local candidate
-has 207 catalog members and 59 accounted native binaries.
+has 207 catalog members and 59 accounted native binaries; the Ubuntu 24.04 CI
+installer at `852e8ad` has 229 catalog members and 83 ELF binaries, each matched
+to exactly one origin/notice entry after extraction.
 
-Windows builds emit the exact native DLL/PYD inventory with `complete=false`.
-MSVC runtime origin, redistribution permission and notices must be reviewed from
-the actual Windows CI artifact before a release claim. Complete application Rust
-dependency notices and Windows speech acceptance also remain open release work;
-the preview CI artifact is not a production release.
+`scripts/build-desktop-rust-notices.py` separately traverses normal and build
+dependencies from the actual target's locked App graph; Linux also includes the
+bundled `voicetyped` graph built with `relocatable-runtime`. It excludes dev-only
+edges, records per-root resolved features and Cargo.lock hashes, verifies each
+crate archive against the lock and each copied license/notice against that archive,
+then catalogs those texts with the native runtime/input/spelling/OpenCC catalogs.
+The local Linux graph currently resolves 428 distinct App/daemon crates with 755
+cataloged license/notice texts; this is a graph count, not all Cargo.lock entries.
+Crates whose published archives omitted a license text use reviewed, hash-pinned
+upstream texts at the crate's VCS revision. `realfft` declares MIT without a full
+upstream file; its bundled notice explicitly identifies the supplemental SPDX MIT
+text and upstream author. CI will compare every installed Rust notice byte and
+native catalog reference with this build-time manifest. This new notice integration
+still needs a completed dual-OS installer run before an installed-release claim.
+
+Windows builds currently emit a DLL/PYD inventory with `complete=false`; the
+executable and all PE file origins still need the next audit.
+MSVC runtime origin, redistribution permission and notices must be established
+from the actual Windows CI artifact before a release claim. Windows speech
+acceptance is also separate work; the preview CI artifact is not a production
+release.
