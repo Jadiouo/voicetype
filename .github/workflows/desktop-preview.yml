@@ -73,6 +73,16 @@ jobs:
       - name: Build pinned Windows OpenCC and dictionaries
         if: runner.os == 'Windows'
         run: python ../scripts/build-desktop-opencc.py target/opencc --stage-tests target/debug/deps
+      # The ordinary command suite uses synthetic owners. Its installed Nano,
+      # spelling and Fcitx probes are ignored here and run explicitly below.
+      # Compile before the short execution timeout so a cold Rust cache does
+      # not masquerade as a hung ConPTY test.
+      - name: Compile public application command tests
+        timeout-minutes: 20
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked --no-run
+      - name: Public application command tests
+        timeout-minutes: 5
+        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
       - name: Verify Windows native CPU recipe
         if: runner.os == 'Windows'
         run: python ../scripts/build-desktop-native-windows.py --check-recipe
@@ -94,8 +104,6 @@ jobs:
             python tests/spelling_failure_diagnostic.py target/spelling --prepared target/csc-build-cache/prepared
             exit 1
           fi
-      - name: Public application command tests
-        run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
       - name: Build narrow Google CLI helpers
         run: python ../scripts/build-desktop-google.py target/google
       - name: Build pinned Linux CPU runtime and native notices
