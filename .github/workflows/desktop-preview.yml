@@ -3,7 +3,7 @@ name: Desktop preview
 on:
   push:
     branches: [main, feat/desktop-app, feat/windows-dictation-work]
-    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "scripts/build-desktop-*", "scripts/catalog-windows-installer-pe.py", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
+    paths: ["desktop/**", "voicetyped/**", "voicetype-fcitx5/**", "patches/**", "config/csc-*", "config/rust-vendor-sources.json", "scripts/build-desktop-*", "scripts/catalog-windows-installer-pe.py", "scripts/prepare_csc.py", "scripts/voicetype_csc.py", "scripts/desktop_native_catalog.py", ".gitattributes", ".github/workflows/desktop-preview.yml"]
   workflow_dispatch:
 
 permissions:

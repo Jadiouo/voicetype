@@ -1,5 +1,6 @@
 """Rust notice graph and installed-file boundary fixtures."""
 import hashlib
+import io
 import json
 from pathlib import Path
 import runpy
@@ -14,6 +15,44 @@ INSTALLED = runpy.run_path(str(ROOT / "desktop/tests/installed_rust_notices.py")
 
 
 class RustNoticeTests(unittest.TestCase):
+    def test_vendored_crate_must_match_original_archive_except_exact_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / "desktop/vendor/example-1.0"
+            (folder / "src").mkdir(parents=True)
+            original = {"Cargo.toml": b"[package]\nname='example'\nversion='1.0'\n",
+                        "LICENSE.md": b"MIT terms",
+                        "src/windows.rs": b"original flags",
+                        "Cargo.lock": b"standalone lock"}
+            archive = io.BytesIO()
+            with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+                for name, body in original.items():
+                    info = tarfile.TarInfo("example-1.0/" + name)
+                    info.size = len(body)
+                    tar.addfile(info, io.BytesIO(body))
+            for name, body in original.items():
+                if name == "Cargo.lock":
+                    continue
+                path = folder / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"patched flags" if name == "src/windows.rs" else body)
+            (folder / "VOICETYPE-PROVENANCE.md").write_text("reviewed patch")
+            pins = {"example@1.0": {
+                "path": "desktop/vendor/example-1.0",
+                "archive_url": "https://static.crates.io/crates/example/example-1.0.crate",
+                "archive_sha256": hashlib.sha256(archive.getvalue()).hexdigest(),
+                "omitted": ["Cargo.lock"], "added": ["VOICETYPE-PROVENANCE.md"],
+                "patched": {"src/windows.rs": {
+                    "upstream_sha256": hashlib.sha256(original["src/windows.rs"]).hexdigest(),
+                    "sha256": hashlib.sha256(b"patched flags").hexdigest()}}}}
+            package = {"name": "example", "version": "1.0", "source": None,
+                       "manifest_path": str(folder / "Cargo.toml")}
+            result = BUILDER["verify_vendored_source"](package, root, pins, archive.getvalue())
+            self.assertEqual(result["archive_sha256"], pins["example@1.0"]["archive_sha256"])
+            (folder / "LICENSE.md").write_bytes(b"changed terms")
+            with self.assertRaisesRegex(RuntimeError, "vendored crate"):
+                BUILDER["verify_vendored_source"](package, root, pins, archive.getvalue())
+
     def test_windows_builder_catalogs_owned_daemon_and_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
