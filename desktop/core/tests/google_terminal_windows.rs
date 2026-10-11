@@ -70,8 +70,10 @@ fn run_conpty_case(progress: mpsc::Sender<&'static str>) {
     );
     mark("controls");
     let controls = fs::read(workspace.join("controls")).unwrap();
-    assert_eq!(controls.iter().filter(|byte| **byte == b'~').count(), 2);
-    assert!(!controls.contains(&b'\r'));
+    assert_eq!(
+        controls, b"\x07\x1b[15~\x1b[15~\x07\x07",
+        "ConPTY delivered different control bytes (hex): {controls:02x?}"
+    );
     mark(if terminal.child_exit_observed().unwrap() {
         "shutdown_exit_observed"
     } else {
