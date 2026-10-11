@@ -115,7 +115,7 @@ def apply_edits(text, edits):
 
 
 class Engine:
-    def __init__(self, model, tokenizer, threads=4):
+    def __init__(self, model, tokenizer, threads=4, quant_precision=False):
         import numpy as np
         import onnxruntime as ort
         from opencc import OpenCC
@@ -127,6 +127,10 @@ class Engine:
         options.inter_op_num_threads = 1
         options.add_session_config_entry("session.intra_op.allow_spinning", "0")
         options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        if quant_precision:
+            # Diagnostic only: compare the same QInt8 model with ORT's x64
+            # precision mode, leaving normal worker sessions unchanged.
+            options.add_session_config_entry("session.x64quantprecision", "1")
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self.session = ort.InferenceSession(str(model), sess_options=options,
                                             providers=["CPUExecutionProvider"])
@@ -134,6 +138,7 @@ class Engine:
             raise RuntimeError("CPU-only provider required")
         self.tokenizer = Tokenizer.from_file(str(tokenizer))
         self.to_simple, self.to_trad = OpenCC("t2s"), OpenCC("s2tw")
+        self.quant_precision = quant_precision
 
     def predict(self, text, terms=(), budget_ms=80):
         started = time.monotonic()
@@ -317,6 +322,7 @@ def model_self_test(engine):
                 getattr(engine.ort, "get_build_info", lambda: "")().encode()).hexdigest(),
             "numpy_version": version("numpy"),
             "providers": engine.session.get_providers(),
+            "quant_precision_session": engine.quant_precision,
             "cpu_model": cpu_model,
             "token_span_chars": encoded.offsets[positions[0]][1] - encoded.offsets[positions[0]][0],
             "protected_position": original_offset in protected_positions(text),
@@ -414,13 +420,18 @@ def main():
     transport.add_argument("--stdio", action="store_true", help="Use private parent-owned JSONL pipes")
     transport.add_argument("--diagnostic-self-test", action="store_true",
                            help="Print numeric results for a built-in synthetic fixture and exit")
+    ap.add_argument("--diagnostic-quant-precision", action="store_true",
+                    help="Only with diagnostic self-test: use ORT x64 quant precision mode")
     ap.add_argument("--threads", type=int, default=4, choices=[1,2,4,8])
     args = ap.parse_args()
+    if args.diagnostic_quant_precision and not args.diagnostic_self_test:
+        ap.error("quant precision mode is diagnostic-only")
     for path, expected in [(args.model,args.model_sha256),(args.tokenizer,args.tokenizer_sha256)]:
         with path.open("rb") as stream:
             if hashlib.file_digest(stream,"sha256").hexdigest() != expected:
                 raise SystemExit("Model/tokenizer hash mismatch")
-    engine = Engine(args.model,args.tokenizer,args.threads)
+    engine = Engine(args.model,args.tokenizer,args.threads,
+                    quant_precision=args.diagnostic_quant_precision)
     engine.predict("今天心情很好。",budget_ms=1000)
     if args.diagnostic_self_test:
         result = model_self_test(engine)

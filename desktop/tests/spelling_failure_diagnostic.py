@@ -124,7 +124,7 @@ def main():
                                   files["models/tokenizer.json"]["sha256"], "--threads", "4"]
                 result = subprocess.run(source_command, env=source_env,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                        timeout=30, check=True)
+                                        timeout=20, check=True)
                 report = json.loads(result.stdout)
                 report["variant"] = variant
                 report["runtime"] = "source_python"
@@ -133,6 +133,26 @@ def main():
                     UnicodeError, json.JSONDecodeError) as error:
                 print(json.dumps({"diagnostic": "source_model_error", "variant": variant,
                                   "type": type(error).__name__}), flush=True)
+        try:
+            path = prepared / "model-int8-fused.onnx"
+            with path.open("rb") as stream:
+                model_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+            precision_command = [sys.executable, str(source), "--diagnostic-self-test",
+                                 "--diagnostic-quant-precision", "--model", str(path),
+                                 "--tokenizer", str(tokenizer), "--model-sha256", model_sha256,
+                                 "--tokenizer-sha256", files["models/tokenizer.json"]["sha256"],
+                                 "--threads", "4"]
+            result = subprocess.run(precision_command, env=source_env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    timeout=20, check=True)
+            report = json.loads(result.stdout)
+            report["variant"] = "model-int8-fused.onnx"
+            report["runtime"] = "source_python_quant_precision"
+            print(json.dumps(report), flush=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError,
+                UnicodeError, json.JSONDecodeError) as error:
+            print(json.dumps({"diagnostic": "quant_precision_error",
+                              "type": type(error).__name__}), flush=True)
 
 
 if __name__ == "__main__":
