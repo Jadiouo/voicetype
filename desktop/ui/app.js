@@ -68,7 +68,8 @@ function runtimeControls(view) {
     || googleTransferPhase !== null;
   unloadGoogle.hidden = !googleLoaded && view?.google_runtime !== 'failed';
   unloadGoogle.disabled = commandBusy || !!view?.settings.dictation.busy || view?.google_runtime === 'cleaning';
-  const showTransfer = !!view?.local_runtime_bundled;
+  const showTransfer = !!view?.local_runtime_bundled && !view?.windows_input;
+  document.querySelector('#google-transfer-setup').hidden = !showTransfer;
   stageGoogle.hidden = !showTransfer || view?.settings.selected_provider !== 'google' || googleTransferPhase !== null;
   switchGoogle.hidden = !showTransfer || googleTransferPhase !== 'disable_staged';
   restoreGoogle.hidden = !showTransfer || !['disable_staged', 'app_owned', 'restore_staged'].includes(googleTransferPhase);
@@ -93,13 +94,18 @@ function runtimeControls(view) {
     : view?.google_install.state === 'incompatible' ? 'CLI 版本或檔案未通過核對，未開放錄音。'
     : `官方 CLI ${view?.google_install.version || ''} 已通過檔案核對，仍需登入與空草稿預檢。`;
   document.querySelector('#google-runtime-note').textContent = view?.google_runtime === 'ready'
-    ? '官方 CLI 空草稿與 Fcitx 路由已連接；真實麥克風及送字仍待驗收。'
+    ? (view.windows_input
+      ? '官方 CLI 空草稿與 Windows 快捷鍵已就緒；每句開始仍須等待 CLI 回報錄音狀態。真實麥克風及送字待驗收。'
+      : '官方 CLI 空草稿與 Fcitx 路由已連接；真實麥克風及送字仍待驗收。')
     : view?.google_runtime === 'waiting_for_input' ? 'CLI 預檢通過，等待 Fcitx 路由 v2 連接。尚未錄音。'
     : view?.google_runtime === 'transfer_pending' ? 'Google 快捷鍵切換中；舊服務與跨產品鎖尚未完成確認，錄音已鎖定。可停用引擎後還原。'
     : view?.google_runtime === 'prewarming' ? '上一句已完成；正在預備下一個官方 CLI，下一句可能需要等待。'
     : view?.google_runtime === 'cleaning' ? '正在確認錄音程序完全結束；麥克風仍由 App 保留。'
     : view?.google_runtime === 'failed' ? 'Google 引擎未完成預檢或已中斷；未確認可用。'
     : installNote;
+  document.querySelector('#google-capture-note').textContent = view?.windows_input
+    ? 'Windows Google 使用官方 CLI 原生錄音；App 目前無法取得抽樣音訊供校對。辨識文字會保留供手動複製，尾字完整性仍待實機驗收。'
+    : '';
 }
 
 async function refreshRecovery() {
@@ -155,7 +161,9 @@ function render(view) {
     }
   }
   if (view.google_runtime === 'ready') {
-    document.querySelector('#google-availability').textContent = 'CLI 與輸入路由已連接 · 真實語音待驗收';
+    document.querySelector('#google-availability').textContent = view.windows_input
+      ? 'CLI 與 Windows 快捷鍵已連接 · 麥克風及送字待驗收'
+      : 'CLI 與輸入路由已連接 · 真實語音待驗收';
   }
   if (view.local_runtime !== 'inactive') {
     const runtimeLabels = {
@@ -204,7 +212,9 @@ async function command(name, args = {}) {
         ? '本機辨識引擎已載入；CPU 校正器本次不可用。仍可啟用本機聽寫。'
         : '引擎已載入，可啟用本機聽寫。尚未開始錄音。')
       : name === 'enable_local_input' ? '已要求接管，請等待顯示「本機引擎與輸入法已連接」。'
-      : name === 'load_google_runtime' ? 'Google CLI 預檢完成；等待輸入法路由連接。尚未開始錄音。'
+      : name === 'load_google_runtime' ? (view.windows_input
+        ? 'Google CLI 與 Windows 快捷鍵已準備；尚未開始錄音，結果暫保留供手動複製。'
+        : 'Google CLI 預檢完成；等待輸入法路由連接。尚未開始錄音。')
       : name === 'stage_google_shortcut' ? '舊快捷鍵設定已保存並暫停；請自行重新載入 Fcitx 後完成切換。'
       : name === 'switch_google_shortcut' ? '舊服務已停止且跨產品鎖由 App 持有；Google 路由已開放。'
       : name === 'restore_google_shortcut' ? (googleTransferPhase === null

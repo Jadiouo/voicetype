@@ -56,10 +56,13 @@
           <p>請依官方說明安裝 Antigravity CLI，並以自己的 Google 帳號登入。選擇 Google 只儲存偏好；按「載入」後才檢查官方 CLI、登入與空草稿，仍不會開始錄音。</p>
           <div class="model-actions"><button id="load-google-runtime" type="button" disabled>載入 Google 引擎</button><button id="unload-google-runtime" type="button" hidden>停用並卸載 Google 引擎</button></div>
           <p id="google-runtime-note" role="status" aria-live="polite">正在檢查官方 CLI 安裝。</p>
+          <p id="google-capture-note"></p>
+          <div id="google-transfer-setup">
           <p>若仍使用舊 Google 輸入法，請先結束當前句子，再按下方按鈕切換。停止舊服務可能取消未完成的句子；切換會保存舊設定原始內容，並提供明確還原操作。每次變更快捷鍵設定後，需自行重新載入 Fcitx 或重新登入桌面。</p>
           <div class="model-actions"><button id="stage-google-shortcut" type="button" hidden>準備切換舊 Google 快捷鍵</button><button id="switch-google-shortcut" type="button" hidden>確認已重新載入 Fcitx，停止舊服務並切換到 App</button><button id="restore-google-shortcut" type="button" hidden>還原舊 Google 服務</button></div>
           <p id="google-transfer-note" role="status" aria-live="polite">正在核對舊 Google 快捷鍵交接狀態。</p>
           <p>Google 預設使用 Ctrl＋CapsLock：按一次開始，再按一次停止；Esc 取消。既有 Google 輸入法若同時啟用此鍵，App 會拒絕接管，避免同時錄音。</p>
+          </div>
         </div>
         <div id="input-module-setup" hidden>
           <h3>Linux 輸入法模組</h3>

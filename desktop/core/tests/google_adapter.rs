@@ -215,6 +215,49 @@ while True:
 }
 
 #[test]
+fn failed_native_preflight_reaps_unpublished_cli() {
+    let root = tempfile::tempdir().unwrap();
+    let script = root.path().join("fake-official-cli");
+    let pid_file = root.path().join("cli.pid");
+    let code = format!(
+        r#"#!/usr/bin/python3 -u
+import os,sys,tty
+tty.setraw(0)
+pidfile={:?}
+with open(pidfile+'.tmp','w') as out: out.write(str(os.getpid()))
+os.replace(pidfile+'.tmp',pidfile)
+while True: os.read(0,1)
+"#,
+        pid_file.display().to_string()
+    );
+    fs::write(&script, code).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    let error = GoogleNativeBoundary::open(
+        TerminalLaunch {
+            executable: script.clone(),
+            sha256: format!("{:x}", Sha256::digest(fs::read(&script).unwrap())),
+            workspace,
+            profile: root.path().to_path_buf(),
+            editor: env!("CARGO_BIN_EXE_voicetype-google-editor").into(),
+        },
+        Duration::from_millis(200),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    let pid: u32 = fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    let until = std::time::Instant::now() + Duration::from_secs(3);
+    while std::path::Path::new(&format!("/proc/{pid}")).exists()
+        && std::time::Instant::now() < until
+    {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+}
+
+#[test]
 fn native_connecting_cancel_never_becomes_ready_and_reaps_boundary() {
     let root = tempfile::tempdir().unwrap();
     let script = root.path().join("fake-official-cli");

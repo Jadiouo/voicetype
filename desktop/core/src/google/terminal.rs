@@ -3,6 +3,8 @@
 use super::status::VoiceStatusProbe;
 #[cfg(windows)]
 use crate::windows_job::WindowsJob;
+#[cfg(windows)]
+use portable_pty::PtyPair;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
@@ -21,6 +23,16 @@ use std::{
 };
 
 const OUTPUT_LIMIT: usize = 256 * 1024;
+// A failed preflight can retire a CLI before any GoogleBoundary owns it. A
+// later prewarm failure must not release the shared hook while that child or
+// ConPTY still has an unconfirmed close. Spawn failure leaves this nonzero.
+#[cfg(windows)]
+static UNPUBLISHED_CLEANUPS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(windows)]
+pub(crate) fn unpublished_cleanup_pending() -> bool {
+    UNPUBLISHED_CLEANUPS.load(Ordering::Acquire) != 0
+}
 
 #[derive(Clone)]
 pub struct TerminalLaunch {
@@ -67,6 +79,32 @@ pub struct GoogleTerminal {
 }
 
 impl GoogleTerminal {
+    /// A failed preflight has no provider owner yet. Keep the terminal alive
+    /// off the resident thread until its child and ConPTY close are observed.
+    pub(crate) fn retire_unpublished(self) {
+        #[cfg(windows)]
+        UNPUBLISHED_CLEANUPS.fetch_add(1, Ordering::AcqRel);
+        let owner = Arc::new(Mutex::new(Some(self)));
+        let retry = owner.clone();
+        let spawned = thread::Builder::new()
+            .name("voicetype-google-preflight-cleanup".into())
+            .spawn(move || {
+                let mut terminal = retry.lock().unwrap().take().unwrap();
+                while !matches!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| terminal.shutdown())),
+                    Ok(Ok(()))
+                ) {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                #[cfg(windows)]
+                UNPUBLISHED_CLEANUPS.fetch_sub(1, Ordering::AcqRel);
+            });
+        if spawned.is_err() {
+            // Preserve the only process/ConPTY owner if retry cannot start.
+            std::mem::forget(owner);
+        }
+    }
+
     pub fn launch(config: TerminalLaunch) -> io::Result<Self> {
         Self::launch_with_env(config, &[])
     }
@@ -156,11 +194,14 @@ impl GoogleTerminal {
         for (key, value) in native_audio_env {
             command.env(key, value);
         }
-        #[allow(unused_mut)] // Windows failure path must kill and wait the child.
-        let mut child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(io::Error::other)?;
+        let child = match pair.slave.spawn_command(command) {
+            Ok(child) => child,
+            Err(error) => {
+                #[cfg(windows)]
+                retire_unspawned_pair(pair, session);
+                return Err(io::Error::other(error));
+            }
+        };
         #[cfg(windows)]
         let job = {
             let attached = child
@@ -170,37 +211,21 @@ impl GoogleTerminal {
             match attached {
                 Ok(job) => job,
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    // No Job is available yet. Do not wait without a bound or
+                    // synchronously drop the last ConPTY owner here.
+                    drop(pair.slave);
+                    retire_unattached_child(child, pair.master, session);
                     return Err(error);
                 }
             }
         };
         drop(pair.slave);
-        let writer = pair.master.take_writer().map_err(io::Error::other)?;
-        let mut output = pair.master.try_clone_reader().map_err(io::Error::other)?;
         let output_bytes = Arc::new(AtomicUsize::new(0));
         let voice_status = Arc::new(Mutex::new(VoiceStatusProbe::default()));
         let reader_done = Arc::new(AtomicBool::new(false));
-        let count = output_bytes.clone();
-        let status = voice_status.clone();
-        let done = reader_done.clone();
-        let reader = thread::Builder::new()
-            .name("voicetype-google-pty".into())
-            .spawn(move || {
-                let mut buffer = [0u8; 8192];
-                while let Ok(n) = output.read(&mut buffer) {
-                    if n == 0 {
-                        break;
-                    }
-                    count.fetch_add(n, Ordering::AcqRel);
-                    if let Ok(mut probe) = status.lock() {
-                        probe.feed(&buffer[..n]);
-                    }
-                }
-                done.store(true, Ordering::Release);
-            })?;
-        Ok(Self {
+        // The child is now live. Publish its process/PTY owner before any
+        // more fallible setup; failed writer/reader setup must still reap it.
+        let mut terminal = Self {
             master: Some(pair.master),
             child: Some(child),
             #[cfg(windows)]
@@ -209,14 +234,53 @@ impl GoogleTerminal {
             closing: None,
             #[cfg(windows)]
             closed: false,
-            writer: Some(writer),
-            reader: Some(reader),
-            reader_done,
-            output_bytes,
-            voice_status,
+            writer: None,
+            reader: None,
+            reader_done: reader_done.clone(),
+            output_bytes: output_bytes.clone(),
+            voice_status: voice_status.clone(),
             session,
             captures: 0,
-        })
+        };
+        terminal.writer = match terminal.master.as_ref().unwrap().take_writer() {
+            Ok(writer) => Some(writer),
+            Err(error) => {
+                terminal.retire_unpublished();
+                return Err(io::Error::other(error));
+            }
+        };
+        let mut output = match terminal.master.as_ref().unwrap().try_clone_reader() {
+            Ok(output) => output,
+            Err(error) => {
+                terminal.retire_unpublished();
+                return Err(io::Error::other(error));
+            }
+        };
+        let reader = thread::Builder::new()
+            .name("voicetype-google-pty".into())
+            .spawn(move || {
+                let mut buffer = [0u8; 8192];
+                while let Ok(n) = output.read(&mut buffer) {
+                    if n == 0 {
+                        break;
+                    }
+                    output_bytes.fetch_add(n, Ordering::AcqRel);
+                    if let Ok(mut probe) = voice_status.lock() {
+                        probe.feed(&buffer[..n]);
+                    }
+                }
+                reader_done.store(true, Ordering::Release);
+            });
+        match reader {
+            Ok(reader) => {
+                terminal.reader = Some(reader);
+                Ok(terminal)
+            }
+            Err(error) => {
+                terminal.retire_unpublished();
+                Err(error)
+            }
+        }
     }
 
     pub fn control(&mut self, control: TerminalControl) -> io::Result<()> {
@@ -441,10 +505,13 @@ impl GoogleTerminal {
         {
             self.master.take();
             let until = Instant::now() + Duration::from_millis(500);
-            while !self.reader_done.load(Ordering::Acquire) && Instant::now() < until {
+            while self.reader.is_some()
+                && !self.reader_done.load(Ordering::Acquire)
+                && Instant::now() < until
+            {
                 thread::sleep(Duration::from_millis(5));
             }
-            if !self.reader_done.load(Ordering::Acquire) {
+            if self.reader.is_some() && !self.reader_done.load(Ordering::Acquire) {
                 return Err(io::ErrorKind::TimedOut.into());
             }
             if let Some(reader) = self.reader.take() {
@@ -452,6 +519,54 @@ impl GoogleTerminal {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(windows)]
+fn retire_unspawned_pair(pair: PtyPair, session: Arc<tempfile::TempDir>) {
+    UNPUBLISHED_CLEANUPS.fetch_add(1, Ordering::AcqRel);
+    let owner = Arc::new(Mutex::new(Some((pair, session))));
+    let retry = owner.clone();
+    let spawned = thread::Builder::new()
+        .name("voicetype-google-unspawned-pty-close".into())
+        .spawn(move || {
+            let (pair, session) = retry.lock().unwrap().take().unwrap();
+            drop(pair);
+            drop(session);
+            UNPUBLISHED_CLEANUPS.fetch_sub(1, Ordering::AcqRel);
+        });
+    if spawned.is_err() {
+        std::mem::forget(owner);
+    }
+}
+
+#[cfg(windows)]
+fn retire_unattached_child(
+    child: Box<dyn Child + Send + Sync>,
+    master: Box<dyn MasterPty + Send>,
+    session: Arc<tempfile::TempDir>,
+) {
+    UNPUBLISHED_CLEANUPS.fetch_add(1, Ordering::AcqRel);
+    let owner = Arc::new(Mutex::new(Some((child, master, session))));
+    let retry = owner.clone();
+    let spawned = thread::Builder::new()
+        .name("voicetype-google-unattached-cleanup".into())
+        .spawn(move || {
+            let (mut child, master, session) = retry.lock().unwrap().take().unwrap();
+            loop {
+                let _ = child.kill();
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            drop(child);
+            drop(master);
+            drop(session);
+            UNPUBLISHED_CLEANUPS.fetch_sub(1, Ordering::AcqRel);
+        });
+    if spawned.is_err() {
+        std::mem::forget(owner);
     }
 }
 
