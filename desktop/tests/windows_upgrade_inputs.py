@@ -28,8 +28,9 @@ NEW_VERSION = "0.2.1-alpha.1"
 
 
 def api_json(route):
+    # gh emits UTF-8 JSON; Windows' process code page may be cp1252.
     result = subprocess.run(["gh", "api", f"repos/{REPOSITORY}/{route}"],
-                            capture_output=True, text=True, check=True, timeout=30)
+                            capture_output=True, check=True, timeout=30)
     return json.loads(result.stdout)
 
 
