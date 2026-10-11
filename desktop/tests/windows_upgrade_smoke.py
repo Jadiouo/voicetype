@@ -120,8 +120,9 @@ def assert_known_folders_unchanged(env, scratch, before, report, phase):
 
 
 def run_installer(path, destination, env, evidence, label):
+    # NSIS requires /D= last and unquoted, including when its path has spaces.
     result = subprocess.run(
-        [str(path), "/S", f"/D={destination}"], env=env,
+        f'"{path}" /S /D={destination}', executable=str(path), shell=False, env=env,
         capture_output=True, timeout=300, check=False,
     )
     (evidence / f"{label}-installer.stdout").write_bytes(result.stdout)
