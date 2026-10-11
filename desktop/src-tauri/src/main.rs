@@ -396,7 +396,7 @@ async fn load_google_runtime_mode(
                 .with_review_config(config_dir.join("review.json"));
                 GoogleCliBoundary::open(launch.clone(), audio, std::time::Duration::from_secs(18))
             };
-            let format = move |raw| {
+            let format = move |raw: String| {
                 GoogleText::open(&vocab)?.apply(&raw, |text, terms| {
                     spelling
                         .as_ref()
