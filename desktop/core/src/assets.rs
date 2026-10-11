@@ -37,6 +37,10 @@ struct Activation {
     schema_version: u32,
     current: String,
     previous: Option<String>,
+    /// Explicit rollback survives App restart and a newer bundled catalog.
+    /// Old activation records remain unselected by default.
+    #[serde(default)]
+    rollback_selected: bool,
 }
 
 pub struct AssetStore {
@@ -66,20 +70,58 @@ impl AssetStore {
         &self,
         manifest: &AssetManifest,
         source: &Path,
+        progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<PathBuf> {
+        self.install_impl(manifest, source, progress, false)
+    }
+
+    /// Explicit user repair may replace an unreadable activation record only
+    /// after the bundled replacement has passed the same full pinned checks.
+    /// A corrupt record is never treated as a trusted previous version.
+    pub fn repair_with_progress(
+        &self,
+        manifest: &AssetManifest,
+        source: &Path,
+        progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<PathBuf> {
+        self.install_impl(manifest, source, progress, true)
+    }
+
+    fn install_impl(
+        &self,
+        manifest: &AssetManifest,
+        source: &Path,
         mut progress: impl FnMut(u64, u64) -> bool,
+        explicit_repair: bool,
     ) -> io::Result<PathBuf> {
         manifest.validate()?;
         let total = manifest.files.iter().map(|file| file.bytes).sum();
         report(&mut progress, 0, total)?;
         let _lock = self.lock()?;
         let old_bytes = optional_read(&self.root.join("active.json"))?;
-        let previous = decode_activation(old_bytes.as_deref())?.map(|value| value.current);
+        let old = match decode_activation(old_bytes.as_deref()) {
+            Ok(active) => active,
+            Err(_) if explicit_repair => None,
+            Err(error) => return Err(error),
+        };
+        let previous = old.as_ref().map(|value| value.current.clone());
         let encoded = serde_json::to_vec(manifest).map_err(io::Error::other)?;
         let digest = format!("{:x}", Sha256::digest(&encoded));
         if let Some(current) = &previous {
             if version_key(current)? == digest {
                 match self.verify_version(current, &mut progress) {
-                    Ok(installed) => return Ok(installed),
+                    Ok(installed) => {
+                        if let Some(active) = old.filter(|value| value.rollback_selected) {
+                            self.activate(
+                                Activation {
+                                    rollback_selected: false,
+                                    ..active
+                                },
+                                old_bytes.as_deref(),
+                            )?;
+                        }
+                        return Ok(installed);
+                    }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
                     Err(_) => {}
                 }
@@ -136,6 +178,7 @@ impl AssetStore {
                 schema_version: 1,
                 current,
                 previous,
+                rollback_selected: false,
             },
             old_bytes.as_deref(),
         )?;
@@ -155,6 +198,34 @@ impl AssetStore {
         decode_activation(bytes.as_deref())?
             .map(|value| self.verify_version(&value.current, &mut progress))
             .transpose()
+    }
+
+    /// Return only an explicitly selected rollback. A damaged or missing
+    /// selected version is an error, never permission to reinstall a newer
+    /// bundle implicitly on the next App launch.
+    pub fn selected_rollback_with_progress(
+        &self,
+        mut progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<Option<PathBuf>> {
+        let bytes = optional_read(&self.root.join("active.json"))?;
+        if bytes.is_none()
+            && fs::read_dir(self.root.join("versions"))?
+                .next()
+                .transpose()?
+                .is_some()
+        {
+            return Err(invalid(
+                "asset selection is missing; explicit repair required",
+            ));
+        }
+        let Some(active) = decode_activation(bytes.as_deref())? else {
+            return Ok(None);
+        };
+        if !active.rollback_selected {
+            return Ok(None);
+        }
+        self.verify_version(&active.current, &mut progress)
+            .map(Some)
     }
 
     /// Unlike active(), this also checks that the receipt is the exact catalog
@@ -178,16 +249,27 @@ impl AssetStore {
     }
 
     pub fn rollback(&self) -> io::Result<PathBuf> {
+        self.rollback_with_validation(|_| Ok(()))
+    }
+
+    /// The caller can check the prior receipt's product role before the
+    /// activation pointer changes. Integrity verification always precedes it.
+    pub fn rollback_with_validation(
+        &self,
+        validate: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> io::Result<PathBuf> {
         let _lock = self.lock()?;
         let bytes = optional_read(&self.root.join("active.json"))?;
         let active = decode_activation(bytes.as_deref())?.ok_or(io::ErrorKind::NotFound)?;
         let previous = active.previous.ok_or(io::ErrorKind::NotFound)?;
         let path = self.verify_version(&previous, &mut |_, _| true)?;
+        validate(&path)?;
         self.activate(
             Activation {
                 schema_version: 1,
                 current: previous,
                 previous: Some(active.current),
+                rollback_selected: true,
             },
             bytes.as_deref(),
         )?;

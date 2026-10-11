@@ -9,7 +9,7 @@ use crate::{
     setup::bundled_models,
 };
 use std::{
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -77,6 +77,51 @@ impl LocalInstaller {
         source: &Path,
         mut progress: impl FnMut(u64, u64) -> bool,
     ) -> io::Result<LocalRuntimePaths> {
+        let installed_models = self.checked_models(&mut progress)?;
+        let store = AssetStore::open(self.root.join("runtime-assets"))?;
+        let runtime = match store.selected_rollback_with_progress(&mut progress)? {
+            Some(selected) => {
+                self.validate_runtime(&selected)?;
+                selected
+            }
+            None => store.install_with_progress(&self.runtime, source, &mut progress)?,
+        };
+        Ok(self.paths(runtime, installed_models))
+    }
+
+    /// Explicit repair selects the currently bundled, hash-pinned runtime.
+    /// It does not erase configuration, vocabulary, learning data or reviews.
+    pub fn repair(
+        &self,
+        source: &Path,
+        mut progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<LocalRuntimePaths> {
+        let installed_models = self.checked_models(&mut progress)?;
+        let runtime = AssetStore::open(self.root.join("runtime-assets"))?.repair_with_progress(
+            &self.runtime,
+            source,
+            &mut progress,
+        )?;
+        Ok(self.paths(runtime, installed_models))
+    }
+
+    /// Select a previously installed and fully verified runtime. The selection
+    /// is persisted with the activation pointer, so a restart cannot silently
+    /// replace it with a newer bundle. No running engine may call this API.
+    pub fn rollback(
+        &self,
+        mut progress: impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<LocalRuntimePaths> {
+        let installed_models = self.checked_models(&mut progress)?;
+        let runtime = AssetStore::open(self.root.join("runtime-assets"))?
+            .rollback_with_validation(|path| self.validate_runtime(path))?;
+        Ok(self.paths(runtime, installed_models))
+    }
+
+    fn checked_models(
+        &self,
+        progress: &mut impl FnMut(u64, u64) -> bool,
+    ) -> io::Result<Vec<PathBuf>> {
         let mut installed_models = Vec::new();
         for model in &self.models {
             let root = self.root.join("model-assets").join(&model.id);
@@ -86,16 +131,39 @@ impl LocalInstaller {
                 return Err(io::ErrorKind::NotFound.into());
             }
             let installed = AssetStore::open(root)?
-                .matching(model, &mut progress)?
+                .matching(model, &mut *progress)?
                 .ok_or(io::ErrorKind::NotFound)?;
             installed_models.push(installed);
         }
-        let runtime = AssetStore::open(self.root.join("runtime-assets"))?.install_with_progress(
-            &self.runtime,
-            source,
-            &mut progress,
-        )?;
-        Ok(LocalRuntimePaths {
+        Ok(installed_models)
+    }
+
+    fn validate_runtime(&self, root: &Path) -> io::Result<()> {
+        let receipt: AssetManifest = serde_json::from_slice(&fs::read(root.join("manifest.json"))?)
+            .map_err(io::Error::other)?;
+        receipt.validate()?;
+        let executable = if cfg!(windows) {
+            "bin/voicetyped.exe"
+        } else {
+            "bin/voicetyped"
+        };
+        if receipt.id != self.runtime.id
+            || receipt.platform != self.runtime.platform
+            || !receipt
+                .files
+                .iter()
+                .any(|file| file.path == executable && file.executable)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "selected runtime is incompatible",
+            ));
+        }
+        Ok(())
+    }
+
+    fn paths(&self, runtime: PathBuf, installed_models: Vec<PathBuf>) -> LocalRuntimePaths {
+        LocalRuntimePaths {
             executable: runtime.join(if cfg!(windows) {
                 "bin/voicetyped.exe"
             } else {
@@ -108,6 +176,6 @@ impl LocalInstaller {
             review_config: self.root.join("review.json"),
             review_root: self.root.join("review"),
             spelling: None,
-        })
+        }
     }
 }

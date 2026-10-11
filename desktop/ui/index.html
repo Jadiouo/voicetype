@@ -50,6 +50,8 @@
         <div class="model-actions"><button id="prepare-models" type="button" disabled>下載／檢查模型</button><button id="cancel-models" type="button" hidden>取消準備</button></div>
         <p class="model-note">模型完成後，先載入引擎，再啟用本機聽寫。Linux 需安裝本版 Fcitx 模組並重新登入桌面。</p>
         <div class="model-actions"><button id="load-local-runtime" type="button" disabled>載入本機引擎</button><button id="enable-local-input" type="button" disabled>啟用本機聽寫</button><button id="unload-local-runtime" type="button" hidden>停用並卸載引擎</button></div>
+        <div class="model-actions"><button id="repair-local-runtime" type="button" disabled>修復本機引擎</button><button id="rollback-local-runtime" type="button" disabled>回復上一版引擎</button></div>
+        <p class="model-note">先停用並卸載引擎才能修復或回復。回復選擇在重新開啟 App 後仍有效；要改用目前安裝包版本，請按「修復」。詞庫、學習資料與校對樣本會保留。</p>
         <p id="runtime-note">正在讀取引擎封裝狀態…</p>
         <div id="google-runtime-setup">
           <h3>Google 官方語音</h3>

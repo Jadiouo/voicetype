@@ -61,6 +61,8 @@ struct DesktopState {
     local_installer: voicetype_app_core::local_install::LocalInstaller,
     #[cfg(any(target_os = "linux", windows))]
     runtime_resources: PathBuf,
+    #[cfg(any(target_os = "linux", windows))]
+    local_asset_lock: std::sync::Mutex<()>,
     config_dir: PathBuf,
     legacy_vocabulary: PathBuf,
     review_monitor: std::sync::Mutex<Option<review::Monitor>>,
@@ -201,6 +203,11 @@ async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
     {
         with_desktop(app.clone(), move |worker| {
             let state = app.state::<DesktopState>();
+            let _assets = state
+                .local_asset_lock
+                .lock()
+                .map_err(|_| "安裝程序已中斷")?;
+            local_assets_idle(worker)?;
             // Hash/copy work stays off the resident dictation thread. No paths,
             // URLs, manifests or command lines are accepted from the webview.
             let mut paths = state
@@ -235,6 +242,78 @@ async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
     {
         let _ = app;
         Err("此平台的本機引擎封裝仍在準備中。".into())
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn local_assets_idle(worker: &DesktopWorker) -> Result<(), String> {
+    use voicetype_app_core::worker::{GoogleRuntimeStatus, LocalRuntimeStatus};
+    let snapshot = worker.settings()?;
+    if snapshot.settings.dictation.busy
+        || snapshot.local_runtime != LocalRuntimeStatus::Inactive
+        || snapshot.google_runtime != GoogleRuntimeStatus::Inactive
+        || snapshot.input_requested
+    {
+        return Err("請先結束聽寫並卸載 App 引擎，再變更本機引擎檔案".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn repair_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(any(target_os = "linux", windows))]
+    {
+        return with_desktop(app.clone(), move |worker| {
+            let state = app.state::<DesktopState>();
+            let _assets = state
+                .local_asset_lock
+                .lock()
+                .map_err(|_| "安裝程序已中斷")?;
+            local_assets_idle(worker)?;
+            state
+                .local_installer
+                .repair(&state.runtime_resources, |_, _| true)
+                .map_err(|_| "無法修復本機引擎：請檢查模型與安裝包，原有資料已保留".to_string())?;
+            worker.settings()
+        })
+        .await;
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = app;
+        Err("此平台尚無本機引擎修復".into())
+    }
+}
+
+#[tauri::command]
+async fn rollback_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
+    #[cfg(any(target_os = "linux", windows))]
+    {
+        return with_desktop(app.clone(), move |worker| {
+            let state = app.state::<DesktopState>();
+            let _assets = state
+                .local_asset_lock
+                .lock()
+                .map_err(|_| "安裝程序已中斷")?;
+            local_assets_idle(worker)?;
+            state
+                .local_installer
+                .rollback(|_, _| true)
+                .map_err(|error| match error.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        "沒有可回復的上一版本機引擎，或模型尚未準備完成".to_string()
+                    }
+                    _ => "上一版引擎未通過完整核對，或回復狀態無法確認；請重新開啟 App 檢查"
+                        .to_string(),
+                })?;
+            worker.settings()
+        })
+        .await;
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = app;
+        Err("此平台尚無本機引擎回復".into())
     }
 }
 
@@ -846,6 +925,8 @@ fn main() {
                 )?,
                 #[cfg(any(target_os = "linux", windows))]
                 runtime_resources: app.path().resource_dir()?.join("runtime"),
+                #[cfg(any(target_os = "linux", windows))]
+                local_asset_lock: std::sync::Mutex::new(()),
                 review_monitor: std::sync::Mutex::new(None),
                 config_dir: config_dir.clone(),
                 legacy_vocabulary: std::env::var_os("VOICETYPE_VOCAB")
@@ -900,6 +981,8 @@ fn main() {
             prepare_models,
             cancel_model_setup,
             load_local_runtime,
+            repair_local_runtime,
+            rollback_local_runtime,
             unload_local_runtime,
             load_google_runtime,
             unload_google_runtime,
