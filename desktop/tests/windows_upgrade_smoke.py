@@ -187,6 +187,25 @@ $items = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninst
     return powershell_json(script, env, timeout=timeout)["count"]
 
 
+def product_registration_metadata(destination, env):
+    """Failure-only HKCU identity metadata; never record full installer paths."""
+    child_env = {**env, "VT_UPGRADE_DEST": str(destination)}
+    return powershell_json(r'''
+$items = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+  ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath } |
+  Where-Object { $_.DisplayName -like 'VoiceType Preview*' })
+$expected='"'+$env:VT_UPGRADE_DEST+'\uninstall.exe"'
+$rows=@($items | Select-Object -First 8 | ForEach-Object {
+  @{key=$_.PSChildName; display=$_.DisplayName; version=$_.DisplayVersion;
+    location_is_owned=($_.InstallLocation -eq $env:VT_UPGRADE_DEST -or
+                       $_.InstallLocation -eq ('"'+$env:VT_UPGRADE_DEST+'"'));
+    uninstall_is_owned=($_.UninstallString -eq $expected)}
+})
+@{count=$items.Count; truncated=($items.Count -gt 8); rows=$rows} |
+  ConvertTo-Json -Compress -Depth 4
+''', child_env, timeout=5)
+
+
 def known_folder_product_paths(env, scratch):
     locations = powershell_json(
         "@{roaming=[Environment]::GetFolderPath('ApplicationData');"
@@ -648,6 +667,11 @@ def main():
         if snapshot(profile) != saved:
             raise RuntimeError("new uninstall changed personal data")
         if product_registration_count(env):
+            try:
+                report["registration_after_new_uninstall"] = product_registration_metadata(
+                    destination, env)
+            except Exception as error:
+                report["registration_diagnostic_error"] = type(error).__name__
             raise RuntimeError("new NSIS registration remains after uninstall")
         report["phases"].append("new-uninstalled-data-retained")
         restored_exe = run_installer(old, destination, env, evidence, "old-rollback")
