@@ -223,6 +223,30 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: python tests/shell_smoke.py "$env:VOICETYPE_INSTALLED_EXE"
+      - name: Probe pinned official Windows Google CLI parser help
+        if: ${{ runner.os == 'Windows' && !cancelled() && env.VOICETYPE_INSTALLED_EXE != '' }}
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $source = 'https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.1-4582356770750464/windows-x64/cli_windows_x64.exe'
+          $expectedSha = '38f30c7dd1ed808f5cf98fe2014de3d30903035a4f0df02d3eb72a9ff8993741'
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.scratch/google-cli-help-download'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          $staged = Join-Path $scratch 'agy.partial'
+          $binary = Join-Path $scratch 'agy.exe'
+          Invoke-WebRequest -Uri $source -OutFile $staged -TimeoutSec 180
+          if ((Get-Item $staged).Length -ne 190286488) { throw 'Official Windows CLI download size differs' }
+          if ((Get-FileHash $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha) { throw 'Official Windows CLI download SHA-256 differs' }
+          Move-Item $staged $binary
+          $output = python tests/windows_google_cli_help.py --binary "$binary"
+          if ($LASTEXITCODE -ne 0) { throw 'Official Windows CLI help probe failed' }
+          $report = $output | ConvertFrom-Json -AsHashtable
+          if ($report.binary_sha256 -ne $expectedSha) { throw 'Official Windows CLI help report differs' }
+          $report.source_url = $source
+          $report.source_commit = $env:GITHUB_SHA
+          $report.run_id = $env:GITHUB_RUN_ID
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'target/google-cli-help.json'), ($report | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
+          Write-Output $output
       - name: Probe installed Windows Nano on pinned public speech
         if: ${{ runner.os == 'Windows' && !cancelled() && env.VOICETYPE_INSTALLED_EXE != '' }}
         shell: pwsh
@@ -266,6 +290,7 @@ jobs:
             desktop/target/installer-notices/plugin-origins.json
             desktop/target/installer-pe-audit.json
             desktop/target/windows-pe-provenance.json
+            desktop/target/google-cli-help.json
             desktop/target/windows-nano-asr.json
             desktop/target/rust-notices/
   windows_upgrade:
