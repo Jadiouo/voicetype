@@ -21,7 +21,7 @@ fn run() -> std::io::Result<()> {
     };
     use windows_sys::Win32::System::Console::{
         GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
-        ENABLE_PROCESSED_INPUT, STD_INPUT_HANDLE,
+        ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, STD_INPUT_HANDLE,
     };
     let log = env::args_os()
         .skip_while(|arg| arg != "--log-file")
@@ -36,7 +36,8 @@ fn run() -> std::io::Result<()> {
     if unsafe {
         SetConsoleMode(
             input,
-            mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT),
+            (mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT))
+                | ENABLE_VIRTUAL_TERMINAL_INPUT,
         )
     } == 0
     {
@@ -53,6 +54,10 @@ fn run() -> std::io::Result<()> {
         let mut byte = [0u8; 1];
         stdin.read_exact(&mut byte)?;
         controls.push(byte[0]);
+        // Publish every received control byte before the editor callback. The
+        // final editor response then proves this snapshot is complete, even if
+        // ConPTY delivers a function key differently than the fixture expects.
+        fs::write(env::current_dir()?.join("controls"), &controls)?;
         if byte[0] == 7 {
             let draft = std::path::PathBuf::from(&temporary).join("prompt.txt");
             let text = ["", "早期", "完整句子"][edits.min(2)];
@@ -61,9 +66,6 @@ fn run() -> std::io::Result<()> {
             if !Command::new(editor).arg(&draft).status()?.success() {
                 return Err(io::ErrorKind::Other.into());
             }
-        }
-        if controls.ends_with(b"\x1b[15~") {
-            fs::write(env::current_dir()?.join("controls"), &controls)?;
         }
     }
 }
