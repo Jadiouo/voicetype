@@ -64,7 +64,7 @@ function runtimeControls(view) {
     : view.local_runtime === 'ready' ? '按住 Ctrl＋Alt 說話，放開後送字；Esc 取消。停用或結束 App 後回到原服務。'
     : view.input_requested ? '等待 Fcitx 接管：原聽寫結束後才切換。若持續等待，請確認已載入本版 Fcitx 模組；舊的使用者模組可能遮住安裝包版本。'
     : loaded ? '引擎已載入。按「啟用本機聽寫」後，Fcitx 才會在空閒時接管快捷鍵。'
-    : '載入時會核對完整模型並使用 CPU。這一步不會開始錄音。';
+    : '載入引擎時會核對完整模型並使用 CPU。這一步不會開始錄音。';
   const googleLoaded = ['waiting_for_input', 'transfer_pending', 'ready', 'prewarming', 'cleaning'].includes(view?.google_runtime);
   loadGoogle.disabled = commandBusy || !view || !view.local_runtime_bundled || view.google_runtime !== 'inactive'
     || view.google_install.state !== 'official_check_required'
