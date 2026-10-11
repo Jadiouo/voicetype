@@ -3,3 +3,4 @@
 desktop/assets/linux-native-sources.json text eol=lf
 desktop/assets/windows-native-sources.json text eol=lf
 patches/sherpa-onnx-1.13.8-nano-integrity.patch text eol=lf
+config/rust-notice-fallbacks/** text eol=lf
