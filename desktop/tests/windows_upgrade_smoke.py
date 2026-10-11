@@ -11,6 +11,8 @@ Example (after building two genuinely different versions):
 """
 import argparse
 from collections import deque
+import ctypes
+from ctypes import wintypes
 import hashlib
 import http.client
 from itertools import islice
@@ -49,9 +51,72 @@ def digest(path):
 def powershell_json(script, env, timeout=30):
     result = subprocess.run(
         ["pwsh", "-NoProfile", "-NonInteractive", "-Command", script],
-        env=env, capture_output=True, text=True, timeout=timeout, check=True,
+        env=env, capture_output=True, timeout=timeout, check=True,
     )
     return json.loads(result.stdout)
+
+
+def windows_argv(command_line):
+    """Use Windows' own quoting rules, not POSIX shlex, for a CIM command line."""
+    argc = ctypes.c_int()
+    shell32 = ctypes.windll.shell32
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    argv = shell32.CommandLineToArgvW(command_line, ctypes.byref(argc))
+    if not argv:
+        raise OSError("CommandLineToArgvW failed")
+    try:
+        return [argv[index] for index in range(argc.value)]
+    finally:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+        kernel32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
+
+
+def webview_process_udf(executable, driver_pid, requested, env, timeout):
+    """Inspect only this App's WebView2 descendants; never persist command lines."""
+    snapshot = powershell_json(r'''
+$items = @(Get-CimInstance Win32_Process |
+  ForEach-Object {
+    @{pid=[int]$_.ProcessId; parent_pid=[int]$_.ParentProcessId;
+      name=$_.Name;
+      executable=$(if ($_.Name -eq 'voicetype-desktop.exe') {$_.ExecutablePath} else {$null});
+      command_line=$(if ($_.Name -eq 'msedgewebview2.exe') {$_.CommandLine} else {$null})}
+  })
+@{processes=$items}|ConvertTo-Json -Compress -Depth 4
+''', env, timeout=timeout)
+    rows = snapshot["processes"]
+    by_pid = {row["pid"]: row for row in rows}
+
+    def descendant_of(row, owners):
+        parent = row["parent_pid"]
+        seen = set()
+        while parent in by_pid and parent not in seen:
+            if parent in owners:
+                return True
+            seen.add(parent)
+            parent = by_pid[parent]["parent_pid"]
+        return False
+
+    apps = {row["pid"] for row in rows if row["name"].lower() == "voicetype-desktop.exe"
+            and row["executable"] and Path(row["executable"]).resolve() == executable.resolve()
+            and descendant_of(row, {driver_pid})}
+    browsers = []
+    for row in rows:
+        if row["name"].lower() != "msedgewebview2.exe" or not descendant_of(row, apps):
+            continue
+        args = windows_argv(row["command_line"]) if row["command_line"] else []
+        folders = [arg.split("=", 1)[1] for arg in args
+                   if arg.lower().startswith("--user-data-dir=")]
+        if len(folders) > 1:
+            raise RuntimeError("WebView2 process has duplicate user data folder arguments")
+        folder = Path(folders[0]).resolve() if folders else None
+        browsers.append({"pid": row["pid"], "parent_pid": row["parent_pid"],
+                         "user_data_dir": str(folder) if folder else None})
+    observed = [Path(row["user_data_dir"]) for row in browsers if row["user_data_dir"]]
+    return {"app_pids": sorted(apps), "webview_processes": browsers,
+            "matches": bool(apps and observed and all(path == requested for path in observed))}
 
 
 def file_version(path, env, expected):
@@ -278,10 +343,26 @@ class InstalledApp:
             reported_udf = opened.get("capabilities", {}).get("msedge.userDataDir")
             actual_udf = Path(reported_udf).resolve() if reported_udf else None
             expected_udf = requested_udf.resolve()
-            matches = (actual_udf == expected_udf and requested_udf.is_dir())
+            deadline = time.monotonic() + 5
+            process = {"app_pids": [], "webview_processes": [], "matches": False}
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    process = webview_process_udf(
+                        self.executable, self.driver.pid, expected_udf, self.env, remaining)
+                except subprocess.TimeoutExpired:
+                    process["diagnostic_error"] = "TimeoutExpired"
+                    break
+                if process["matches"]:
+                    break
+                time.sleep(0.2)
+            matches = (requested_udf.is_dir() and process["matches"]
+                       and (actual_udf is None or actual_udf == expected_udf))
             (self.evidence / f"{self.label}-webview-udf.json").write_text(json.dumps({
-                "requested": str(expected_udf), "reported": str(actual_udf) if actual_udf else None,
-                "requested_exists": requested_udf.is_dir(), "matches": matches,
+                "requested": str(expected_udf), "reported_capability": str(actual_udf) if actual_udf else None,
+                "requested_exists": requested_udf.is_dir(), **process, "matches": matches,
             }, indent=2) + "\n", encoding="utf-8")
             if not matches:
                 raise RuntimeError("WebDriver WebView2 user data folder is outside the test workspace")
