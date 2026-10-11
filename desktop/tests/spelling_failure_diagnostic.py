@@ -88,6 +88,15 @@ def main():
         except subprocess.TimeoutExpired:
             child.kill()
             child.wait(timeout=3)
+    try:
+        model_command = command.copy()
+        model_command[1] = "--diagnostic-self-test"
+        result = subprocess.run(model_command, env=environment, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, timeout=30, check=True)
+        print(result.stdout.decode().strip(), flush=True)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, UnicodeError) as error:
+        print(json.dumps({"diagnostic": "model_self_test_error", "type": type(error).__name__}),
+              flush=True)
 
 
 if __name__ == "__main__":
