@@ -107,38 +107,7 @@ impl<A: GoogleAudio> GoogleBoundary for GoogleCliBoundary<A> {
     }
 
     fn reject_known_voice_errors(&mut self) -> io::Result<()> {
-        let path = self.terminal.log_path();
-        let meta = fs::symlink_metadata(&path)?;
-        if !meta.file_type().is_file() || meta.len() > 4 * 1024 * 1024 {
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-        let bytes = fs::read(path)?;
-        if bytes.len() > 4 * 1024 * 1024 {
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-        for line in bytes.split(|byte| *byte == b'\n') {
-            let line = line.iter().map(u8::to_ascii_lowercase).collect::<Vec<_>>();
-            let source = [b"audio:".as_slice(), b"voice:", b"mic:"]
-                .iter()
-                .any(|prefix| line.windows(prefix.len()).any(|w| w == *prefix));
-            let failure = [
-                b"failed".as_slice(),
-                b"error",
-                b"cancelled",
-                b"canceled",
-                b"timeout",
-                b"timed out",
-            ]
-            .iter()
-            .any(|word| line.windows(word.len()).any(|w| w == *word));
-            if source && failure {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "official voice failure",
-                ));
-            }
-        }
-        Ok(())
+        reject_known_voice_errors(self.terminal.log_path())
     }
 
     fn cleanup(&mut self) -> io::Result<()> {
@@ -156,4 +125,38 @@ impl<A: GoogleAudio> GoogleBoundary for GoogleCliBoundary<A> {
     fn take_review_pcm(&mut self) -> Option<Vec<u8>> {
         self.audio.take_review_pcm()
     }
+}
+
+pub(crate) fn reject_known_voice_errors(path: std::path::PathBuf) -> io::Result<()> {
+    let meta = fs::symlink_metadata(&path)?;
+    if !meta.file_type().is_file() || meta.len() > 4 * 1024 * 1024 {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let bytes = fs::read(path)?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    for line in bytes.split(|byte| *byte == b'\n') {
+        let line = line.iter().map(u8::to_ascii_lowercase).collect::<Vec<_>>();
+        let source = [b"audio:".as_slice(), b"voice:", b"mic:"]
+            .iter()
+            .any(|prefix| line.windows(prefix.len()).any(|w| w == *prefix));
+        let failure = [
+            b"failed".as_slice(),
+            b"error",
+            b"cancelled",
+            b"canceled",
+            b"timeout",
+            b"timed out",
+        ]
+        .iter()
+        .any(|word| line.windows(word.len()).any(|w| w == *word));
+        if source && failure {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "official voice failure",
+            ));
+        }
+    }
+    Ok(())
 }

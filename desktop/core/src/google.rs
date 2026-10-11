@@ -10,6 +10,7 @@ pub mod legacy_systemd;
 pub mod legacy_transfer;
 #[cfg(target_os = "linux")]
 pub mod linux_audio;
+pub mod native;
 pub mod release;
 pub mod terminal;
 use crate::{
@@ -124,15 +125,28 @@ impl GoogleText {
     }
 }
 
-/// External CLI/audio boundary. A production implementation must own both the
-/// CLI and recorder until `cleanup` confirms that neither can use the microphone.
+/// Who actually owns capture for this official CLI session. The native route
+/// has no App-visible PCM byte count, drain acknowledgement or review sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoogleCaptureOwnership {
+    AppPcmRelay,
+    OfficialCliNative,
+}
+
+/// External CLI/audio boundary. A production implementation must own the CLI
+/// and its capture path until `cleanup` confirms they cannot use the microphone.
 /// App integration transfers its `InputLease` into this resident owner before
 /// capture. Dropping `GoogleProvider` can detach a cleanup worker; the caller
 /// cannot release the microphone lease merely because Drop returns. Keep the
 /// lease with the boundary until confirmed cleanup and child reap.
-/// `stop_capture_and_drain` includes recorder stdout EOF and complete relay
-/// consumption. `capture_editor` reads an owned draft, never terminal output.
+/// For `AppPcmRelay`, `stop_capture_and_drain` includes recorder stdout EOF and
+/// complete relay consumption. `OfficialCliNative` skips those methods rather
+/// than pretending the App saw an ACK. `capture_editor` reads an owned draft,
+/// never terminal output.
 pub trait GoogleBoundary {
+    fn capture_ownership(&self) -> GoogleCaptureOwnership {
+        GoogleCaptureOwnership::AppPcmRelay
+    }
     /// Called before any capture so blocking operations can observe cancellation.
     fn set_cancellation(&mut self, _flag: Arc<AtomicBool>) {}
     fn start_capture(&mut self) -> io::Result<()>;
@@ -187,11 +201,16 @@ impl GoogleAttempt {
         self.finished = true;
         let result = (|| {
             check_cancelled(cancelled)?;
-            boundary.stop_capture_and_drain()?;
+            let ownership = boundary.capture_ownership();
+            if ownership == GoogleCaptureOwnership::AppPcmRelay {
+                boundary.stop_capture_and_drain()?;
+            }
             check_cancelled(cancelled)?;
             boundary.stop_official_voice()?;
             check_cancelled(cancelled)?;
-            boundary.wait_official_recorder()?;
+            if ownership == GoogleCaptureOwnership::AppPcmRelay {
+                boundary.wait_official_recorder()?;
+            }
             check_cancelled(cancelled)?;
             let _first = boundary.capture_editor()?;
             check_cancelled(cancelled)?;

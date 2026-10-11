@@ -9,8 +9,9 @@ use std::{
 };
 use voicetype_app_core::google::{
     adapter::{GoogleAudio, GoogleCliBoundary},
+    native::GoogleNativeBoundary,
     terminal::TerminalLaunch,
-    GoogleAttempt,
+    GoogleAttempt, GoogleBoundary, GoogleCaptureOwnership,
 };
 
 #[derive(Clone)]
@@ -88,4 +89,53 @@ while True:
         ["start", "connected", "drained", "recorder_exit", "cleanup"]
     );
     assert_eq!(fs::read(controls).unwrap(), b"F5F5");
+}
+
+#[test]
+fn official_native_cli_owns_capture_and_never_returns_review_pcm() {
+    let root = tempfile::tempdir().unwrap();
+    let script = root.path().join("fake-official-cli");
+    let controls = root.path().join("controls");
+    let code = format!(
+        r#"#!/usr/bin/python3 -u
+import os,subprocess,shlex,tty,sys
+tty.setraw(0)
+open(sys.argv[sys.argv.index('--log-file')+1],'wb').close()
+count=0
+while True:
+ ch=os.read(0,1)
+ with open({:?},'ab') as out: out.write(ch)
+ if ch==b'\x07':
+  text=['','早期','完整句子'][count]
+  count+=1
+  path=os.path.join(os.environ['VOICETYPE_GOOGLE_TMP'],'prompt')
+  with open(path,'w') as out: out.write(text)
+  os.chmod(path,0o600)
+  subprocess.run(shlex.split(os.environ['EDITOR'])+[path],check=True)
+"#,
+        controls.display().to_string()
+    );
+    fs::write(&script, code).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    let mut boundary = GoogleNativeBoundary::open(
+        TerminalLaunch {
+            executable: script.clone(),
+            sha256: format!("{:x}", Sha256::digest(fs::read(&script).unwrap())),
+            workspace,
+            profile: root.path().to_path_buf(),
+            editor: env!("CARGO_BIN_EXE_voicetype-google-editor").into(),
+        },
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(
+        boundary.capture_ownership(),
+        GoogleCaptureOwnership::OfficialCliNative
+    );
+    let mut attempt = GoogleAttempt::start(&mut boundary).unwrap();
+    assert_eq!(attempt.finish(&mut boundary).unwrap(), "完整句子");
+    assert_eq!(boundary.take_review_pcm(), None);
+    assert_eq!(fs::read(controls).unwrap(), b"\x07\x1b[15~\x1b[15~\x07\x07");
 }
