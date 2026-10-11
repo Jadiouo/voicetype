@@ -27,7 +27,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: desktop-${{ github.ref }}
+  group: desktop-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.upgrade_new_run_id != '' && 'upgrade' || 'preview' }}
   cancel-in-progress: true
 
 jobs:
