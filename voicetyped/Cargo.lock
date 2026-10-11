@@ -2155,7 +2155,7 @@ dependencies = [
 
 [[package]]
 name = "voicetype-app-core"
-version = "0.2.0-alpha.1"
+version = "0.2.1-alpha.1"
 dependencies = [
  "anyhow",
  "bzip2",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "voicetype-text"
-version = "0.2.0-alpha.1"
+version = "0.2.1-alpha.1"
 dependencies = [
  "anyhow",
  "libc",
