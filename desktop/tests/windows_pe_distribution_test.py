@@ -96,6 +96,24 @@ class DistributionInventoryTests(unittest.TestCase):
             with self.subTest(reason=reason), self.assertRaisesRegex(RuntimeError, reason):
                 SCRIPT["compare_inventory"](altered, expected)
 
+    def test_extracted_uninstaller_must_match_installed_generated_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "uninstall.exe"
+            installed.write_bytes(b"generated uninstaller")
+            row = {"path": "uninstall.exe", "bytes": installed.stat().st_size,
+                   "sha256": SCRIPT["sha256"](installed)}
+            actual = {"uninstall.exe": dict(row)}
+            expected = SCRIPT["extracted_generated_uninstaller"](actual, installed)
+            SCRIPT["compare_inventory"](actual, expected)
+            self.assertEqual(expected, [row])
+            self.assertEqual(SCRIPT["extracted_generated_uninstaller"]({}, installed), [])
+            for changed in ({**row, "bytes": row["bytes"] + 1},
+                            {**row, "sha256": "0" * 64}):
+                with self.assertRaisesRegex(RuntimeError, "generated uninstaller differs"):
+                    SCRIPT["extracted_generated_uninstaller"]({"uninstall.exe": changed}, installed)
+            with self.assertRaisesRegex(RuntimeError, "extra"):
+                SCRIPT["compare_inventory"]({**actual, "other.exe": dict(row)}, expected)
+
     def test_missing_csc_notice_never_counts_as_complete(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "spelling"

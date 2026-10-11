@@ -95,6 +95,17 @@ def compare_inventory(actual, expected):
                 "NSIS PE bytes differ: " + name)
 
 
+def extracted_generated_uninstaller(actual, installed_uninstaller):
+    """Verify an extracted generated uninstaller against installed output."""
+    if "uninstall.exe" not in actual:
+        return []
+    row = {"path": "uninstall.exe", "bytes": installed_uninstaller.stat().st_size,
+           "sha256": sha256(installed_uninstaller)}
+    require(actual["uninstall.exe"] == row,
+            "extracted generated uninstaller differs from installed output")
+    return [row]
+
+
 def manifest_pe_rows(manifest, prefix):
     return [{"path": prefix + row["path"], "bytes": row["bytes"], "sha256": row["sha256"]}
             for row in manifest["files"] if row["path"].lower().endswith((".exe", ".dll", ".pyd"))]
@@ -226,8 +237,15 @@ def audit(extracted, installed, setup, target, repo, source_commit):
     main = extracted / "voicetype-desktop.exe"
     require(main.is_file() and is_pe(main), "generated desktop PE missing")
     expected.append({"path": main.name, "bytes": main.stat().st_size, "sha256": sha256(main)})
+    uninstallers = [p for p in installed.rglob("*") if p.is_file() and is_pe(p)
+                    and p.name.lower().startswith("uninstall") and p.suffix.lower() == ".exe"]
+    require(len(uninstallers) == 1 and uninstallers[0].parent == installed,
+            "installed generated NSIS uninstaller missing or duplicated")
+    extracted_uninstaller = extracted_generated_uninstaller(actual, uninstallers[0])
+    expected.extend(extracted_uninstaller)
     compare_inventory(actual, expected)
-    require(len(actual) == 60, "Windows inner PE count differs from reviewed scopes")
+    require(len(actual) == 60 + len(extracted_uninstaller),
+            "Windows inner PE count differs from reviewed scopes")
     archive = target / "installer-source-cache/nsis-3.11.zip"
     require(archive.is_file() and sha256(archive) == NSIS_SHA256,
             "pinned NSIS source archive missing or differs")
@@ -242,10 +260,6 @@ def audit(extracted, installed, setup, target, repo, source_commit):
     unchanged = [name for name in (".text", ".rdata", ".data")
                  if name in stub_sections and setup_sections.get(name) == stub_sections[name]]
     require(unchanged == [".text", ".rdata", ".data"], "generated NSIS setup stub code/data differs")
-    uninstallers = [p for p in installed.rglob("*") if p.is_file() and is_pe(p)
-                    and p.name.lower().startswith("uninstall") and p.suffix.lower() == ".exe"]
-    require(len(uninstallers) == 1 and uninstallers[0].parent == installed,
-            "installed generated NSIS uninstaller missing or duplicated")
     require((extracted / "LICENSE.txt").is_file(), "desktop distribution license missing")
     recipe = {path: sha256(repo / path) for path in (
         "desktop/Cargo.lock", "voicetyped/Cargo.lock", "desktop/package-lock.json",
@@ -261,6 +275,7 @@ def audit(extracted, installed, setup, target, repo, source_commit):
                                                         "spelling" if name.startswith("spelling/") else
                                                         "google" if name.startswith("google/") else
                                                         "runtime" if name.startswith("runtime/") else
+                                                        "generated_uninstaller" if name == "uninstall.exe" else
                                                         "desktop" if name == "voicetype-desktop.exe" else "opencc"))
                          for name in sorted(actual)],
             "source_catalogs": {name: sha256(target / name / "manifest.json")
@@ -284,6 +299,7 @@ def audit(extracted, installed, setup, target, repo, source_commit):
             "installed_generated_uninstaller": {
                 "path": uninstallers[0].relative_to(installed).as_posix(),
                 "bytes": uninstallers[0].stat().st_size, "sha256": sha256(uninstallers[0]),
+                "extracted_member": "uninstall.exe" if extracted_uninstaller else None,
                 "source_artifact": NSIS_SOURCE, "source_sha256": NSIS_SHA256,
                 "generation": "NSIS WriteUninstaller from the installed setup",
                 "generating_setup_sha256": sha256(setup),
