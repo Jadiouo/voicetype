@@ -9,7 +9,7 @@ use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE},
     System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     },
 };
@@ -19,6 +19,15 @@ pub struct WindowsJob(HANDLE);
 unsafe impl Send for WindowsJob {}
 
 impl WindowsJob {
+    /// Request termination while retaining ownership until the caller has
+    /// observed the child process exit. Dropping the handle is only a fallback.
+    pub fn terminate(&self) -> io::Result<()> {
+        if unsafe { TerminateJobObject(self.0, 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     /// Must be called immediately after spawn, before any child protocol work.
     /// Failure means the caller must kill and reap the child before returning.
     pub fn attach(child: &Child) -> io::Result<Self> {

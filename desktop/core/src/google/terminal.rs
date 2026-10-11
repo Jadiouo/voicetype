@@ -4,6 +4,8 @@
 use crate::windows_job::WindowsJob;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::sync::mpsc;
 use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
@@ -50,11 +52,15 @@ pub struct GoogleTerminal {
     child: Option<Box<dyn Child + Send + Sync>>,
     #[cfg(windows)]
     job: Option<WindowsJob>,
-    writer: Box<dyn Write + Send>,
+    #[cfg(windows)]
+    closing: Option<mpsc::Receiver<()>>,
+    #[cfg(windows)]
+    closed: bool,
+    writer: Option<Box<dyn Write + Send>>,
     reader: Option<JoinHandle<()>>,
     reader_done: Arc<AtomicBool>,
     output_bytes: Arc<AtomicUsize>,
-    session: tempfile::TempDir,
+    session: Arc<tempfile::TempDir>,
     captures: usize,
 }
 
@@ -77,9 +83,11 @@ impl GoogleTerminal {
         {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        let session = tempfile::Builder::new()
-            .prefix("google-")
-            .tempdir_in(&config.profile)?;
+        let session = Arc::new(
+            tempfile::Builder::new()
+                .prefix("google-")
+                .tempdir_in(&config.profile)?,
+        );
         let temporary = session.path().join("tmp");
         let capture = session.path().join("capture");
         for dir in [&temporary, &capture] {
@@ -190,7 +198,11 @@ impl GoogleTerminal {
             child: Some(child),
             #[cfg(windows)]
             job: Some(job),
-            writer,
+            #[cfg(windows)]
+            closing: None,
+            #[cfg(windows)]
+            closed: false,
+            writer: Some(writer),
             reader: Some(reader),
             reader_done,
             output_bytes,
@@ -215,8 +227,9 @@ impl GoogleTerminal {
         {
             return Err(io::ErrorKind::BrokenPipe.into());
         }
-        self.writer.write_all(control.bytes())?;
-        self.writer.flush()
+        let writer = self.writer.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
+        writer.write_all(control.bytes())?;
+        writer.flush()
     }
 
     pub fn capture_dir(&self) -> PathBuf {
@@ -224,6 +237,16 @@ impl GoogleTerminal {
     }
     pub fn log_path(&self) -> PathBuf {
         self.session.path().join("official-cli.log")
+    }
+
+    /// Process state only; terminal output and draft text never enter status.
+    pub fn child_exit_observed(&mut self) -> io::Result<bool> {
+        Ok(self
+            .child
+            .as_mut()
+            .ok_or(io::ErrorKind::BrokenPipe)?
+            .try_wait()?
+            .is_some())
     }
 
     pub fn capture_editor(&mut self, budget: Duration) -> io::Result<String> {
@@ -264,59 +287,140 @@ impl GoogleTerminal {
     }
 
     pub fn shutdown(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        if self.closed {
+            return Ok(());
+        }
+        // Close input before the pseudoconsole. Its output clone is drained by
+        // the reader thread until ClosePseudoConsole releases the write side.
+        self.writer.take();
         if let Some(child) = self.child.as_mut() {
-            #[cfg(unix)]
-            if let Some(group) = self
-                .master
-                .as_ref()
-                .and_then(|master| master.process_group_leader())
+            #[cfg(windows)]
             {
-                if group > 0 {
-                    unsafe {
-                        libc::kill(-group, libc::SIGTERM);
+                // portable-pty's WinChild::kill swallows TerminateProcess
+                // failures and WinChild::wait waits forever. Keep the Job
+                // owner through any failed observation. The caller must keep
+                // this terminal and its input lease until cleanup succeeds.
+                self.job
+                    .as_ref()
+                    .ok_or(io::ErrorKind::BrokenPipe)?
+                    .terminate()?;
+                let until = Instant::now() + Duration::from_secs(2);
+                while child.try_wait()?.is_none() {
+                    if Instant::now() >= until {
+                        return Err(io::ErrorKind::TimedOut.into());
                     }
+                    thread::sleep(Duration::from_millis(5));
                 }
             }
-            if child.try_wait()?.is_none() {
-                child.kill()?;
-            }
-            let until = Instant::now() + Duration::from_millis(500);
-            while child.try_wait()?.is_none() {
-                if Instant::now() >= until {
-                    #[cfg(unix)]
-                    if let Some(group) = self
-                        .master
-                        .as_ref()
-                        .and_then(|master| master.process_group_leader())
-                    {
-                        if group > 0 {
-                            unsafe {
-                                libc::kill(-group, libc::SIGKILL);
-                            }
+            #[cfg(unix)]
+            {
+                if let Some(group) = self
+                    .master
+                    .as_ref()
+                    .and_then(|master| master.process_group_leader())
+                {
+                    if group > 0 {
+                        unsafe {
+                            libc::kill(-group, libc::SIGTERM);
                         }
                     }
-                    child.kill()?;
-                    break;
                 }
-                thread::sleep(Duration::from_millis(5));
+                if child.try_wait()?.is_none() {
+                    child.kill()?;
+                }
+                let until = Instant::now() + Duration::from_millis(500);
+                while child.try_wait()?.is_none() {
+                    if Instant::now() >= until {
+                        if let Some(group) = self
+                            .master
+                            .as_ref()
+                            .and_then(|master| master.process_group_leader())
+                        {
+                            if group > 0 {
+                                unsafe {
+                                    libc::kill(-group, libc::SIGKILL);
+                                }
+                            }
+                        }
+                        child.kill()?;
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                child.wait()?;
             }
-            child.wait()?;
             self.child.take();
         }
         #[cfg(windows)]
-        self.job.take(); // closes Job Object and kills any remaining children
-        self.master.take();
-        let until = Instant::now() + Duration::from_millis(500);
-        while !self.reader_done.load(Ordering::Acquire) && Instant::now() < until {
-            thread::sleep(Duration::from_millis(5));
+        {
+            // ClosePseudoConsole may wait for its final output frame on older
+            // Windows. The reader remains live in a separate thread, and the
+            // close owner retains the session until the kernel call returns.
+            // A timeout is not a successful cleanup: the caller must retain
+            // its session ownership and poll this completion on retry.
+            self.job.take();
+            if self.closing.is_none() {
+                type CloseParts = (
+                    Box<dyn MasterPty + Send>,
+                    Option<JoinHandle<()>>,
+                    Arc<tempfile::TempDir>,
+                );
+                let (handoff, incoming) = mpsc::sync_channel::<CloseParts>(1);
+                let (complete, completion) = mpsc::channel();
+                thread::Builder::new()
+                    .name("voicetype-google-conpty-close".into())
+                    .spawn(move || {
+                        if let Ok((master, reader, session)) = incoming.recv() {
+                            drop(master);
+                            if let Some(reader) = reader {
+                                let _ = reader.join();
+                            }
+                            drop(session);
+                            let _ = complete.send(());
+                        }
+                    })?;
+                let master = self.master.take().ok_or(io::ErrorKind::BrokenPipe)?;
+                let reader = self.reader.take();
+                let session = self.session.clone();
+                if let Err(error) = handoff.send((master, reader, session)) {
+                    let (master, reader, _) = error.0;
+                    self.master = Some(master);
+                    self.reader = reader;
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                self.closing = Some(completion);
+            }
+            match self
+                .closing
+                .as_ref()
+                .ok_or(io::ErrorKind::BrokenPipe)?
+                .recv_timeout(Duration::from_millis(500))
+            {
+                Ok(()) => {
+                    self.closing.take();
+                    self.closed = true;
+                    Ok(())
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => Err(io::ErrorKind::TimedOut.into()),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::ErrorKind::BrokenPipe.into()),
+            }
         }
-        if !self.reader_done.load(Ordering::Acquire) {
-            return Err(io::ErrorKind::TimedOut.into());
+        #[cfg(unix)]
+        {
+            self.master.take();
+            let until = Instant::now() + Duration::from_millis(500);
+            while !self.reader_done.load(Ordering::Acquire) && Instant::now() < until {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if !self.reader_done.load(Ordering::Acquire) {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            if let Some(reader) = self.reader.take() {
+                let _ = reader.join();
+            }
+            Ok(())
         }
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
-        }
-        Ok(())
     }
 }
 
