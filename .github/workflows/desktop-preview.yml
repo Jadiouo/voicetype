@@ -73,6 +73,8 @@ jobs:
           cargo +stable test -p voicetype-app-core --test spelling_bundle --locked -- --ignored
       - name: Public application command tests
         run: cargo +stable test -p voicetype-app-core -p voicetype-text --locked
+      - name: Build narrow Google CLI helpers
+        run: python ../scripts/build-desktop-google.py target/google
       - name: Build pinned Linux CPU runtime and native notices
         if: runner.os == 'Linux'
         run: |
@@ -96,6 +98,7 @@ jobs:
           python3 tests/installed_runtime.py target/inspection target/runtime/manifest.json
           python3 tests/installed_input.py target/inspection target/input/manifest.json
           python3 tests/installed_spelling.py target/inspection target/spelling/manifest.json
+          python3 tests/installed_google.py target/inspection target/google/manifest.json
           sudo dpkg --install target/release/bundle/deb/*.deb
           dpkg --search /usr/bin/voicetype-desktop
       - name: Inspect and install preview (Windows)
@@ -112,6 +115,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed OpenCC verification failed' }
           python tests/installed_spelling.py "$destination" target/spelling/manifest.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed spelling verification failed' }
+          python tests/installed_google.py "$destination" target/google/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Google helper verification failed' }
           "VOICETYPE_INSTALLED_EXE=$destination/voicetype-desktop.exe" >> $env:GITHUB_ENV
       - name: Record artifact checksums
         run: python tests/artifact_manifest.py

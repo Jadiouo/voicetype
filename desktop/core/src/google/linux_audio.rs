@@ -16,7 +16,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
-        Arc,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -43,6 +43,8 @@ pub struct LinuxPcmAudio {
     total_sent: Arc<AtomicU64>,
     total_produced: Arc<AtomicU64>,
     catchup: bool,
+    review_pcm: Arc<Mutex<Option<Vec<u8>>>>,
+    review_config: Option<PathBuf>,
 }
 
 impl LinuxPcmAudio {
@@ -97,6 +99,8 @@ impl LinuxPcmAudio {
             total_sent: Arc::new(AtomicU64::new(0)),
             total_produced: Arc::new(AtomicU64::new(0)),
             catchup: false,
+            review_pcm: Arc::new(Mutex::new(None)),
+            review_config: None,
         })
     }
 
@@ -108,6 +112,20 @@ impl LinuxPcmAudio {
 
     pub fn catchup_enabled(&self) -> bool {
         self.catchup
+    }
+
+    /// Retain bounded PCM only after explicit review consent has been read.
+    /// The collector rechecks consent under its store lock before publication.
+    pub fn with_review_capture(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.review_pcm = Arc::new(Mutex::new(Some(Vec::new())));
+        }
+        self
+    }
+
+    pub fn with_review_config(mut self, path: PathBuf) -> Self {
+        self.review_config = Some(path);
+        self
     }
 
     fn wait_flag(&self, flag: &AtomicBool, limit: Duration) -> io::Result<()> {
@@ -150,6 +168,17 @@ impl GoogleAudio for LinuxPcmAudio {
     fn start(&mut self) -> io::Result<()> {
         if self.cancelled.load(Ordering::Acquire) {
             return Err(io::ErrorKind::Interrupted.into());
+        }
+        if let Some(path) = &self.review_config {
+            let enabled = fs::read(path)
+                .ok()
+                .filter(|bytes| bytes.len() <= 4096)
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .and_then(|value| value["enabled"].as_bool())
+                .unwrap_or(false);
+            if let Ok(mut capture) = self.review_pcm.lock() {
+                *capture = enabled.then(Vec::new);
+            }
         }
         if self.child.is_some() || self.relay.is_some() {
             return Err(io::ErrorKind::AlreadyExists.into());
@@ -209,10 +238,11 @@ impl GoogleAudio for LinuxPcmAudio {
         self.child = Some(child);
         let closing = self.closing.clone();
         let produced = self.total_produced.clone();
+        let review_pcm = self.review_pcm.clone();
         self.reader = Some(
             thread::Builder::new()
                 .name("voicetype-google-pcm-read".into())
-                .spawn(move || read_pcm(output, sender, closing, produced))?,
+                .spawn(move || read_pcm(output, sender, closing, produced, review_pcm))?,
         );
         Ok(())
     }
@@ -307,6 +337,10 @@ impl GoogleAudio for LinuxPcmAudio {
         }
         Ok(())
     }
+
+    fn take_review_pcm(&mut self) -> Option<Vec<u8>> {
+        self.review_pcm.lock().ok()?.take()
+    }
 }
 
 impl Drop for LinuxPcmAudio {
@@ -365,6 +399,7 @@ fn read_pcm(
     sender: SyncSender<Vec<u8>>,
     closing: Arc<AtomicBool>,
     produced: Arc<AtomicU64>,
+    review_pcm: Arc<Mutex<Option<Vec<u8>>>>,
 ) -> io::Result<u64> {
     let mut total = 0u64;
     let mut held = Vec::<u8>::new();
@@ -381,6 +416,11 @@ fn read_pcm(
             if total > MAX_PCM {
                 return Err(io::ErrorKind::InvalidData.into());
             }
+            if let Ok(mut capture) = review_pcm.lock() {
+                if let Some(audio) = capture.as_mut() {
+                    audio.extend_from_slice(&frame);
+                }
+            }
             produced.store(total, Ordering::Release);
             send_frame(&sender, frame, &closing)?;
         }
@@ -392,6 +432,11 @@ fn read_pcm(
         total += held.len() as u64;
         if total > MAX_PCM {
             return Err(io::ErrorKind::InvalidData.into());
+        }
+        if let Ok(mut capture) = review_pcm.lock() {
+            if let Some(audio) = capture.as_mut() {
+                audio.extend_from_slice(&held);
+            }
         }
         produced.store(total, Ordering::Release);
         send_frame(&sender, held, &closing)?;

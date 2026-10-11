@@ -72,14 +72,14 @@ while True:
     fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
     let workspace = root.path().join("workspace");
     fs::create_dir(&workspace).unwrap();
-    let mut terminal = GoogleTerminal::launch(TerminalLaunch {
+    let launch = TerminalLaunch {
         sha256: format!("{:x}", Sha256::digest(fs::read(&script).unwrap())),
         executable: script,
         workspace,
         profile: root.path().to_path_buf(),
         editor: env!("CARGO_BIN_EXE_voicetype-google-editor").into(),
-    })
-    .unwrap();
+    };
+    let mut terminal = GoogleTerminal::launch(launch.clone()).unwrap();
     for _ in 0..100 {
         if ready.exists() {
             break;
@@ -97,4 +97,14 @@ while True:
         "完整句子 GitHub"
     );
     terminal.shutdown().unwrap();
+    // A fresh prepared CLI has its own empty preflight and two snapshots;
+    // the resident worker must not carry capture count across sentences.
+    let mut next = GoogleTerminal::launch(launch).unwrap();
+    assert_eq!(next.capture_editor(Duration::from_secs(1)).unwrap(), "");
+    assert_eq!(next.capture_editor(Duration::from_secs(1)).unwrap(), "早期");
+    assert_eq!(
+        next.capture_editor(Duration::from_secs(1)).unwrap(),
+        "完整句子 GitHub"
+    );
+    next.shutdown().unwrap();
 }

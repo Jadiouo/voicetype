@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 description = "Platform-independent commands for the VoiceType desktop app"
 
+[features]
+default = ["shared-review-in-app"]
+shared-review-in-app = []
+
 [[bin]]
 name = "voicetype-google-editor"
 path = "src/bin/google_editor.rs"
@@ -32,6 +36,8 @@ tar = "0.4"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["rt", "time", "macros", "net"] }
 portable-pty = "0.9.0"
+anyhow = "1.0.104"
+tracing = "0.1.44"
 
 [target.'cfg(unix)'.dependencies]
 socket2 = { version = "0.6", features = ["all"] }

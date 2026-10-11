@@ -23,8 +23,8 @@ children and only then offers the second draft to the common provider and
 target coordinator. The normal relay pace is 16 kHz mono s16 real time even
 after the official recorder pauses its reads. Catch-up is an explicit opt-in,
 defaults off, and uses at most 2× rate after stop when queued audio reaches
-200 ms; it returns to 1× below 100 ms. The remaining worker wiring
-must feed its result through the existing vocabulary, Traditional Chinese
+200 ms; it returns to 1× below 100 ms. The App worker
+feeds its result through the existing vocabulary, Traditional Chinese
 conversion, optional CPU spelling and focus-protected delivery path.
 
 The Linux path has a synthetic recorder/CLI end-to-end test that compares PCM
@@ -42,25 +42,37 @@ While the provider is alive, queued `Final` and `Released` events wait for the
 consumer and are not silently skipped. `Released` is emitted only after
 verified cleanup. A cleanup failure leaves the worker and actual recorder
 owner alive for retry, even after the provider's bounded Drop returns.
-**App integration must move its `InputLease` into that resident owner before
-capture and retain it through child reap; the caller must not infer microphone
-release from Drop or free a separate lease while a detached worker remains.**
-The App should surface unresolved cleanup as busy/failed rather than starting
-another microphone provider. The current adapter slice does not yet hold an
-App `InputLease`; this is a hard wiring requirement for the next stage.
+The App moves its `InputLease` into that resident owner before capture and
+retains it through child reap, including detached cleanup. The caller cannot
+infer microphone release from Drop. After each verified cleanup, the worker
+prepares a fresh, empty CLI boundary while idle, like the existing daily flow;
+the next Start waits for it. Prewarming is shown separately from ready, and a
+failed prewarm rejects the next Start without opening a microphone. A new
+terminal resets its editor capture count and time budget for each sentence.
+The measured capture-ready latency of a logged-in official CLI remains unknown.
+
+Linux App activation is explicit. Selecting Google saves a preference without
+recording; loading verifies the installed CLI version and image, bundled
+helpers, and an empty editor callback. Fcitx route v2 requires an exact
+capability handshake before it accepts Ctrl+CapsLock toggle; Local retains
+Ctrl+Alt press/release. Both use the same Coordinator and original-target
+delivery. A read-only check refuses App Google activation when an enabled
+legacy Google addon is configured for the same toggle, avoiding two simultaneous
+hotkey owners. A reversible transfer/restore action with loaded-state checks
+is still required before migrating that daily setup; the App does not change it.
 
 The Windows process owner attaches the ConPTY child to a kill-on-close Job
 Object before ready; CI has a synthetic ConPTY/editor fixture. Windows CLI
 microphone PCM drain and its native stop behavior have not been verified, so
 Windows Google voice remains unavailable until that native path and a Windows
-11 user trial pass. The current settings UI also does not activate the Linux
-adapter. The preview must continue to label Google as unavailable until its
-input/worker wiring and live acceptance are complete.
+11 user trial pass. Linux App wiring has synthetic worker, Fcitx and package
+checks, but has not passed a logged-in official CLI or microphone trial.
 
 For a later candidate, the minimum user-operated trial is: install/login with
 the official CLI instructions, grant its voice permission, select Google in
-VoiceType, focus a disposable text field, record one Traditional Chinese
-sentence with an English term, release once, and verify exactly one insertion
+VoiceType, focus a disposable text field, press Ctrl+CapsLock to record one
+Traditional Chinese sentence with an English term, press it again to stop,
+and verify exactly one insertion
 at the original field with no agent prompt submission. Repeat once after
 changing focus to check recovery. Windows 11 needs the same trial on the
 actual machine. A version or packaging check cannot replace it.

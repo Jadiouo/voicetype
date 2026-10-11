@@ -3,6 +3,8 @@
 //! or an Enter key. This module does not infer a transcript from terminal bytes.
 pub mod adapter;
 #[cfg(target_os = "linux")]
+pub mod legacy_config;
+#[cfg(target_os = "linux")]
 pub mod linux_audio;
 pub mod release;
 pub mod terminal;
@@ -15,8 +17,8 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+        mpsc, Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -47,22 +49,26 @@ impl GoogleSetup {
 
     /// Read-only inspection; selecting Google never logs in or opens a mic.
     pub fn inspect(&self) -> GoogleInstallState {
-        let Ok(meta) = fs::symlink_metadata(&self.executable) else {
-            return GoogleInstallState::Missing;
+        let Ok(digest) = Self::image_digest(&self.executable) else {
+            return if fs::symlink_metadata(&self.executable).is_err() {
+                GoogleInstallState::Missing
+            } else {
+                GoogleInstallState::Incompatible
+            };
         };
-        if !self.executable.is_absolute()
-            || !meta.file_type().is_file()
-            || self.reviewed_sha256.len() != 64
-        {
-            return GoogleInstallState::Incompatible;
-        }
-        let Ok(bytes) = fs::read(&self.executable) else {
-            return GoogleInstallState::Incompatible;
-        };
-        if format!("{:x}", Sha256::digest(&bytes)) != self.reviewed_sha256.to_ascii_lowercase() {
+        if self.reviewed_sha256.len() != 64 || digest != self.reviewed_sha256.to_ascii_lowercase() {
             return GoogleInstallState::Incompatible;
         }
         GoogleInstallState::OfficialCheckRequired
+    }
+
+    pub(crate) fn image_digest(executable: &Path) -> io::Result<String> {
+        let meta = fs::symlink_metadata(executable)?;
+        if !executable.is_absolute() || !meta.file_type().is_file() {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let bytes = fs::read(executable)?;
+        Ok(format!("{:x}", Sha256::digest(&bytes)))
     }
 }
 
@@ -116,10 +122,10 @@ impl GoogleText {
 
 /// External CLI/audio boundary. A production implementation must own both the
 /// CLI and recorder until `cleanup` confirms that neither can use the microphone.
-/// The later App integration must transfer its `InputLease` into this resident
-/// owner before capture. Dropping `GoogleProvider` can detach a cleanup worker;
-/// the caller must not release the microphone lease merely because Drop returns.
-/// Keep that lease with the boundary until confirmed cleanup and child reap.
+/// App integration transfers its `InputLease` into this resident owner before
+/// capture. Dropping `GoogleProvider` can detach a cleanup worker; the caller
+/// cannot release the microphone lease merely because Drop returns. Keep the
+/// lease with the boundary until confirmed cleanup and child reap.
 /// `stop_capture_and_drain` includes recorder stdout EOF and complete relay
 /// consumption. `capture_editor` reads an owned draft, never terminal output.
 pub trait GoogleBoundary {
@@ -133,6 +139,15 @@ pub trait GoogleBoundary {
     fn settle(&mut self, duration: Duration) -> io::Result<()>;
     fn reject_known_voice_errors(&mut self) -> io::Result<()>;
     fn cleanup(&mut self) -> io::Result<()>;
+    /// Optional complete 16 kHz s16 mono capture for post-delivery review.
+    /// The owner may return it only after the recorder reader has reached EOF.
+    fn take_review_pcm(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    /// Prepare a fresh empty CLI after verified cleanup, while idle.
+    fn prewarm_next(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 pub struct GoogleAttempt {
@@ -238,11 +253,36 @@ fn emit_event(
     }
 }
 
+fn release_and_prewarm(
+    boundary: &mut impl GoogleBoundary,
+    output: &mpsc::SyncSender<(SessionKey, ProviderEvent)>,
+    shutdown: &AtomicBool,
+    warm_state: &AtomicU8,
+    key: SessionKey,
+) {
+    // The old slot is gone now. Expose that before the asynchronous Released
+    // event can make the Coordinator idle and accept another Start.
+    warm_state.store(1, Ordering::Release);
+    if !emit_event(output, shutdown, (key, ProviderEvent::Released))
+        || shutdown.load(Ordering::Acquire)
+    {
+        return;
+    }
+    warm_state.store(
+        if boundary.prewarm_next().is_ok() {
+            0
+        } else {
+            2
+        },
+        Ordering::Release,
+    );
+}
+
 /// Resident owner for one official CLI and microphone. It maps the bounded
 /// external operation to the shared coordinator events. The OS boundary owns
 /// actual recorder/PTY process handles; `Released` follows verified cleanup.
 /// Drop is bounded, but a failed cleanup can outlive it on the worker thread;
-/// a future App input lease must therefore be owned by that worker/boundary.
+/// the App input lease is therefore owned by that worker/boundary.
 pub struct GoogleProvider {
     requests: mpsc::SyncSender<Request>,
     events: mpsc::Receiver<(SessionKey, ProviderEvent)>,
@@ -250,6 +290,8 @@ pub struct GoogleProvider {
     cancelled: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    review: Arc<Mutex<Option<(SessionKey, String, Vec<u8>)>>>,
+    warm_state: Arc<AtomicU8>, // 0 ready, 1 prewarming, 2 failed
 }
 
 impl GoogleProvider {
@@ -268,6 +310,10 @@ impl GoogleProvider {
         let worker_cancelled = cancelled.clone();
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = shutdown.clone();
+        let review = Arc::new(Mutex::new(None));
+        let worker_review = review.clone();
+        let warm_state = Arc::new(AtomicU8::new(0));
+        let worker_warm_state = warm_state.clone();
         let thread = thread::Builder::new()
             .name("voicetype-google".into())
             .spawn(move || {
@@ -288,10 +334,12 @@ impl GoogleProvider {
                             }
                             if worker_cancelled.load(Ordering::Acquire) {
                                 if boundary.cleanup().is_ok() {
-                                    let _ = emit_event(
+                                    release_and_prewarm(
+                                        &mut boundary,
                                         &output,
                                         &worker_shutdown,
-                                        (key, ProviderEvent::Released),
+                                        &worker_warm_state,
+                                        key,
                                     );
                                 } else {
                                     let _ = emit_event(
@@ -317,10 +365,12 @@ impl GoogleProvider {
                                 }
                                 Ok(mut started) => {
                                     if started.cancel(&mut boundary).is_ok() {
-                                        let _ = emit_event(
+                                        release_and_prewarm(
+                                            &mut boundary,
                                             &output,
                                             &worker_shutdown,
-                                            (key, ProviderEvent::Released),
+                                            &worker_warm_state,
+                                            key,
                                         );
                                     } else {
                                         attempt = Some(started);
@@ -336,10 +386,12 @@ impl GoogleProvider {
                                         ),
                                     );
                                     if boundary.cleanup().is_ok() {
-                                        let _ = emit_event(
+                                        release_and_prewarm(
+                                            &mut boundary,
                                             &output,
                                             &worker_shutdown,
-                                            (key, ProviderEvent::Released),
+                                            &worker_warm_state,
+                                            key,
                                         );
                                     } else {
                                         attempt = Some(GoogleAttempt { finished: true });
@@ -349,16 +401,29 @@ impl GoogleProvider {
                         }
                         Request::Stop(key) => {
                             if let Some(mut started) = attempt.take() {
-                                match started
+                                let prepared = started
                                     .finish_with_cancel(&mut boundary, &worker_cancelled)
-                                    .and_then(&format)
-                                {
-                                    Ok(text) => {
-                                        let _ = emit_event(
+                                    .and_then(|raw| {
+                                        let pcm = boundary.take_review_pcm();
+                                        let text = format(raw.clone())?;
+                                        Ok((text, raw, pcm))
+                                    });
+                                match prepared {
+                                    Ok((text, raw, pcm)) => {
+                                        if let Some(pcm) = pcm {
+                                            if let Ok(mut pending) = worker_review.lock() {
+                                                *pending = Some((key, raw, pcm));
+                                            }
+                                        }
+                                        if !emit_event(
                                             &output,
                                             &worker_shutdown,
                                             (key, ProviderEvent::Final(text)),
-                                        );
+                                        ) {
+                                            if let Ok(mut pending) = worker_review.lock() {
+                                                *pending = None;
+                                            }
+                                        }
                                     }
                                     Err(_) if !worker_cancelled.load(Ordering::Acquire) => {
                                         let _ = emit_event(
@@ -375,10 +440,12 @@ impl GoogleProvider {
                                     Err(_) => {}
                                 }
                                 if boundary.cleanup().is_ok() {
-                                    let _ = emit_event(
+                                    release_and_prewarm(
+                                        &mut boundary,
                                         &output,
                                         &worker_shutdown,
-                                        (key, ProviderEvent::Released),
+                                        &worker_warm_state,
+                                        key,
                                     );
                                 } else {
                                     attempt = Some(started);
@@ -388,10 +455,12 @@ impl GoogleProvider {
                         Request::Cancel(key) => {
                             if let Some(mut started) = attempt.take() {
                                 if started.cancel(&mut boundary).is_ok() {
-                                    let _ = emit_event(
+                                    release_and_prewarm(
+                                        &mut boundary,
                                         &output,
                                         &worker_shutdown,
-                                        (key, ProviderEvent::Released),
+                                        &worker_warm_state,
+                                        key,
                                     );
                                 } else {
                                     let _ = emit_event(
@@ -425,6 +494,8 @@ impl GoogleProvider {
             cancelled,
             shutdown,
             thread: Some(thread),
+            review,
+            warm_state,
         })
     }
 
@@ -443,11 +514,27 @@ impl GoogleProvider {
         }
         Some(event)
     }
+
+    /// One complete capture, exposed only to the post-delivery review gate.
+    pub fn take_review_sample(&mut self, key: SessionKey) -> Option<(String, Vec<u8>)> {
+        let mut pending = self.review.lock().ok()?;
+        match pending.take() {
+            Some((sample_key, raw, pcm)) if sample_key == key => Some((raw, pcm)),
+            _ => None,
+        }
+    }
+
+    pub fn warm_state(&self) -> u8 {
+        self.warm_state.load(Ordering::Acquire)
+    }
 }
 
 impl ProviderPort for GoogleProvider {
     fn send(&mut self, command: ProviderCommand) -> Result<(), CommandRejected> {
         let is_start = matches!(command, ProviderCommand::Start { .. });
+        if is_start && self.warm_state() == 2 {
+            return Err(CommandRejected);
+        }
         let request = match command {
             ProviderCommand::Start { key, .. }
                 if key.provider() == Provider::Google && self.active.is_none() =>

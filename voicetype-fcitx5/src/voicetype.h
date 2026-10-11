@@ -74,6 +74,7 @@ private:
     std::unique_ptr<IpcClient> ipc_;
     std::unique_ptr<fcitx::EventSourceTime> inputRouteTimer_;
     std::string appInputPath_;
+    bool appGoogleToggle_ = false;
     std::string rejectedInputPath_;
     int appInputPid_ = 0;
     bool appInputReady_ = false;

@@ -127,6 +127,21 @@ public:
         return false;
 #endif
     }
+    bool supports(const fcitx::InputContext *ic) const {
+#ifdef VOICETYPE_HAVE_X11_CAPS_RESTORE
+        if (!ic || !module_) return false;
+        const auto display = ic->display();
+        if (display.rfind("x11:", 0) != 0) return false;
+        const auto name = display.substr(4);
+        const auto it = connections_.find(name);
+        return it != connections_.end() && it->second->ready &&
+            module_->call<fcitx::IXCBModule::exists>(name) &&
+            !module_->call<fcitx::IXCBModule::isXWayland>(name);
+#else
+        (void)ic;
+        return false;
+#endif
+    }
     bool filter(fcitx::KeyEvent &event, bool shortcutPress) {
 #ifdef VOICETYPE_HAVE_X11_CAPS_RESTORE
         const auto now = fcitx::now(CLOCK_MONOTONIC);
@@ -257,4 +272,5 @@ CapsLockGuard::CapsLockGuard(fcitx::Instance *instance) : impl_(std::make_unique
 CapsLockGuard::~CapsLockGuard() = default;
 bool CapsLockGuard::filter(fcitx::KeyEvent &event, bool shortcutPress) { return impl_->filter(event, shortcutPress); }
 bool CapsLockGuard::enabled() const { return impl_->enabled(); }
+bool CapsLockGuard::supports(const fcitx::InputContext *ic) const { return impl_->supports(ic); }
 }

@@ -6,6 +6,12 @@
 #include <cstdlib>
 
 namespace voicetype {
+GoogleToggleAction googleToggleAction(bool keyDown, bool repeat, bool recording,
+                                     bool deliveryPending, bool originalTarget) {
+    if (!keyDown || repeat) return GoogleToggleAction::None;
+    if (recording) return originalTarget ? GoogleToggleAction::Stop : GoogleToggleAction::None;
+    return deliveryPending ? GoogleToggleAction::None : GoogleToggleAction::Start;
+}
 namespace {
 struct Fd {
     int value;
@@ -30,16 +36,22 @@ std::optional<InputRoute> desktopInputRoute() {
     char bytes[256];
     const auto length = read(record.value, bytes, sizeof(bytes));
     if (length <= 0 || length == sizeof(bytes)) return std::nullopt;
-    const std::string data(bytes, length), prefix = "voicetype-input-v1\n";
+    const std::string data(bytes, length);
+    const bool googleToggle = data.rfind("voicetype-input-v2\n", 0) == 0;
+    const std::string prefix = googleToggle ? "voicetype-input-v2\n" : "voicetype-input-v1\n";
     if (data.rfind(prefix, 0) != 0) return std::nullopt;
     const auto end = data.find('\n', prefix.size());
     if (end == std::string::npos) return std::nullopt;
     int pid = 0;
     const auto parsed = std::from_chars(data.data() + prefix.size(), data.data() + end, pid);
     if (parsed.ec != std::errc{} || parsed.ptr != data.data() + end || pid <= 0) return std::nullopt;
-    const auto socket = data.substr(end + 1, data.size() - end - 2);
-    if (data.back() != '\n' || socket.empty() || socket[0] != '/' || socket.size() >= 108 ||
+    const auto suffix = data.substr(end + 1);
+    const auto socketEnd = suffix.find('\n');
+    if (socketEnd == std::string::npos) return std::nullopt;
+    const auto socket = suffix.substr(0, socketEnd);
+    if (suffix.substr(socketEnd + 1) != (googleToggle ? "google-toggle\n" : "") ||
+        socket.empty() || socket[0] != '/' || socket.size() >= 108 ||
         socket.find_first_of("\n\r") != std::string::npos || socket.find('\0') != std::string::npos) return std::nullopt;
-    return InputRoute{socket, pid};
+    return InputRoute{socket, pid, googleToggle};
 }
 }

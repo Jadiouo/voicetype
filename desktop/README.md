@@ -3,9 +3,10 @@
 This branch starts the Linux/Windows application described in
 [SDD](../docs/app/SDD.md) and [TDD](../docs/app/TDD.md).
 
-**Linux now has an explicit Fcitx-to-app local dictation path and an optional
-app-owned CPU spelling worker. Google and Windows speech integration and live
-acceptance remain unfinished.** Keep the existing installation available during preview testing.
+**Linux has explicit Fcitx-to-app Local and Google routes and an optional
+app-owned CPU spelling worker. Google still needs a logged-in official CLI and
+microphone acceptance; Windows Google recording remains unavailable.** Keep the
+existing installation available during preview testing.
 
 Model download/check/cancel is available in the UI. Linux installers now carry a
 source-built Nano CPU runtime: "載入本機引擎" verifies installed models and packaged
@@ -29,6 +30,21 @@ unresponsive app also falls back; a clean account without a legacy daemon simply
 has no dictation until the app is enabled again. Input setup is explicit on each
 app run. App vocabulary and sampled review use their shared settings described
 below. The app-owned spelling worker is separate from the legacy service.
+
+Google uses the user's separately installed official Antigravity CLI and its
+normal account login. Selecting Google only saves a preference. **載入 Google
+引擎** checks a reviewed CLI version/image, bundled helpers, login/editor
+callback and the existing Google Fcitx shortcut setting before any recording;
+the CLI itself is not bundled or updated. Once the App route connects, press
+**Ctrl+CapsLock** to start and again to stop, then wait for one insertion at the
+original focused field. Escape cancels. Local keeps its Ctrl+Alt hold/release
+gesture. After each sentence the worker prepares a new empty CLI in the
+background; a pending prewarm is displayed separately and cannot open a second
+microphone. If the existing daily Google addon is enabled on Ctrl+CapsLock, the
+App refuses to take that shortcut. The reversible transfer/restore action for
+that configuration is still pending; this preview never changes it implicitly.
+The current Ctrl+CapsLock route needs Fcitx's X11 Caps restoration capability;
+other display protocols have not passed a shortcut trial.
 
 "Check services" sends a read-only ping to an existing Linux local engine and
 distinguishes response, missing service, timeout and incompatible reply. It does
@@ -56,6 +72,7 @@ and `libopencc-dev`, in addition to Tauri prerequisites):
 python3 scripts/build-desktop-native.py --cache private/native-source-cache --output private/release-native
 bash scripts/build-desktop-runtime.sh private/release-native desktop/target/runtime --source-built
 python3 scripts/build-desktop-input.py desktop/target/input
+python3 scripts/build-desktop-google.py desktop/target/google
 ```
 
 For optional CPU spelling, use an isolated Python 3.12 environment with
@@ -111,10 +128,10 @@ shell commands or access arbitrary files. Only typed Rust commands expose settin
 Core tests use temporary directories; no microphone, live dictation, GPU, account
 login or text injection is part of preview validation.
 
-The in-progress official Google CLI adapter, its exact-version gate and
-synthetic PCM/PTY tests are described in [GOOGLE-ADAPTER.md](GOOGLE-ADAPTER.md).
-The settings window does not activate this adapter yet; selecting Google is
-still a saved preference, not evidence of account login or live speech.
+The official Google CLI adapter, exact-version gate, App route and synthetic
+PCM/PTY tests are described in [GOOGLE-ADAPTER.md](GOOGLE-ADAPTER.md).
+Selecting Google is only a saved preference; an installed image or fixture
+test is not evidence of account login or live speech.
 
 The CI UI check runs the installer payload with a real platform WebDriver, chooses
 Google, reopens the app, and checks error/reload behavior. To use a disposable
@@ -150,7 +167,8 @@ not permission to discard protected names.
 
 Open **抽樣校對** and enable sampling explicitly. App-owned local dictation uses
 `review.json` and `review/` beside `desktop.json`, separate from the daily install.
-Default: off, at most five samples per local day, only 8–61 second recordings,
+Google in the Linux App uses the same collector only after confirmed delivery
+to the original field. Default: off, at most five samples per local day, only 8–61 second recordings,
 seven-day retention. Sampling never opens the microphone independently; the
 existing collector queues a selected sample only after queuing its final result.
 Disabling is rechecked before disk writes. The tray shows the pending count and
@@ -165,6 +183,6 @@ changes require reload and preserve unsaved edits. Delete removes both text and
 audio. Expiry also cleans damaged/abandoned recordings; the app must be running
 (or subsequently reopened) for cleanup to execute.
 
-Google and Windows speech collection remains unavailable until those adapters
-are connected. The shared review commands/editor work on both platforms; fixture
-WAV tests are not evidence of live microphone or recognition quality.
+Windows Google speech collection remains unavailable until its native drain
+contract is verified. The shared review commands/editor work on both platforms;
+fixture WAV tests are not evidence of live microphone or recognition quality.

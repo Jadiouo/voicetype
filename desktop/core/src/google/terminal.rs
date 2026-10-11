@@ -19,6 +19,7 @@ use std::{
 
 const OUTPUT_LIMIT: usize = 256 * 1024;
 
+#[derive(Clone)]
 pub struct TerminalLaunch {
     pub executable: PathBuf,
     pub sha256: String,

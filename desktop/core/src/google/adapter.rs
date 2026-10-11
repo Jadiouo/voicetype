@@ -25,6 +25,9 @@ pub trait GoogleAudio {
     fn stop_and_drain(&mut self) -> io::Result<()>;
     fn wait_recorder_exit(&mut self) -> io::Result<()>;
     fn cleanup(&mut self) -> io::Result<()>;
+    fn take_review_pcm(&mut self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 pub struct GoogleCliBoundary<A: GoogleAudio> {
@@ -148,5 +151,9 @@ impl<A: GoogleAudio> GoogleBoundary for GoogleCliBoundary<A> {
         terminal?;
         self.cleaned = true;
         Ok(())
+    }
+
+    fn take_review_pcm(&mut self) -> Option<Vec<u8>> {
+        self.audio.take_review_pcm()
     }
 }

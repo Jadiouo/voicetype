@@ -4565,6 +4565,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "voicetype-app-core"
 version = "0.2.0-alpha.1"
 dependencies = [
+ "anyhow",
  "bzip2",
  "libc",
  "portable-pty",
@@ -4579,6 +4580,7 @@ dependencies = [
  "tokio",
  "toml 1.1.6+spec-1.1.0",
  "toml_edit 0.25.15+spec-1.1.0",
+ "tracing",
  "voicetype-text",
  "windows-sys 0.61.2",
 ]
@@ -4594,6 +4596,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-single-instance",
  "voicetype-app-core",
+ "voicetype-text",
 ]
 
 [[package]]
