@@ -1,5 +1,6 @@
 //! Bounded interactive PTY on Linux and ConPTY on Windows. Terminal output is
 //! drained only to prevent blocking; it is never used as transcript text.
+use super::status::VoiceStatusProbe;
 #[cfg(windows)]
 use crate::windows_job::WindowsJob;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -13,7 +14,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -60,6 +61,7 @@ pub struct GoogleTerminal {
     reader: Option<JoinHandle<()>>,
     reader_done: Arc<AtomicBool>,
     output_bytes: Arc<AtomicUsize>,
+    voice_status: Arc<Mutex<VoiceStatusProbe>>,
     session: Arc<tempfile::TempDir>,
     captures: usize,
 }
@@ -178,8 +180,10 @@ impl GoogleTerminal {
         let writer = pair.master.take_writer().map_err(io::Error::other)?;
         let mut output = pair.master.try_clone_reader().map_err(io::Error::other)?;
         let output_bytes = Arc::new(AtomicUsize::new(0));
+        let voice_status = Arc::new(Mutex::new(VoiceStatusProbe::default()));
         let reader_done = Arc::new(AtomicBool::new(false));
         let count = output_bytes.clone();
+        let status = voice_status.clone();
         let done = reader_done.clone();
         let reader = thread::Builder::new()
             .name("voicetype-google-pty".into())
@@ -190,6 +194,9 @@ impl GoogleTerminal {
                         break;
                     }
                     count.fetch_add(n, Ordering::AcqRel);
+                    if let Ok(mut probe) = status.lock() {
+                        probe.feed(&buffer[..n]);
+                    }
                 }
                 done.store(true, Ordering::Release);
             })?;
@@ -206,6 +213,7 @@ impl GoogleTerminal {
             reader: Some(reader),
             reader_done,
             output_bytes,
+            voice_status,
             session,
             captures: 0,
         })
@@ -230,6 +238,29 @@ impl GoogleTerminal {
         let writer = self.writer.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
         writer.write_all(control.bytes())?;
         writer.flush()
+    }
+
+    /// Call immediately before F5. A new generation cannot inherit a prior
+    /// status render; only a bounded, volatile status candidate is inspected.
+    pub fn arm_voice_status(&mut self) -> io::Result<u64> {
+        self.voice_status
+            .lock()
+            .map(|mut status| status.arm())
+            .map_err(|_| io::ErrorKind::Other.into())
+    }
+
+    pub fn voice_status_ready(&self, generation: u64) -> io::Result<bool> {
+        self.voice_status
+            .lock()
+            .map(|status| status.ready(generation))
+            .map_err(|_| io::ErrorKind::Other.into())
+    }
+
+    pub fn fail_voice_status(&mut self) -> io::Result<()> {
+        self.voice_status
+            .lock()
+            .map(|mut status| status.fail())
+            .map_err(|_| io::ErrorKind::Other.into())
     }
 
     pub fn capture_dir(&self) -> PathBuf {

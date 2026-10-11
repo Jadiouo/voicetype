@@ -12,6 +12,7 @@ pub mod legacy_transfer;
 pub mod linux_audio;
 pub mod native;
 pub mod release;
+pub(crate) mod status;
 pub mod terminal;
 use crate::{
     CommandRejected, Provider, ProviderCommand, ProviderEvent, ProviderPort, SessionFailure,
