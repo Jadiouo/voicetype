@@ -235,6 +235,7 @@ def audit(extracted, installed, setup, target, repo, source_commit):
     recipe = {path: sha256(repo / path) for path in (
         "desktop/Cargo.lock", "voicetyped/Cargo.lock", "desktop/package-lock.json",
         "desktop/src-tauri/tauri.conf.json", "desktop/src-tauri/tauri.windows.conf.json",
+        "desktop/src-tauri/windows/upgrade-legacy-ucrt.nsh",
         "scripts/build-desktop-google.py", "scripts/build-desktop-opencc.py",
         "scripts/build-desktop-native-windows.py", ".github/workflows/desktop-preview.yml")}
     return {"schema_version": 1, "scope": "Windows NSIS setup and installed generated uninstaller",
