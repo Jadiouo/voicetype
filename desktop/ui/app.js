@@ -88,9 +88,9 @@ function runtimeControls(view) {
     || view?.input_requested || !!view?.settings.dictation.busy;
   document.querySelector('#runtime-note').textContent = !view?.local_runtime_bundled
     ? '這個平台的引擎封裝仍在準備中。'
-    : view.windows_input && view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。結果目前保留在待處理文字供手動複製，尚未自動送字。`
-    : view.windows_input && view.input_requested ? 'Windows 快捷鍵已啟用；目前只支援一般 Win32 Edit 欄位。'
-    : view.windows_input && loaded ? '引擎已載入。啟用快捷鍵後，只在一般 Win32 Edit 欄位開始錄音。'
+    : view.windows_input && view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。辨識完成後會送進目前聚焦的欄位；欄位改變、提權或 UWP 程式、輸入法組字中時，結果會保留在待處理文字。`
+    : view.windows_input && view.input_requested ? 'Windows 快捷鍵已啟用；辨識完成後送進目前聚焦的欄位（不支援提權視窗、UWP、32 位元程式）。'
+    : view.windows_input && loaded ? '引擎已載入。啟用快捷鍵後，在有焦點的欄位按快捷鍵開始錄音。'
     : view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。停用或結束 App 後回到原服務。`
     : view.input_requested ? '等待 Fcitx 接管：原聽寫結束後才切換。若持續等待，請確認已載入本版 Fcitx 模組；舊的使用者模組可能遮住安裝包版本。'
     : loaded ? '引擎已載入。按「啟用本機聽寫」後，Fcitx 才會在空閒時接管快捷鍵。'
@@ -108,7 +108,7 @@ async function refreshRecovery() {
   recovery = next;
   recoveryContent.hidden = !next;
   recoveryNote.textContent = !next ? '目前沒有待處理的文字。'
-    : next.reason === 'not_sent' ? '尚未自動送字；完整文字保留在這裡，可自行複製。'
+    : next.reason === 'not_sent' ? '未送出（目標不支援、修飾鍵未放開或文字不適合送出）；完整文字保留在這裡，可自行複製。'
     : next.reason === 'unconfirmed' ? '無法確認是否已送出，文字可能已在原欄位中。請先檢查原欄位，避免重複貼上。'
     : next.reason === 'partial' ? '可能只有部分文字送出。請先檢查原欄位，再選取需要的內容。'
     : '輸入位置已變更，完整文字保留在這裡。';

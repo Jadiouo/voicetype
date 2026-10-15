@@ -1306,7 +1306,7 @@ impl crate::DeliveryPort for WindowsRecovery {
         _text: &str,
     ) -> crate::DeliveryOutcome {
         if crate::windows_input::focus_matches(target) {
-            // This recovery-only adapter has not attempted any insertion.
+            // Recovery-only: no insertion is attempted here.
             crate::DeliveryOutcome::NotSent
         } else {
             crate::DeliveryOutcome::FocusChanged

@@ -8,14 +8,17 @@ Google provider from the desktop App. Existing preview settings selecting Google
 are switched to Local on startup or reload; vocabulary, review and other settings remain.
 If an old Linux shortcut handoff was left unfinished, the settings show a
 recovery-only restore action. It does not start Google recognition.
-Windows automatic text delivery and live speech still require platform acceptance.
+Windows delivers recognized text by `SendInput` (Unicode) into the focused field;
+live speech and delivery into real apps still require interactive Windows acceptance.
+Elevated windows, UWP and 32-bit programs are not supported: the text stays in the
+App for manual copy. Line breaks are typed as spaces.
 Keep the existing daily installation available during preview testing.
 
 Model download/check/cancel is available in the UI. Linux installers now carry a
 source-built Nano CPU runtime: "載入本機引擎" verifies installed models and packaged
 bytes, then loads a private owned engine; "停用並卸載引擎" releases it. Loading does
 not record or acquire input. Windows bundles its own CPU runtime, but automatic
-text delivery and live microphone acceptance remain pending.
+text delivery (SendInput, best-effort) and live microphone acceptance remain pending.
 
 On Linux, choose **安裝／更新 Fcitx 模組**, then log out/in when convenient to load
 it. This installs verified versioned files and backs up the exact prior per-user
