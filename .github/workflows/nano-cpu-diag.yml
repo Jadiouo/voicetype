@@ -36,6 +36,8 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: desktop
+      - name: Discard restored build outputs
+        run: python tests/clean_build_outputs.py
       - name: Build pinned Windows OpenCC and dictionaries
         run: python ../scripts/build-desktop-opencc.py target/opencc --stage-tests target/debug/deps
       - name: Build pinned Windows CPU Nano runtime
