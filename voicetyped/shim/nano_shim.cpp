@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -91,7 +92,11 @@ extern "C" VtNano *vt_nano_init(const char *directory, const char *vad_model,
         config.feat_config.feature_dim = 80;
         config.decoding_method = "greedy_search";
         config.model_config.num_threads = 4;
-        config.model_config.provider = "cpu";
+        // Diagnostic override: VOICETYPE_NANO_ORT_CONFIG names a sherpa
+        // provider config file (key=value lines) for ORT session options.
+        const char *ort_config = std::getenv("VOICETYPE_NANO_ORT_CONFIG");
+        std::string provider = (ort_config && *ort_config) ? std::string("cpu:") + ort_config : "cpu";
+        config.model_config.provider = provider.c_str();
         auto &nano = config.model_config.funasr_nano;
         nano.encoder_adaptor = encoder.c_str();
         nano.embedding = embedding.c_str();
@@ -121,9 +126,11 @@ extern "C" VtNano *vt_nano_init(const char *directory, const char *vad_model,
         if (!ctx->vad) throw std::runtime_error("failed to create independent Silero VAD");
         ctx->recognizer = SherpaOnnxCreateOfflineRecognizer(&config);
         if (!ctx->recognizer) throw std::runtime_error("failed to create Nano recognizer");
-        std::fprintf(stderr, "Nano native: sherpa=%s git=%s ort=%s provider=cpu threads=4 language=auto itn=%d; full-waveform speech gate\n",
+        std::fprintf(stderr, "Nano native: sherpa=%s git=%s ort=%s provider=cpu threads=4 language=auto itn=%d; full-waveform speech gate%s%s\n",
             SherpaOnnxGetVersionStr(), SherpaOnnxGetGitSha1(),
-            SherpaOnnxGetOnnxruntimeVersionStr(), use_itn);
+            SherpaOnnxGetOnnxruntimeVersionStr(), use_itn,
+            (ort_config && *ort_config) ? " ort_config=" : "",
+            (ort_config && *ort_config) ? ort_config : "");
         return ctx.release();
     } catch (const std::exception &e) { error_text(error, cap, e.what()); }
       catch (...) { error_text(error, cap, "unknown native initialization failure"); }
