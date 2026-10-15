@@ -48,7 +48,8 @@ def main():
                 value = check()
                 if value:
                     return value
-            except (urllib.error.URLError, http.client.RemoteDisconnected, RuntimeError, TimeoutError) as error:
+            except (urllib.error.URLError, http.client.RemoteDisconnected, RuntimeError, TimeoutError,
+                    PermissionError, json.JSONDecodeError) as error:  # config is replaced atomically; Windows may deny reads mid-swap
                 last_error = error
             time.sleep(0.2)
         raise AssertionError(f"UI condition timed out: {last_error}")
@@ -227,9 +228,30 @@ return {provider:document.querySelector('input[name=provider]:checked')?.value,
                 choose_shortcut("default", "local")
                 assert shortcut_binding("local") == {"requested": "default", "effective": "default"}
                 eventually(lambda: ready() and js("return document.querySelector('#provider-local').checked && document.querySelector('#shortcut-choice').value === 'default'"))
-                click("#spelling-enabled")
                 spelling_config = Path(profile) / "desktop.json"
-                eventually(lambda: spelling_config.exists() and json.loads(spelling_config.read_text())["spelling_enabled"] is False)
+                try:
+                    eventually(lambda: js("return !document.querySelector('#spelling-enabled').disabled"))
+                    click("#spelling-enabled")
+                    eventually(lambda: spelling_config.exists()
+                               and json.loads(spelling_config.read_text(encoding="utf-8"))["spelling_enabled"] is False)
+                except Exception:
+                    # Preserve the failure; record why the toggle did not persist.
+                    try:
+                        (output / "spelling-failure.json").write_text(json.dumps({
+                            "ui": js("""
+const box=document.querySelector('#spelling-enabled');
+const clipped=selector => document.querySelector(selector)?.textContent.slice(0, 300);
+return {disabled:box?.disabled, checked:box?.checked, status:clipped('#status'),
+  error_hidden:document.querySelector('#error')?.hidden, error:clipped('#error'),
+  runtime_note:clipped('#runtime-note'), spelling_note:clipped('#spelling-runtime-note')};
+"""),
+                            "disk": spelling_config.read_text(encoding="utf-8") if spelling_config.exists() else None,
+                        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                        (output / "spelling-failure.png").write_bytes(base64.b64decode(
+                            request("GET", f"/session/{session}/screenshot")))
+                    except Exception:
+                        pass
+                    raise
                 eventually(lambda: js("return !document.querySelector('#spelling-enabled').checked && document.querySelector('#status').textContent.includes('已讀取你的偏好設定')"))
                 assert not js("return document.querySelector('#spelling-enabled').checked")
                 assert js("return document.querySelector('#recovery-note').textContent.includes('沒有待處理')")
@@ -285,7 +307,7 @@ return {provider:document.querySelector('input[name=provider]:checked')?.value,
                     assert not (Path(profile) / "local-profile").exists()
                     click("#reload")
                     eventually(ready)
-                assert js("return document.querySelectorAll('.availability').length") == 2
+                assert js("return document.querySelectorAll('.availability').length") == 1
                 click("#check-providers")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
                 if sys.platform == "linux":

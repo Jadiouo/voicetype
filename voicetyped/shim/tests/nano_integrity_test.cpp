@@ -2,6 +2,9 @@
 // No models, recordings, GPU, or generated answers are involved.
 #include "nano_shim.h"
 #include "sherpa-onnx/c-api/c-api.h"
+#include <fstream>
+#include <filesystem>
+#include <unistd.h>
 #include <cassert>
 #include <limits>
 #include <cstring>
@@ -22,6 +25,7 @@ struct Scenario {
     size_t output_capacity = 128;
 };
 static Scenario next;
+static std::string last_provider;
 static int created_streams = 0, destroyed_streams = 0;
 static int created_results = 0, destroyed_results = 0;
 static int created_recognizers = 0, destroyed_recognizers = 0;
@@ -39,7 +43,14 @@ const char *SherpaOnnxGetVersionStr() { return "1.13.8"; }
 const char *SherpaOnnxGetGitSha1() { return "8c8e275d"; }
 const char *SherpaOnnxGetOnnxruntimeVersionStr() { return "1.28.2"; }
 const SherpaOnnxOfflineRecognizer *SherpaOnnxCreateOfflineRecognizer(const SherpaOnnxOfflineRecognizerConfig *c) {
-    assert(c && std::string(c->model_config.provider) == "cpu");
+    assert(c);
+    last_provider = c->model_config.provider;
+    assert(last_provider == "cpu" || last_provider.rfind("cpu:", 0) == 0);
+    if (last_provider != "cpu") {
+        std::ifstream f(last_provider.substr(4));
+        std::string line; std::getline(f, line);
+        assert(line == "SessionConfig.session.x64quantprecision=1");
+    }
     assert(c->model_config.num_threads == 4);
     assert(std::string(c->model_config.funasr_nano.user_prompt) == "语音转写:");
     ++created_recognizers;
@@ -162,7 +173,35 @@ static void span_contract(VtNano *ctx) {
     std::cout << "speech span boundary/capacity/tail-padding/reset/RAII controls passed\n";
 }
 
+static void provider_contract() {
+    char error[256]{};
+    // Normal temp dir: private config used during creation, removed afterwards.
+    VtNano *ctx = vt_nano_init("/controlled/model", "/controlled/vad", 1, error, sizeof(error));
+    assert(ctx && last_provider.rfind("cpu:", 0) == 0);
+    assert(!std::filesystem::exists(last_provider.substr(4)));
+    vt_nano_free(ctx);
+    // Unwritable or missing TMPDIR must not stop Nano from starting.
+    std::filesystem::path readonly = std::filesystem::current_path() / "readonly-tmp";
+    std::filesystem::create_directories(readonly);
+    std::filesystem::permissions(readonly, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+    bool root = geteuid() == 0;
+    for (const char *dir : {"/nonexistent/voicetype-tmp", readonly.c_str()}) {
+        if (root && dir == readonly.c_str()) continue;  // root ignores permissions
+        setenv("TMPDIR", dir, 1);
+        last_provider = "unset";
+        ctx = vt_nano_init("/controlled/model", "/controlled/vad", 1, error, sizeof(error));
+        assert(ctx && last_provider == "cpu");
+        vt_nano_free(ctx);
+    }
+    unsetenv("TMPDIR");
+    std::filesystem::permissions(readonly, std::filesystem::perms::owner_all);
+    std::filesystem::remove(readonly);
+    std::cout << "ORT session-config contract passed (normal, missing and read-only TMPDIR)\n";
+}
+
 int main() {
+    provider_contract();
+    created_recognizers = destroyed_recognizers = created_vads = destroyed_vads = 0;
     char error[256]{};
     VtNano *ctx = vt_nano_init("/controlled/model", "/controlled/vad", 1, error, sizeof(error));
     assert(ctx);
