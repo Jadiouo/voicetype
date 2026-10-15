@@ -39,7 +39,7 @@ const char *SherpaOnnxGetVersionStr() { return "1.13.8"; }
 const char *SherpaOnnxGetGitSha1() { return "8c8e275d"; }
 const char *SherpaOnnxGetOnnxruntimeVersionStr() { return "1.28.2"; }
 const SherpaOnnxOfflineRecognizer *SherpaOnnxCreateOfflineRecognizer(const SherpaOnnxOfflineRecognizerConfig *c) {
-    assert(c && std::string(c->model_config.provider) == "cpu");
+    assert(c && std::string(c->model_config.provider).rfind("cpu", 0) == 0);
     assert(c->model_config.num_threads == 4);
     assert(std::string(c->model_config.funasr_nano.user_prompt) == "语音转写:");
     ++created_recognizers;

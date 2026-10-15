@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <random>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -35,6 +38,23 @@ using Result = std::unique_ptr<const SherpaOnnxOfflineRecognizerResult,
                               decltype(&SherpaOnnxDestroyOfflineRecognizerResult)>;
 using Segment = std::unique_ptr<const SherpaOnnxSpeechSegment,
                                decltype(&SherpaOnnxDestroySpeechSegment)>;
+
+// Short-lived key=value file for sherpa's provider config; removed on scope exit.
+struct TempConfig {
+    std::string path;
+    bool create(const char *text) {
+        std::random_device rd;
+        path = (std::filesystem::temp_directory_path() /
+                ("voicetype-ort-" + std::to_string(rd()) + std::to_string(rd()) + ".cfg")).string();
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << text;
+        out.close();
+        return static_cast<bool>(out);
+    }
+    ~TempConfig() {
+        if (!path.empty()) { std::error_code ignored; std::filesystem::remove(path, ignored); }
+    }
+};
 
 struct VadReset {
     const SherpaOnnxVoiceActivityDetector *vad;
@@ -92,10 +112,21 @@ extern "C" VtNano *vt_nano_init(const char *directory, const char *vad_model,
         config.feat_config.feature_dim = 80;
         config.decoding_method = "greedy_search";
         config.model_config.num_threads = 4;
-        // Diagnostic override: VOICETYPE_NANO_ORT_CONFIG names a sherpa
-        // provider config file (key=value lines) for ORT session options.
+        // The int8 models give empty/EOS-at-once output on x86 CPUs that have
+        // AVX2 but no AVX-512 VNNI (measured: AMD EPYC 7763, CI runs
+        // 38709657651 and 38717853999): ORT's AVX2 u8s8 kernel can saturate.
+        // "session.x64quantprecision=1" selects its 7-bit-safe path, which
+        // fixed all such runs and does not affect VNNI CPUs. Sherpa accepts
+        // session entries only through a provider config file, so write a
+        // private one for the duration of recognizer creation.
+        // VOICETYPE_NANO_ORT_CONFIG may name another file (diagnostics only).
         const char *ort_config = std::getenv("VOICETYPE_NANO_ORT_CONFIG");
-        std::string provider = (ort_config && *ort_config) ? std::string("cpu:") + ort_config : "cpu";
+        TempConfig precision;
+        std::string provider = "cpu";
+        if (ort_config && *ort_config) provider = std::string("cpu:") + ort_config;
+        else if (precision.create("SessionConfig.session.x64quantprecision=1\n"))
+            provider = "cpu:" + precision.path;
+        else throw std::runtime_error("cannot write ORT session config");
         config.model_config.provider = provider.c_str();
         auto &nano = config.model_config.funasr_nano;
         nano.encoder_adaptor = encoder.c_str();
@@ -129,8 +160,8 @@ extern "C" VtNano *vt_nano_init(const char *directory, const char *vad_model,
         std::fprintf(stderr, "Nano native: sherpa=%s git=%s ort=%s provider=cpu threads=4 language=auto itn=%d; full-waveform speech gate%s%s\n",
             SherpaOnnxGetVersionStr(), SherpaOnnxGetGitSha1(),
             SherpaOnnxGetOnnxruntimeVersionStr(), use_itn,
-            (ort_config && *ort_config) ? " ort_config=" : "",
-            (ort_config && *ort_config) ? ort_config : "");
+            (ort_config && *ort_config) ? " ort_config_override" : " x64quantprecision=1",
+            "");
         return ctx.release();
     } catch (const std::exception &e) { error_text(error, cap, e.what()); }
       catch (...) { error_text(error, cap, "unknown native initialization failure"); }
