@@ -11,7 +11,12 @@ recovery-only restore action. It does not start Google recognition.
 Windows delivers recognized text by `SendInput` (Unicode) into the focused field;
 live speech and delivery into real apps still require interactive Windows acceptance.
 Elevated windows, UWP and 32-bit programs are not supported: the text stays in the
-App for manual copy. Line breaks are typed as spaces.
+App for manual copy. Line breaks are typed as spaces. Make sure the input method
+is not composing when dictation finishes; this is not detected.
+
+Known v1 limitations (to be handled with UI Automation later): a browser page shares
+one HWND, so switching tabs or fields during recording is not detected and the text
+goes to the newly focused field; browser password fields are not blocked.
 Keep the existing daily installation available during preview testing.
 
 Model download/check/cancel is available in the UI. Linux installers now carry a
