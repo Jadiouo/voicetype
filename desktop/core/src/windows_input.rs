@@ -1,10 +1,9 @@
-//! Temporary recovery-only finite shortcut toggle. This hook consumes the chord;
-//! it must be replaced by TSF's preserved-key route before automatic delivery.
+//! Finite shortcut toggle for Windows dictation. This hook consumes the chord and
+//! locks the focused target; delivery itself lives in `windows_delivery`.
 use crate::windows_gesture::{shortcut_matches, GestureAction, WindowsGesture};
 use crate::{ShortcutChoice, TargetLease};
 use std::{
     io,
-    mem::size_of,
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -22,10 +21,9 @@ use windows_sys::Win32::{
             VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
         },
         WindowsAndMessaging::{
-            CallNextHookEx, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetMessageW,
-            GetWindowLongW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
-            UnhookWindowsHookEx, GUITHREADINFO, GWL_STYLE, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
-            PM_NOREMOVE, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
+            UnhookWindowsHookEx, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL,
+            WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     },
 };
@@ -294,40 +292,15 @@ impl Drop for WindowsInput {
     }
 }
 
-/// Whitelist a classic editable HWND. Browser/WinUI controls need TSF and stay
-/// disabled until a text-service lease can reject same-HWND field changes.
-fn focused_edit() -> Option<TargetLease> {
-    let window = unsafe { GetForegroundWindow() };
-    if window.is_null() {
-        return None;
-    }
-    let mut gui = GUITHREADINFO {
-        cbSize: size_of::<GUITHREADINFO>() as u32,
-        ..Default::default()
-    };
-    if unsafe { GetGUIThreadInfo(0, &mut gui) } == 0 || gui.hwndFocus.is_null() {
-        return None;
-    }
-    let mut class = [0u16; 64];
-    let length = unsafe { GetClassNameW(gui.hwndFocus, class.as_mut_ptr(), class.len() as i32) };
-    if length <= 0 || String::from_utf16_lossy(&class[..length as usize]) != "Edit" {
-        return None;
-    }
-    let style = unsafe { GetWindowLongW(gui.hwndFocus, GWL_STYLE) };
-    if style & 0x20 != 0 {
-        return None;
-    } // ES_PASSWORD
-    Some(TargetLease::new(
-        format!(
-            "win32-edit:{:x}:{:x}",
-            window as usize, gui.hwndFocus as usize
-        ),
-        0,
-    ))
+/// Lock the focused control of the foreground window for delivery. Any window
+/// with a focus HWND is accepted (browsers, new Notepad, Word); elevated, UWP,
+/// 32-bit and password-class targets are refused so recording never starts.
+fn focused_target() -> Option<TargetLease> {
+    crate::windows_delivery::capture_target()
 }
 
 pub fn focus_matches(target: &TargetLease) -> bool {
-    focused_edit().is_some_and(|now| now.context_id == target.context_id)
+    crate::windows_delivery::target_state(target) == crate::windows_delivery::TargetState::Ready
 }
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -408,7 +381,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             state.windows(),
         );
         let target = if down && matched && state.gesture.needs_target() {
-            focused_edit().and_then(|mut target| {
+            focused_target().and_then(|mut target| {
                 state.generation = state.generation.wrapping_add(1);
                 if state.generation == 0 {
                     return None;

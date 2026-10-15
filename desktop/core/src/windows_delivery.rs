@@ -172,13 +172,27 @@ mod win32 {
 
     fn integrity_rid(token: HANDLE) -> Option<u32> {
         let mut len = 0u32;
-        unsafe { GetTokenInformation(token, TokenIntegrityLevel, std::ptr::null_mut(), 0, &mut len) };
+        unsafe {
+            GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                std::ptr::null_mut(),
+                0,
+                &mut len,
+            )
+        };
         if len == 0 || len > 1024 {
             return None;
         }
         let mut buf = vec![0u64; (len as usize).div_ceil(8)];
         let ok = unsafe {
-            GetTokenInformation(token, TokenIntegrityLevel, buf.as_mut_ptr() as *mut _, len, &mut len)
+            GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                buf.as_mut_ptr() as *mut _,
+                len,
+                &mut len,
+            )
         };
         if ok == 0 {
             return None;
@@ -355,7 +369,11 @@ mod win32 {
                 }
             }
             let sent = unsafe {
-                SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32)
+                SendInput(
+                    inputs.len() as u32,
+                    inputs.as_ptr(),
+                    size_of::<INPUT>() as i32,
+                )
             };
             sent as usize
         }
@@ -389,7 +407,12 @@ mod tests {
     }
     impl FakeEnv {
         fn ready() -> Self {
-            Self { state: TargetState::Ready, held_polls: 0, sleeps: 0, checks: 0 }
+            Self {
+                state: TargetState::Ready,
+                held_polls: 0,
+                sleeps: 0,
+                checks: 0,
+            }
         }
     }
     impl Env for FakeEnv {
@@ -416,7 +439,11 @@ mod tests {
     }
     impl FakeInjector {
         fn ok() -> Self {
-            Self { calls: 0, reply: None, last: vec![] }
+            Self {
+                calls: 0,
+                reply: None,
+                last: vec![],
+            }
         }
     }
     impl Injector for FakeInjector {
@@ -449,14 +476,23 @@ mod tests {
         assert_eq!(utf16_units("a\u{1b}b"), Err(Reject::Control));
         assert_eq!(utf16_units(""), Err(Reject::Empty));
         assert_eq!(utf16_units(" \n\t"), Err(Reject::Empty));
-        assert_eq!(utf16_units(&"a".repeat(MAX_UNITS)).unwrap().len(), MAX_UNITS);
-        assert_eq!(utf16_units(&"a".repeat(MAX_UNITS + 1)), Err(Reject::TooLong));
+        assert_eq!(
+            utf16_units(&"a".repeat(MAX_UNITS)).unwrap().len(),
+            MAX_UNITS
+        );
+        assert_eq!(
+            utf16_units(&"a".repeat(MAX_UNITS + 1)),
+            Err(Reject::TooLong)
+        );
     }
 
     #[test]
     fn delivers_once() {
         let (mut e, mut i) = (FakeEnv::ready(), FakeInjector::ok());
-        assert_eq!(deliver(&mut e, &mut i, &lease(), "你好"), DeliveryOutcome::Delivered);
+        assert_eq!(
+            deliver(&mut e, &mut i, &lease(), "你好"),
+            DeliveryOutcome::Delivered
+        );
         assert_eq!(i.calls, 1);
         assert_eq!(i.last.len(), 2);
     }
@@ -465,7 +501,10 @@ mod tests {
     fn waits_for_modifiers_then_sends() {
         let (mut e, mut i) = (FakeEnv::ready(), FakeInjector::ok());
         e.held_polls = 5;
-        assert_eq!(deliver(&mut e, &mut i, &lease(), "x"), DeliveryOutcome::Delivered);
+        assert_eq!(
+            deliver(&mut e, &mut i, &lease(), "x"),
+            DeliveryOutcome::Delivered
+        );
         assert_eq!(e.sleeps, 50);
     }
 
@@ -473,7 +512,10 @@ mod tests {
     fn modifier_timeout_keeps_text_without_injecting() {
         let (mut e, mut i) = (FakeEnv::ready(), FakeInjector::ok());
         e.held_polls = u32::MAX;
-        assert_eq!(deliver(&mut e, &mut i, &lease(), "x"), DeliveryOutcome::NotSent);
+        assert_eq!(
+            deliver(&mut e, &mut i, &lease(), "x"),
+            DeliveryOutcome::NotSent
+        );
         assert_eq!(i.calls, 0);
         assert_eq!(e.checks, 0);
     }
@@ -494,13 +536,19 @@ mod tests {
     #[test]
     fn bad_text_never_injects() {
         let (mut e, mut i) = (FakeEnv::ready(), FakeInjector::ok());
-        assert_eq!(deliver(&mut e, &mut i, &lease(), "a\0"), DeliveryOutcome::NotSent);
+        assert_eq!(
+            deliver(&mut e, &mut i, &lease(), "a\0"),
+            DeliveryOutcome::NotSent
+        );
         assert_eq!(i.calls, 0);
     }
 
     #[test]
     fn short_or_zero_injection_is_never_retried() {
-        for (reply, want) in [(0, DeliveryOutcome::Unconfirmed), (3, DeliveryOutcome::Partial)] {
+        for (reply, want) in [
+            (0, DeliveryOutcome::Unconfirmed),
+            (3, DeliveryOutcome::Partial),
+        ] {
             let (mut e, mut i) = (FakeEnv::ready(), FakeInjector::ok());
             i.reply = Some(reply);
             assert_eq!(deliver(&mut e, &mut i, &lease(), "abc"), want);
