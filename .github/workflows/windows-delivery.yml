@@ -43,6 +43,8 @@ jobs:
           exit 0
       - name: Real SendInput probe
         shell: bash
+        env:
+          VOICETYPE_REQUIRE_INTERACTIVE: '1'
         run: |
           set -o pipefail
           cargo +stable test -p voicetype-app-core --locked --test windows_delivery_live -- --nocapture 2>&1 | tee probe.log
