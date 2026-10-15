@@ -144,6 +144,8 @@ pub trait DeliveryPort {
     /// Validate the entire lease and commit as one OS input-context operation.
     /// Implementations must never force focus, retry partial insertion, or treat
     /// a separate foreground-window check followed by SendInput as atomic.
+    /// Windows v1 is the known exception: best-effort SendInput with a residual
+    /// focus race (see windows_delivery.rs and docs/app/SDD.md section 6).
     fn commit_if_focused(&mut self, target: &TargetLease, text: &str) -> DeliveryOutcome;
 }
 

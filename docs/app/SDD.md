@@ -162,6 +162,11 @@ throughout. Preview installers are development artifacts, not a stable release.
   an architectural inference from that interface. M3 must validate both window
   and same-window editable-control changes. If Win32 cannot meet APP-03, use TSF
   before production release rather than weaken the delivery requirement.
+- **Accepted deviation (Windows v1):** automatic delivery uses `SendInput`
+  (`KEYEVENTF_UNICODE`) with target re-verification right before one non-retried
+  injection, not TSF. Reason: the TSF route never passed its OS-load gate and an
+  unusable app was worse than a millisecond-scale non-atomic focus race. Unsupported
+  targets (elevated, UWP, x86) and any doubt keep the full text for manual copy.
 - Google documents Windows installation and microphone permissions, but that is
   not proof that our ConPTY/editor-capture integration works. Verify separately:
   [CLI install](https://antigravity.google/docs/cli/install/) and

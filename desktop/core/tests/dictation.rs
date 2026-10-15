@@ -421,3 +421,85 @@ fn invalid_final_text_never_reaches_the_input_adapter() {
         assert_eq!(input.attempts, 0);
     }
 }
+
+mod windows_delivery_flow {
+    use super::EngineProcess;
+    use voicetype_app_core::windows_delivery::{Delivery, Env, Injector, TargetState};
+    use voicetype_app_core::{Application, DeliveryOutcome, ProviderEvent, TargetLease};
+
+    struct FakeEnv(TargetState);
+    impl Env for FakeEnv {
+        fn target_state(&mut self, _: &TargetLease) -> TargetState {
+            self.0
+        }
+        fn modifiers_down(&mut self) -> bool {
+            false
+        }
+        fn sleep_ms(&mut self, _: u64) {}
+    }
+    #[derive(Default)]
+    struct FakeInjector {
+        calls: usize,
+        typed: Vec<u16>,
+    }
+    impl Injector for FakeInjector {
+        fn send(&mut self, units: &[u16]) -> usize {
+            self.calls += 1;
+            self.typed = units.to_vec();
+            units.len() * 2
+        }
+    }
+
+    fn run(state: TargetState, text: &str) -> (Application, FakeInjectorProbe) {
+        let profile = tempfile::tempdir().unwrap();
+        let mut app = Application::open(profile.path()).unwrap();
+        let mut engine = EngineProcess::default();
+        let mut port = Delivery {
+            env: FakeEnv(state),
+            injector: FakeInjector::default(),
+        };
+        let key = app
+            .start_dictation(TargetLease::new("win32:1:2:3", 1), &mut engine)
+            .unwrap();
+        app.provider_event(key, ProviderEvent::Recording, &mut port);
+        app.stop_dictation(&mut engine).unwrap();
+        app.provider_event(key, ProviderEvent::Final(text.into()), &mut port);
+        app.provider_event(key, ProviderEvent::Final(text.into()), &mut port);
+        let probe = FakeInjectorProbe {
+            calls: port.injector.calls,
+            typed: port.injector.typed,
+        };
+        (app, probe)
+    }
+    struct FakeInjectorProbe {
+        calls: usize,
+        typed: Vec<u16>,
+    }
+
+    #[test]
+    fn delivered_final_text_is_typed_once_and_not_retained() {
+        let (app, probe) = run(TargetState::Ready, "你好\nworld");
+        assert_eq!(probe.calls, 1);
+        assert_eq!(String::from_utf16(&probe.typed).unwrap(), "你好 world");
+        assert!(app.retained_text().is_none());
+    }
+
+    #[test]
+    fn denied_target_retains_the_full_text_untyped() {
+        let (app, probe) = run(TargetState::Denied, "你好\nworld");
+        assert_eq!(probe.calls, 0);
+        let retained = app.retained_text().unwrap();
+        assert_eq!(retained.text, "你好\nworld");
+        assert_eq!(retained.reason, DeliveryOutcome::NotSent);
+    }
+
+    #[test]
+    fn changed_target_retains_the_full_text_untyped() {
+        let (app, probe) = run(TargetState::Changed, "hi");
+        assert_eq!(probe.calls, 0);
+        assert_eq!(
+            app.retained_text().unwrap().reason,
+            DeliveryOutcome::FocusChanged
+        );
+    }
+}
