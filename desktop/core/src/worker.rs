@@ -1295,6 +1295,7 @@ struct WindowsLocal {
     active: Option<crate::SessionKey>,
 }
 
+/// Recovery-only adapter for the retired Google path: never inserts anything.
 #[cfg(windows)]
 struct WindowsRecovery;
 #[cfg(windows)]
@@ -1348,7 +1349,11 @@ impl WindowsLocal {
         }
         if let Some((key, event)) = self.engine.poll_event()? {
             let released = matches!(event, crate::ProviderEvent::Released);
-            app.provider_event(key, event, &mut WindowsRecovery);
+            app.provider_event(
+                key,
+                event,
+                &mut crate::windows_delivery::Win32Delivery::new(),
+            );
             if released && self.active == Some(key) {
                 self.active = None;
             }
