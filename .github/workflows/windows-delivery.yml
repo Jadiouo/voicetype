@@ -37,8 +37,10 @@ jobs:
         shell: pwsh
         run: |
           whoami
-          query session 2>&1 | Out-String
+          try { query session 2>&1 | Out-String } catch { 'query session unavailable' }
+          $global:LASTEXITCODE = 0
           [Environment]::UserInteractive
+          exit 0
       - name: Real SendInput probe
         shell: bash
         run: |
