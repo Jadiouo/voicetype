@@ -88,7 +88,7 @@ function runtimeControls(view) {
     || view?.input_requested || !!view?.settings.dictation.busy;
   document.querySelector('#runtime-note').textContent = !view?.local_runtime_bundled
     ? '這個平台的引擎封裝仍在準備中。'
-    : view.windows_input && view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。辨識完成後會送進目前聚焦的欄位；欄位改變、提權或 UWP 程式、輸入法組字中時，結果會保留在待處理文字。`
+    : view.windows_input && view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。辨識完成後會送進目前聚焦的欄位；欄位改變、提權或 UWP 程式時，結果會保留在待處理文字。送字前請確認輸入法不在組字中。`
     : view.windows_input && view.input_requested ? 'Windows 快捷鍵已啟用；辨識完成後送進目前聚焦的欄位（不支援提權視窗、UWP、32 位元程式）。'
     : view.windows_input && loaded ? '引擎已載入。啟用快捷鍵後，在有焦點的欄位按快捷鍵開始錄音。'
     : view.local_runtime === 'ready' ? `${shortcutLabel(view, 'local', view.settings.shortcuts.local.effective)}；Esc 取消。停用或結束 App 後回到原服務。`
