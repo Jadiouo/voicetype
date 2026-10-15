@@ -1,0 +1,50 @@
+name: Windows delivery
+
+# Fast Windows-only check for SendInput delivery: unit/flow tests plus a real
+# injection probe into EDIT and RICHEDIT controls. The probe first checks whether
+# the runner has an interactive foreground desktop and reports SKIPPED otherwise.
+on:
+  push:
+    branches: [feat/windows-auto-send]
+    paths: ["desktop/core/**", ".github/workflows/windows-delivery.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-delivery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  delivery:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust stable
+        run: rustup update stable --no-self-update
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: desktop
+      - name: Delivery logic and coordinator flow
+        shell: bash
+        run: cargo +stable test -q -p voicetype-app-core --locked --lib windows_delivery -- --nocapture && cargo +stable test -q -p voicetype-app-core --locked --test dictation
+      - name: Session facts
+        shell: pwsh
+        run: |
+          whoami
+          query session 2>&1 | Out-String
+          [Environment]::UserInteractive
+      - name: Real SendInput probe
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo +stable test -p voicetype-app-core --locked --test windows_delivery_live -- --nocapture 2>&1 | tee probe.log
+      - name: Probe summary
+        if: always()
+        shell: bash
+        run: grep PROBE probe.log >> "$GITHUB_STEP_SUMMARY" || echo "no PROBE lines" >> "$GITHUB_STEP_SUMMARY"

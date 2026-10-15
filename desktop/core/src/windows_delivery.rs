@@ -130,8 +130,8 @@ mod win32 {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HANDLE},
         Security::{
-            GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenElevation,
-            TokenIntegrityLevel, TOKEN_ELEVATION, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+            GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
+            TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
         },
         System::Threading::{
             GetCurrentProcess, IsWow64Process, OpenProcess, OpenProcessToken,
@@ -151,7 +151,7 @@ mod win32 {
     };
 
     const ES_PASSWORD: i32 = 0x20;
-    /// SECURITY_MANDATORY_MEDIUM_RID; anything above is treated as elevated.
+    /// TOKEN_INFORMATION_CLASS value for TokenIsAppContainer.
     const TOKEN_APPCONTAINER: i32 = 29; // TokenIsAppContainer
 
     struct Handle(HANDLE);
@@ -209,8 +209,9 @@ mod win32 {
         Some(unsafe { *GetSidSubAuthority(sid, count as u32 - 1) })
     }
 
-    /// Supported = same-or-lower integrity than us, not elevated, not AppContainer,
-    /// not 32-bit. Any query failure (including access denied) means unsupported.
+    /// Supported = integrity not above ours (so an elevated target is refused from a
+    /// normal App, which is what UIPI would block silently), not AppContainer, not
+    /// 32-bit. Any query failure (including access denied) means unsupported.
     fn process_supported(pid: u32) -> bool {
         let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if process.is_null() {
@@ -231,20 +232,6 @@ mod win32 {
             return false;
         }
         let own = Handle(own);
-        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 1 };
-        let mut len = 0u32;
-        let ok = unsafe {
-            GetTokenInformation(
-                token.0,
-                TokenElevation,
-                &mut elevation as *mut _ as *mut _,
-                size_of::<TOKEN_ELEVATION>() as u32,
-                &mut len,
-            )
-        };
-        if ok == 0 || elevation.TokenIsElevated != 0 {
-            return false;
-        }
         if token_u32(token.0, TOKEN_APPCONTAINER) != Some(0) {
             return false;
         }
