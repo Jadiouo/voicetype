@@ -168,8 +168,16 @@ def main(runtime, scratch, archive_override):
                 f"Nano process exited {result.returncode}: {result.stderr[-2048:].decode('utf-8', 'replace')}")
         require(len(result.stdout) <= 16 * 1024, "Nano transcript output unexpectedly large")
         transcript = result.stdout.decode("utf-8").strip()
-        require(transcript and all(anchor in normalized(transcript) for anchor in ANCHORS),
-                f"Nano did not recognize the pinned public phrase: {transcript!r}")
+        if not (transcript and all(anchor in normalized(transcript) for anchor in ANCHORS)):
+            # Diagnostic only: the probe still fails. Show engine stderr and
+            # whether the VAD gate (empty output) or the recognizer is at fault.
+            novad = subprocess.run([str(exe), "--transcribe", str(sample), "--no-vad"], cwd=runtime / "bin",
+                                   env=env, capture_output=True, timeout=120, check=False)
+            raise RuntimeError(
+                f"Nano did not recognize the pinned public phrase: {transcript!r}; "
+                f"stderr tail: {result.stderr[-1500:].decode('utf-8', 'replace')!r}; "
+                f"--no-vad exit {novad.returncode} output: {novad.stdout[:400].decode('utf-8', 'replace')!r}; "
+                f"--no-vad stderr tail: {novad.stderr[-800:].decode('utf-8', 'replace')!r}")
         require("provider=cpu" in result.stderr.decode("utf-8", "replace"),
                 "Native Nano did not report CPU provider")
         print(json.dumps({"prerecorded_nano_cpu_asr": True,
@@ -190,4 +198,4 @@ if __name__ == "__main__":
         main(args.runtime, args.scratch, args.archive)
     except (OSError, ValueError, RuntimeError, KeyError, StopIteration, subprocess.TimeoutExpired,
             tarfile.TarError, wave.Error) as error:
-        parser.exit(1, f"Windows prerecorded Nano ASR probe failed: {error}\n")
+        parser.exit(1, ascii(f"Windows prerecorded Nano ASR probe failed: {error}") + "\n")
