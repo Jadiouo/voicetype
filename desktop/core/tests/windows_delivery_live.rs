@@ -5,7 +5,7 @@
 #![cfg(windows)]
 
 use std::{ptr::null, ptr::null_mut, thread, time::Duration};
-use voicetype_app_core::windows_delivery::{capture_target, Win32Delivery};
+use voicetype_app_core::windows_delivery::{capture_target_including_own_process, Win32Delivery};
 use voicetype_app_core::{DeliveryOutcome, DeliveryPort};
 use windows_sys::Win32::{
     Foundation::HWND,
@@ -87,27 +87,39 @@ fn foreground(hwnd: HWND) -> bool {
     false
 }
 
+/// With VOICETYPE_REQUIRE_INTERACTIVE=1 a missing interactive desktop fails the test.
+fn skip(reason: &str) {
+    println!("PROBE SKIPPED reason={reason}");
+    assert!(
+        std::env::var("VOICETYPE_REQUIRE_INTERACTIVE").as_deref() != Ok("1"),
+        "interactive desktop required but unavailable: {reason}"
+    );
+}
+
 fn run_case(class: &str) {
     if class.starts_with("RICHEDIT") {
         let lib = wide("msftedit.dll");
         if unsafe { LoadLibraryW(lib.as_ptr()) }.is_null() {
-            println!("PROBE case={class} SKIPPED reason=msftedit.dll not loadable");
+            skip(&format!("{class}: msftedit.dll not loadable"));
             return;
         }
     }
     let a = make(class, 50);
     if a.is_null() {
-        println!("PROBE case={class} SKIPPED reason=CreateWindowExW failed");
+        skip(&format!("{class}: CreateWindowExW failed"));
         return;
     }
     if !foreground(a) {
-        println!("PROBE case={class} interactive=false SKIPPED reason=could not become foreground window");
+        skip(&format!(
+            "{class} interactive=false: could not become foreground window"
+        ));
         unsafe { DestroyWindow(a) };
         return;
     }
     println!("PROBE case={class} interactive=true");
-    let lease = capture_target().expect("foreground control must yield a lease");
-    let mut port = Win32Delivery::new();
+    let lease =
+        capture_target_including_own_process().expect("foreground control must yield a lease");
+    let mut port = Win32Delivery::allowing_own_process();
     let sample = "你好 hello 😀\nsecond";
     let outcome = port.commit_if_focused(&lease, sample);
     pump(500);
@@ -131,7 +143,9 @@ fn run_case(class: &str) {
         assert_eq!(text(a), before_a);
         assert_eq!(text(b), "");
     } else {
-        println!("PROBE case={class} focus_change SKIPPED reason=second window not foreground");
+        skip(&format!(
+            "{class} focus_change: second window not foreground"
+        ));
     }
     unsafe {
         DestroyWindow(b);

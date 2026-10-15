@@ -75,6 +75,12 @@ pub trait Injector {
     fn send(&mut self, units: &[u16]) -> usize;
 }
 
+/// True when any of the target's processes is VoiceType itself, so results are
+/// never typed into the App's own settings fields.
+pub fn targets_own_process(pids: &[u32], own: u32) -> bool {
+    pids.contains(&own)
+}
+
 /// Order: format -> modifier release -> target re-check -> one injection.
 pub fn deliver(
     env: &mut dyn Env,
@@ -121,7 +127,10 @@ impl<E: Env, I: Injector> DeliveryPort for Delivery<E, I> {
 }
 
 #[cfg(windows)]
-pub use win32::{capture_target, target_state, SendInputInjector, Win32Delivery, Win32Env};
+pub use win32::{
+    capture_target, capture_target_including_own_process, target_state, SendInputInjector,
+    Win32Delivery, Win32Env,
+};
 
 #[cfg(windows)]
 mod win32 {
@@ -134,7 +143,7 @@ mod win32 {
             TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
         },
         System::Threading::{
-            GetCurrentProcess, IsWow64Process, OpenProcess, OpenProcessToken,
+            GetCurrentProcess, GetCurrentProcessId, IsWow64Process, OpenProcess, OpenProcessToken,
             PROCESS_QUERY_LIMITED_INFORMATION,
         },
         UI::{
@@ -290,7 +299,10 @@ mod win32 {
         format!("win32:{:x}:{:x}:{:x}", f.window, f.focus, f.thread)
     }
 
-    fn supported(f: &Focus) -> bool {
+    fn supported(f: &Focus, allow_self: bool) -> bool {
+        if !allow_self && targets_own_process(&f.pids, unsafe { GetCurrentProcessId() }) {
+            return false;
+        }
         // Classic Edit/RichEdit password boxes are refused. Browser password
         // fields cannot be told apart without UI Automation (not in v1).
         let classic = f.class == "Edit" || f.class.starts_with("RichEdit");
@@ -303,14 +315,27 @@ mod win32 {
     /// Lock the foreground window + focused control, or `None` when nothing is
     /// focused or the target is unsupported (so recording never starts).
     pub fn capture_target() -> Option<TargetLease> {
+        capture(false)
+    }
+
+    /// Test probes create their own windows in-process; the product never uses this.
+    pub fn capture_target_including_own_process() -> Option<TargetLease> {
+        capture(true)
+    }
+
+    fn capture(allow_self: bool) -> Option<TargetLease> {
         let f = focus_now()?;
-        supported(&f).then(|| TargetLease::new(lease_id(&f), 0))
+        supported(&f, allow_self).then(|| TargetLease::new(lease_id(&f), 0))
     }
 
     pub fn target_state(target: &TargetLease) -> TargetState {
+        state(target, false)
+    }
+
+    fn state(target: &TargetLease, allow_self: bool) -> TargetState {
         match focus_now() {
             Some(f) if lease_id(&f) == target.context_id => {
-                if supported(&f) {
+                if supported(&f, allow_self) {
                     TargetState::Ready
                 } else {
                     TargetState::Denied
@@ -320,10 +345,12 @@ mod win32 {
         }
     }
 
-    pub struct Win32Env;
+    pub struct Win32Env {
+        pub allow_own_process: bool,
+    }
     impl Env for Win32Env {
         fn target_state(&mut self, target: &TargetLease) -> TargetState {
-            target_state(target)
+            state(target, self.allow_own_process)
         }
         fn modifiers_down(&mut self) -> bool {
             [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN]
@@ -370,7 +397,18 @@ mod win32 {
     impl Win32Delivery {
         pub fn new() -> Self {
             Delivery {
-                env: Win32Env,
+                env: Win32Env {
+                    allow_own_process: false,
+                },
+                injector: SendInputInjector,
+            }
+        }
+        /// For in-process test probes only.
+        pub fn allowing_own_process() -> Self {
+            Delivery {
+                env: Win32Env {
+                    allow_own_process: true,
+                },
                 injector: SendInputInjector,
             }
         }
@@ -471,6 +509,12 @@ mod tests {
             utf16_units(&"a".repeat(MAX_UNITS + 1)),
             Err(Reject::TooLong)
         );
+    }
+
+    #[test]
+    fn own_process_is_never_a_target() {
+        assert!(targets_own_process(&[10, 42], 42));
+        assert!(!targets_own_process(&[10, 11], 42));
     }
 
     #[test]
