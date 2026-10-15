@@ -122,6 +122,18 @@ def speech_sample(path):
         require(1 <= seconds <= 30, "Public WAV duration outside probe bound")
 
 
+def cpu_name():
+    # Evidence only: int8 ONNX kernels can differ by CPU, and empty output
+    # appeared on some hosted runners but not others.
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              "(Get-CimInstance Win32_Processor | Select-Object -First 1).Name"],
+                             capture_output=True, timeout=30, check=False)
+        return out.stdout.decode("utf-8", "replace").strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
 def normalized(text):
     return "".join(char for char in text if not char.isspace()
                    and not unicodedata.category(char).startswith("P"))
@@ -187,13 +199,13 @@ def main(runtime, scratch, archive_override):
                     f"--no-vad stderr tail: {novad.stderr[-800:].decode('utf-8', 'replace')!r}")
         if failures:
             raise RuntimeError(f"Nano did not recognize the pinned public phrase in "
-                               f"{len(failures)}/{REPEATS} runs: " + " | ".join(failures))
+                               f"{len(failures)}/{REPEATS} runs on CPU {cpu_name()!r}: " + " | ".join(failures))
         require("provider=cpu" in result.stderr.decode("utf-8", "replace"),
                 "Native Nano did not report CPU provider")
         print(json.dumps({"prerecorded_nano_cpu_asr": True,
                           "sample": SAMPLE, "sample_bytes": sample_pin[0],
                           "sample_sha256": sample_pin[1], "archive_sha256": model_pin["sha256"],
-                          "ground_truth": GROUND_TRUTH, "transcript": transcripts[0], "runs": REPEATS,
+                          "ground_truth": GROUND_TRUTH, "transcript": transcripts[0], "runs": REPEATS, "cpu": cpu_name(),
                           "process_elapsed_seconds": round(time.monotonic() - started, 2)},
                          ensure_ascii=True))
 
