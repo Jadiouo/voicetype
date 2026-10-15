@@ -1,6 +1,11 @@
 name: Nano CPU diagnostic
 
 on:
+  # workflow_dispatch only works for files on the default branch, so the
+  # investigation branch triggers on push of its own diagnostic files.
+  push:
+    branches: [fix/nano-empty]
+    paths: [".github/workflows/nano-cpu-diag.yml", "desktop/tests/windows_nano_diag.py", "voicetyped/shim/**"]
   workflow_dispatch:
     inputs:
       repeats:
@@ -69,4 +74,4 @@ jobs:
       - name: Diagnose Nano under ORT variants
         shell: pwsh
         working-directory: desktop
-        run: python tests/windows_nano_diag.py --runtime target/runtime --scratch ../.scratch/nano-diag --repeats ${{ inputs.repeats }}
+        run: python tests/windows_nano_diag.py --runtime target/runtime --scratch ../.scratch/nano-diag --repeats ${{ inputs.repeats || '2' }}
