@@ -26,6 +26,7 @@ pub mod setup;
 mod setup_worker;
 pub mod spelling_install;
 pub mod vocabulary;
+pub mod windows_delivery;
 pub mod windows_engine;
 #[cfg(any(test, windows))]
 mod windows_gesture;
