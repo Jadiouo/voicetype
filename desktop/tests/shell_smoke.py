@@ -285,7 +285,7 @@ return {provider:document.querySelector('input[name=provider]:checked')?.value,
                     assert not (Path(profile) / "local-profile").exists()
                     click("#reload")
                     eventually(ready)
-                assert js("return document.querySelectorAll('.availability').length") == 2
+                assert js("return document.querySelectorAll('.availability').length") == 1
                 click("#check-providers")
                 eventually(lambda: ready() and js("return document.querySelector('#status').textContent.includes('已檢查服務')"))
                 if sys.platform == "linux":
