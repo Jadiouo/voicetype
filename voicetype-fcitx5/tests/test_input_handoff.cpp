@@ -53,8 +53,10 @@ static void f9Key(fcitx::Instance &instance, Client &client, bool release) {
 
 int main(int argc, char **argv) {
     const std::string scenario = argc > 1 ? argv[1] : "crash";
+    // sockaddr_un::sun_path is 108 bytes; a long TMPDIR (e.g. inside a worktree)
+    // would overflow it, and CI leaves TMPDIR unset. Fall back to /tmp.
     const char *temp = getenv("TMPDIR");
-    if (!temp || temp[0] != '/') return EXIT_FAILURE;
+    if (!temp || temp[0] != '/' || std::strlen(temp) > 60) temp = "/tmp";
     auto temporary = std::string(temp) + "/voicetype-handoff-XXXXXX";
     const char *root = mkdtemp(temporary.data());
     if (!root) return EXIT_FAILURE;
