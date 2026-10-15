@@ -177,7 +177,7 @@ def main(runtime, scratch, archive_override):
                           "sample_sha256": sample_pin[1], "archive_sha256": model_pin["sha256"],
                           "ground_truth": GROUND_TRUTH, "transcript": transcript,
                           "process_elapsed_seconds": round(time.monotonic() - started, 2)},
-                         ensure_ascii=False))
+                         ensure_ascii=True))
 
 
 if __name__ == "__main__":

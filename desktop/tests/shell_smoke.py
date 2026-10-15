@@ -48,7 +48,8 @@ def main():
                 value = check()
                 if value:
                     return value
-            except (urllib.error.URLError, http.client.RemoteDisconnected, RuntimeError, TimeoutError) as error:
+            except (urllib.error.URLError, http.client.RemoteDisconnected, RuntimeError, TimeoutError,
+                    PermissionError, json.JSONDecodeError) as error:  # config is replaced atomically; Windows may deny reads mid-swap
                 last_error = error
             time.sleep(0.2)
         raise AssertionError(f"UI condition timed out: {last_error}")
