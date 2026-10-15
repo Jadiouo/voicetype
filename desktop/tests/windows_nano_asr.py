@@ -202,7 +202,22 @@ def main(runtime, scratch, archive_override):
                                f"{len(failures)}/{REPEATS} runs on CPU {cpu_name()!r}: " + " | ".join(failures))
         require("provider=cpu" in result.stderr.decode("utf-8", "replace"),
                 "Native Nano did not report CPU provider")
-        print(json.dumps({"prerecorded_nano_cpu_asr": True,
+        # Taiwanese Windows account names are often Chinese, so TEMP/TMP can be
+        # non-ASCII. The daemon writes a private ORT session config there; it
+        # must still start and recognize (and not fall back to default precision).
+        unicode_temp = scratch / "\u8a9e\u97f3\u6e2c\u8a66"
+        unicode_temp.mkdir(exist_ok=True)
+        unicode_env = dict(env, TEMP=str(unicode_temp), TMP=str(unicode_temp))
+        unicode_run = subprocess.run([str(exe), "--transcribe", str(sample)], cwd=runtime / "bin",
+                                     env=unicode_env, capture_output=True, timeout=120, check=False)
+        unicode_text = unicode_run.stdout.decode("utf-8").strip()
+        unicode_err = unicode_run.stderr.decode("utf-8", "replace")
+        require(unicode_run.returncode == 0 and unicode_text and
+                all(anchor in normalized(unicode_text) for anchor in ANCHORS),
+                f"Nano failed with non-ASCII TEMP: exit {unicode_run.returncode} {unicode_text!r} {unicode_err[-1500:]!r}")
+        require("x64quantprecision=1" in unicode_err and "Nano warning" not in unicode_err,
+                f"Nano did not apply the ORT precision config under non-ASCII TEMP: {unicode_err[-1500:]!r}")
+        print(json.dumps({"prerecorded_nano_cpu_asr": True, "non_ascii_temp_ok": True,
                           "sample": SAMPLE, "sample_bytes": sample_pin[0],
                           "sample_sha256": sample_pin[1], "archive_sha256": model_pin["sha256"],
                           "ground_truth": GROUND_TRUTH, "transcript": transcripts[0], "runs": REPEATS, "cpu": cpu_name(),

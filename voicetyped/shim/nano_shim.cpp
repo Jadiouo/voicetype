@@ -4,9 +4,18 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cerrno>
 #include <filesystem>
-#include <fstream>
 #include <random>
+#include <vector>
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <cstdlib>
+#endif
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -39,21 +48,89 @@ using Result = std::unique_ptr<const SherpaOnnxOfflineRecognizerResult,
 using Segment = std::unique_ptr<const SherpaOnnxSpeechSegment,
                                decltype(&SherpaOnnxDestroySpeechSegment)>;
 
-// Short-lived key=value file for sherpa's provider config; removed on scope exit.
+// Short-lived key=value file for sherpa's provider config; removed on scope
+// exit. Created exclusively (mkstemp 0600 / CREATE_NEW) so it never overwrites
+// an existing file. create() reports failure instead of throwing.
 struct TempConfig {
     std::string path;
-    bool create(const char *text) {
+    std::string error;
+    bool create(const std::string &text) {
+        try {
+            return create_impl(text);
+        } catch (const std::exception &e) {
+            error = e.what();
+        } catch (...) {
+            error = "unknown error";
+        }
+        discard();
+        return false;
+    }
+    ~TempConfig() { discard(); }
+
+private:
+    std::filesystem::path full_path;
+    void discard() {
+        if (!full_path.empty()) { std::error_code ignored; std::filesystem::remove(full_path, ignored); }
+        full_path.clear();
+        path.clear();
+    }
+#ifdef _WIN32
+    static bool ascii(const std::wstring &w) {
+        for (wchar_t c : w) if (c >= 0x80) return false;
+        return true;
+    }
+    bool create_impl(const std::string &text) {
+        // Sherpa opens the file through a narrow path, so the path must be
+        // ASCII-safe even when the user's TEMP holds non-ASCII characters
+        // (e.g. a Chinese account name): use the 8.3 short name or fall back
+        // to the public profile directory.
+        std::vector<std::filesystem::path> dirs;
+        std::error_code ec;
+        auto temp = std::filesystem::temp_directory_path(ec);
+        if (!ec) dirs.push_back(temp);
+        if (const wchar_t *pub = _wgetenv(L"PUBLIC")) dirs.emplace_back(pub);
         std::random_device rd;
-        path = (std::filesystem::temp_directory_path() /
-                ("voicetype-ort-" + std::to_string(rd()) + std::to_string(rd()) + ".cfg")).string();
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        out << text;
-        out.close();
-        return static_cast<bool>(out);
+        std::string last = "no usable directory";
+        for (const auto &dir : dirs) {
+            auto candidate = dir / (L"voicetype-ort-" + std::to_wstring(rd()) + std::to_wstring(rd()) + L".cfg");
+            HANDLE h = CreateFileW(candidate.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h == INVALID_HANDLE_VALUE) { last = "CreateFileW failed (" + std::to_string(GetLastError()) + ")"; continue; }
+            full_path = candidate;
+            DWORD written = 0;
+            bool ok = WriteFile(h, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) &&
+                      written == text.size();
+            CloseHandle(h);
+            if (!ok) { last = "write failed"; discard(); continue; }
+            std::wstring usable = candidate.wstring();
+            if (!ascii(usable)) {
+                wchar_t shortp[MAX_PATH]{};
+                DWORD n = GetShortPathNameW(candidate.c_str(), shortp, MAX_PATH);
+                if (n == 0 || n >= MAX_PATH || !ascii(shortp)) { last = "no ASCII-safe path"; discard(); continue; }
+                usable = shortp;
+            }
+            std::string narrow;
+            for (wchar_t c : usable) narrow.push_back(static_cast<char>(c));
+            path = narrow;
+            return true;
+        }
+        error = last;
+        return false;
     }
-    ~TempConfig() {
-        if (!path.empty()) { std::error_code ignored; std::filesystem::remove(path, ignored); }
+#else
+    bool create_impl(const std::string &text) {
+        auto dir = std::filesystem::temp_directory_path();  // throws if missing
+        std::string name = (dir / "voicetype-ort-XXXXXX").string();
+        int fd = mkstemp(name.data());  // O_EXCL, mode 0600
+        if (fd < 0) { error = std::string("mkstemp failed: ") + std::strerror(errno); return false; }
+        full_path = name;
+        bool ok = ::write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size());
+        if (::close(fd) != 0) ok = false;
+        if (!ok) { error = "write failed"; discard(); return false; }
+        path = name;
+        return true;
     }
+#endif
 };
 
 struct VadReset {
@@ -119,14 +196,18 @@ extern "C" VtNano *vt_nano_init(const char *directory, const char *vad_model,
         // fixed all such runs and does not affect VNNI CPUs. Sherpa accepts
         // session entries only through a provider config file, so write a
         // private one for the duration of recognizer creation.
-        // VOICETYPE_NANO_ORT_CONFIG may name another file (diagnostics only).
-        const char *ort_config = std::getenv("VOICETYPE_NANO_ORT_CONFIG");
         TempConfig precision;
         std::string provider = "cpu";
-        if (ort_config && *ort_config) provider = std::string("cpu:") + ort_config;
-        else if (precision.create("SessionConfig.session.x64quantprecision=1\n"))
+        std::string precision_state = " x64quantprecision=1";
+        if (precision.create("SessionConfig.session.x64quantprecision=1\n")) {
             provider = "cpu:" + precision.path;
-        else throw std::runtime_error("cannot write ORT session config");
+        } else {
+            // Never block dictation over this; AVX2-only CPUs may then return
+            // empty text, so say so loudly.
+            precision_state = " x64quantprecision=off";
+            std::fprintf(stderr, "Nano warning: cannot write ORT session config (%s); using default int8 precision, "
+                                 "AVX2-only CPUs may return empty text\n", precision.error.c_str());
+        }
         config.model_config.provider = provider.c_str();
         auto &nano = config.model_config.funasr_nano;
         nano.encoder_adaptor = encoder.c_str();
@@ -160,7 +241,7 @@ extern "C" VtNano *vt_nano_init(const char *directory, const char *vad_model,
         std::fprintf(stderr, "Nano native: sherpa=%s git=%s ort=%s provider=cpu threads=4 language=auto itn=%d; full-waveform speech gate%s%s\n",
             SherpaOnnxGetVersionStr(), SherpaOnnxGetGitSha1(),
             SherpaOnnxGetOnnxruntimeVersionStr(), use_itn,
-            (ort_config && *ort_config) ? " ort_config_override" : " x64quantprecision=1",
+            precision_state.c_str(),
             "");
         return ctx.release();
     } catch (const std::exception &e) { error_text(error, cap, e.what()); }
