@@ -26,7 +26,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -46,6 +46,25 @@ struct Table {
 struct Entry {
     wrong: Vec<String>,
     right: String,
+    /// Optional "start" | "end": only replace at a sentence edge.
+    #[serde(default)]
+    anchor: Option<String>,
+}
+
+/// Where a rule may fire. `Any` is the original, unanchored behaviour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Anchor {
+    #[default]
+    Any,
+    Start,
+    End,
+}
+
+/// Sentence-boundary characters. MUST stay identical to `stops` in
+/// scripts/voicetype_review.py (propose_pair): whitespace plus
+/// ，。！？；：,.!?;: and the ASCII quotes " '.
+fn is_boundary(c: char) -> bool {
+    c.is_whitespace() || "，。！？；：,.!?;:\"'".contains(c)
 }
 
 pub struct Vocab {
@@ -63,7 +82,7 @@ struct Cache {
 pub struct VocabSnapshot {
     /// (小寫的 wrong, right)。依 wrong 長度降序 —— 否則
     /// `rate` 會先於 `learning rate` 命中, 留下半個詞。
-    rules: Vec<(String, String)>,
+    rules: Vec<(String, String, Anchor)>,
     terms: Vec<String>,
     names: Vec<String>,
 }
@@ -175,20 +194,22 @@ impl VocabSnapshot {
                 continue;
             }
             let hit = if code_ticks == 0 {
-                data.rules
-                    .iter()
-                    .find_map(|(wrong, right)| match matched_len(tail, wrong) {
+                data.rules.iter().find_map(|(wrong, right, anchor)| {
+                    match matched_len(tail, wrong) {
                         0 => None,
                         n if token_boundaries(text, pos, n, wrong)
                             && !names
                                 .iter()
                                 .any(|&(start, end)| start < pos + n && end > pos)
-                            && !crate::code_at(text, pos, pos + n) =>
+                            && !crate::code_at(text, pos, pos + n)
+                            && anchor_ok(text, pos, n, *anchor)
+                            && !already_corrected(text, pos, wrong, right) =>
                         {
                             Some((n, right))
                         }
                         _ => None,
-                    })
+                    }
+                })
             } else {
                 None
             };
@@ -303,7 +324,8 @@ impl VocabSnapshot {
                         .count()
                         == 1
                 {
-                    data.rules.push((variant.to_lowercase(), name.clone()));
+                    data.rules
+                        .push((variant.to_lowercase(), name.clone(), Anchor::Any));
                 }
             }
         }
@@ -313,13 +335,20 @@ impl VocabSnapshot {
                 !entry.right.is_empty() && entry.right.chars().count() <= 64,
                 "invalid replacement"
             );
+            let anchor = match entry.anchor.as_deref() {
+                None => Anchor::Any,
+                Some("start") => Anchor::Start,
+                Some("end") => Anchor::End,
+                Some(_) => bail!("invalid anchor"),
+            };
             data.terms.push(entry.right.clone());
             for wrong in entry.wrong {
                 ensure!(
                     !wrong.is_empty() && wrong.chars().count() <= 64,
                     "invalid source"
                 );
-                data.rules.push((wrong.to_lowercase(), entry.right.clone()));
+                data.rules
+                    .push((wrong.to_lowercase(), entry.right.clone(), anchor));
             }
         }
         ensure!(data.rules.len() <= 4096, "too many aliases");
@@ -332,7 +361,7 @@ impl VocabSnapshot {
         );
         data.rules.dedup();
         data.rules
-            .sort_by_key(|(wrong, _)| std::cmp::Reverse(wrong.chars().count()));
+            .sort_by_key(|(wrong, _, _)| std::cmp::Reverse(wrong.chars().count()));
         data.terms.sort();
         data.terms.dedup();
         Ok(data)
@@ -365,6 +394,32 @@ pub fn name_spans(text: &str, names: &[String]) -> Vec<(usize, usize)> {
         }
     }
     spans
+}
+
+/// 補字型詞對 (right 含有 wrong, 例如 公園玩 -> 公園玩耍): 文字若已經是
+/// right, 就不能再替換, 否則會變成 公園玩耍耍。
+fn already_corrected(text: &str, pos: usize, wrong_lower: &str, right: &str) -> bool {
+    let right_lower = right.to_lowercase();
+    if right_lower == wrong_lower {
+        return false;
+    }
+    right_lower
+        .char_indices()
+        .map(|(k, _)| k)
+        .filter(|&k| right_lower[k..].starts_with(wrong_lower))
+        .any(|k| {
+            pos >= k
+                && text.is_char_boundary(pos - k)
+                && matched_len(&text[pos - k..], &right_lower) > 0
+        })
+}
+
+fn anchor_ok(text: &str, pos: usize, len: usize, anchor: Anchor) -> bool {
+    match anchor {
+        Anchor::Any => true,
+        Anchor::End => text[pos + len..].chars().next().is_none_or(is_boundary),
+        Anchor::Start => text[..pos].chars().next_back().is_none_or(is_boundary),
+    }
 }
 
 fn token_boundaries(text: &str, start: usize, len: usize, pattern: &str) -> bool {
@@ -403,11 +458,11 @@ mod tests {
     use std::io::Write;
 
     fn vocab(pairs: &[(&str, &str)]) -> Vocab {
-        let mut rules: Vec<(String, String)> = pairs
+        let mut rules: Vec<(String, String, Anchor)> = pairs
             .iter()
-            .map(|(w, r)| (w.to_lowercase(), r.to_string()))
+            .map(|(w, r)| (w.to_lowercase(), r.to_string(), Anchor::Any))
             .collect();
-        rules.sort_by_key(|(wrong, _)| std::cmp::Reverse(wrong.chars().count()));
+        rules.sort_by_key(|(wrong, _, _)| std::cmp::Reverse(wrong.chars().count()));
         Vocab {
             path: None,
             cache: Mutex::new(Cache {
@@ -535,8 +590,8 @@ mod tests {
         let data = VocabSnapshot {
             names: vec!["臺積電公司".into(), "台積電".into()],
             rules: vec![
-                ("找臺積電".into(), "錯誤".into()),
-                ("臺積電".into(), "台積電".into()),
+                ("找臺積電".into(), "錯誤".into(), Anchor::Any),
+                ("臺積電".into(), "台積電".into(), Anchor::Any),
             ],
             terms: Vec::new(),
         };
@@ -553,6 +608,64 @@ mod tests {
     fn replacement_is_not_rescanned_by_the_same_rule() {
         let v = vocab(&[("git", "git")]);
         assert_eq!(v.apply("git git git"), "git git git");
+    }
+
+    #[test]
+    fn insertion_rule_does_not_double_an_already_correct_sentence() {
+        let v = vocab(&[("公園玩", "公園玩耍"), ("好好", "好好好")]);
+        assert_eq!(v.apply("我們去公園玩"), "我們去公園玩耍");
+        assert_eq!(v.apply("我們去公園玩耍"), "我們去公園玩耍");
+        assert_eq!(v.apply("今天好好"), "今天好好好");
+        assert_eq!(v.apply("今天好好好"), "今天好好好");
+        assert_eq!(v.apply("在公園散步"), "在公園散步");
+    }
+
+    fn anchored(toml: &str) -> VocabSnapshot {
+        VocabSnapshot::from_toml(toml).unwrap()
+    }
+
+    #[test]
+    fn end_anchor_only_fires_at_sentence_end() {
+        let v = anchored("[[entry]]\nwrong=['公園玩']\nright='公園玩耍'\nanchor='end'\n");
+        for (input, want) in [
+            ("我們去公園玩", "我們去公園玩耍"),
+            ("我們去公園玩。", "我們去公園玩耍。"),
+            ("我們去公園玩，然後", "我們去公園玩耍，然後"),
+            ("去公園玩 然後", "去公園玩耍 然後"),
+            ("公園玩具店", "公園玩具店"),
+            ("我們去公園玩耍", "我們去公園玩耍"),
+        ] {
+            assert_eq!(v.apply_with_terms(input).0, want, "{input}");
+        }
+    }
+
+    #[test]
+    fn start_anchor_only_fires_at_sentence_start() {
+        let v = anchored("[[entry]]\nwrong=['測試句']\nright='這測試句'\nanchor='start'\n");
+        for (input, want) in [
+            ("測試句子", "這測試句子"),
+            ("好。測試句子", "好。這測試句子"),
+            ("這是測試句子", "這是測試句子"),
+        ] {
+            assert_eq!(v.apply_with_terms(input).0, want, "{input}");
+        }
+    }
+
+    #[test]
+    fn entries_without_anchor_keep_substring_behaviour() {
+        let v = anchored("[[entry]]\nwrong=['公園玩']\nright='公園玩耍'\n");
+        assert_eq!(
+            v.apply_with_terms("公園玩具店，去公園玩").0,
+            "公園玩耍具店，去公園玩耍"
+        );
+    }
+
+    #[test]
+    fn unknown_anchor_value_is_rejected() {
+        assert!(
+            VocabSnapshot::from_toml("[[entry]]\nwrong=['a1']\nright='b1'\nanchor='mid'\n")
+                .is_err()
+        );
     }
 
     #[test]

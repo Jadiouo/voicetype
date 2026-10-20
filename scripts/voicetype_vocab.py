@@ -99,6 +99,8 @@ def validate(data):
             raise ValueError("詞彙格式錯誤。")
         right = entry.get("right")
         term(right)
+        if entry.get("anchor") not in (None, "start", "end"):
+            raise ValueError("anchor 只能是 start 或 end。")
         wrongs = entry.get("wrong")
         if not isinstance(wrongs, list) or not wrongs:
             raise ValueError("每筆至少填一個辨識錯字。")
@@ -172,7 +174,7 @@ class Vocabulary:
         self.original = data
         self.document = tomlkit.parse(data.decode("utf-8"))
 
-    def put(self, index, wrongs, right):
+    def put(self, index, wrongs, right, anchor=None):
         document = copy.deepcopy(self.document)
         if "entry" not in document:
             document["entry"] = tomlkit.aot()
@@ -184,6 +186,8 @@ class Vocabulary:
             entry = document["entry"][index]
         entry["wrong"] = list(dict.fromkeys(wrongs))
         entry["right"] = right
+        if anchor and index is None:
+            entry["anchor"] = anchor
         self.save(document)
 
     def delete(self, index):
