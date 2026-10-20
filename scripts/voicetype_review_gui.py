@@ -5,7 +5,7 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gst', '1.0')
 from gi.repository import Gtk, Gst
 
-from voicetype_review import ReviewStore, propose_pair, read_config, set_enabled
+from voicetype_review import ReviewStore, propose_rule, read_config, set_enabled
 
 
 def text(view):
@@ -178,10 +178,12 @@ class ReviewPane(Gtk.Box):
         if not hasattr(self, 'suggestion'):
             return
         corrected = text(self.corrected)
-        pair = propose_pair(self.current['output_text'], corrected) if self.current else None
+        rule = propose_rule(self.current['output_text'], corrected) if self.current else None
+        pair = rule[:2] if rule else None
+        where = {'end': '（只在句尾）', 'start': '（只在句首）'}.get(rule[2] if rule else None, '')
         self.learn_button.set_sensitive(pair is not None)
         self.correct_button.set_sensitive(self.current is not None and corrected == self.current['output_text'])
-        self.suggestion.set_text(f'加入詞庫會記住：{pair[0]} → {pair[1]}' if pair else
+        self.suggestion.set_text(f'加入詞庫會記住：{pair[0]} → {pair[1]}{where}' if pair else
             '大幅改寫先記錄整句；只有明確短修正才提供加入詞庫。')
 
     def save(self, unchanged=False, learn=False):

@@ -71,8 +71,26 @@ def read_record(path):
     return value
 
 
+# Sentence-boundary characters. MUST stay identical to `is_boundary` in
+# desktop/text/src/vocab.rs (whitespace plus these punctuation marks).
+STOPS = "，。！？；：,.!?;:\"'"
+
+
+def is_stop(c):
+    return c.isspace() or c in STOPS
+
+
 def propose_pair(before, after):
-    """A visible suggestion, never a learned rule until the user chooses it."""
+    """(wrong, right) suggestion; see propose_rule for the optional anchor."""
+    rule = propose_rule(before, after)
+    return rule[:2] if rule else None
+
+
+def propose_rule(before, after):
+    """A visible suggestion (wrong, right, anchor), never learned until chosen.
+
+    anchor is None, "start" or "end"; set only for insert/delete edits with
+    context on a single side, so the rule cannot fire mid-sentence."""
     if not before or before == after or any(c in before + after for c in "`\n\r"):
         return None
     # Compare whole English words, otherwise GTHUB -> GitHub appears as several
@@ -82,6 +100,7 @@ def propose_pair(before, after):
     changes = [op for op in difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk=False).get_opcodes() if op[0] != "equal"]
     if len(changes) != 1:
         return None
+    anchor = None
     _, a, b, c, d = changes[0]
     start, end = len(''.join(old_tokens[:a])), len(''.join(old_tokens[:b]))
     new_start, new_end = len(''.join(new_tokens[:c])), len(''.join(new_tokens[:d]))
@@ -102,14 +121,27 @@ def propose_pair(before, after):
         if (not changed.strip() or any(c.isspace() for c in changed) or changed.isascii()
                 or all(unicodedata.category(c)[0] in "PSZ" for c in changed)):
             return None
-        stops = "，。！？；：,.!?;:\n\r\"' \t\u3000"
-        left = start
-        while left > 0 and start - left < 2 and before[left - 1] not in stops:
-            left -= 1
-        right_end = end
-        while right_end < len(before) and right_end - end < 2 and before[right_end] not in stops:
-            right_end += 1
-        prefix, suffix = before[left:start], before[end:right_end]
+        def left_of(limit):
+            left = start
+            while left > 0 and start - left < limit and not is_stop(before[left - 1]):
+                left -= 1
+            return before[left:start]
+
+        def right_of(limit):
+            stop = end
+            while stop < len(before) and stop - end < limit and not is_stop(before[stop]):
+                stop += 1
+            return before[end:stop]
+
+        prefix, suffix = left_of(2), right_of(2)
+        if prefix and suffix:
+            pass  # two-sided context: no anchor needed
+        elif prefix:
+            prefix, suffix, anchor = left_of(3), "", "end"
+        elif suffix:
+            prefix, suffix, anchor = "", right_of(3), "start"
+        else:
+            return None
         if after[new_start - len(prefix):new_start] != prefix or after[new_end:new_end + len(suffix)] != suffix:
             return None
         wrong, right = prefix + wrong + suffix, prefix + right + suffix
@@ -136,15 +168,20 @@ def propose_pair(before, after):
         return None
     if any(c in wrong + right for c in "\n\r`/\\=<>[]{}"):
         return None
-    return wrong, right
+    return wrong, right, anchor
 
 
-def contains_alias(text, wrong):
+def contains_alias(text, wrong, anchor=None):
     pattern = re.escape(wrong)
     if wrong[0].isascii() and (wrong[0].isalnum() or wrong[0] == '_'):
         pattern = r"(?<![A-Za-z0-9_])" + pattern
     if wrong[-1].isascii() and (wrong[-1].isalnum() or wrong[-1] == '_'):
         pattern += r"(?![A-Za-z0-9_])"
+    stops = re.escape(STOPS)
+    if anchor == "end":
+        pattern += rf"(?![^\s{stops}])"
+    elif anchor == "start":
+        pattern = rf"(?<![^\s{stops}])" + pattern
     return re.search(pattern, text, re.IGNORECASE) is not None
 
 
@@ -218,24 +255,28 @@ class ReviewStore:
             record = read_record(path)
             if record['output_text'] != expected_output or timestamp - record['created_at'] >= RETENTION:
                 raise ValueError("這筆資料已變更或到期，請重新整理。")
-            pair = propose_pair(record['output_text'], corrected) if learn else None
+            rule = propose_rule(record['output_text'], corrected) if learn else None
+            pair = rule[:2] if rule else None
+            anchor = rule[2] if rule else None
             if learn and pair is None:
                 raise ValueError("這不是單一短詞修正，請先記錄整句，或到詞庫頁自行新增。")
             if pair:
                 wrong, right = pair
                 if wrong.lower() != right.lower():
                     for other in self._list(timestamp):
-                        if other['id'] != item_id and other['status'] != 'pending' and contains_alias(other['corrected_text'] or other['output_text'], wrong):
+                        if other['id'] != item_id and other['status'] != 'pending' and contains_alias(other['corrected_text'] or other['output_text'], wrong, anchor):
                             raise ValueError("已確認的其他句子仍使用這個原寫法。請先記錄整句，再用更完整的片語新增詞庫。")
                 # Keep a recoverable intent before touching the second store.
                 # A retry is idempotent if the dictionary committed first.
                 record['promotion'] = {'wrong': wrong, 'right': right, 'state': 'pending'}
+                if anchor:
+                    record['promotion']['anchor'] = anchor
                 record['pending_corrected_text'] = corrected
                 atomic_write(path, json_bytes(record))
                 vocabulary = Vocabulary(vocabulary_path)
-                existing = {w.lower(): e['right'] for e in vocabulary.entries for w in e['wrong']}
-                if existing.get(wrong.lower()) != right:
-                    vocabulary.put(None, [wrong], right)
+                existing = {(w.lower(), e.get('anchor')): e['right'] for e in vocabulary.entries for w in e['wrong']}
+                if existing.get((wrong.lower(), anchor)) != right:
+                    vocabulary.put(None, [wrong], right, anchor)
                 record['promotion']['state'] = 'applied'
             record['corrected_text'] = corrected
             record['status'] = 'correct' if corrected == record['output_text'] else 'corrected'
