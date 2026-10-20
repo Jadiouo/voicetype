@@ -90,6 +90,32 @@ class ReviewTest(unittest.TestCase):
         self.assertIsNone(propose_pair('`GTHUB`', '`GitHub`'))
         self.assertIsNone(propose_pair('句子一樣', '句子一樣'))
 
+    def test_pure_insert_or_delete_gets_context_pair(self):
+        self.assertEqual(propose_pair('我們去公園玩', '我們去公園玩耍'), ('公園玩', '公園玩耍'))
+        self.assertEqual(propose_pair('這是測試句子', '這是測試句'), ('測試句子', '測試句'))
+        self.assertEqual(propose_pair('測試句子', '這測試句子'), ('測試句', '這測試句'))
+        self.assertEqual(propose_pair('今天好好', '今天好好好'), ('天好好', '天好好好'))
+        self.assertEqual(propose_pair('我們去公園玩耍', '我們去公園玩'), ('公園玩耍', '公園玩'))
+
+    def test_punctuation_space_and_multi_edit_stay_disabled(self):
+        self.assertIsNone(propose_pair('你好', '你好。'))
+        self.assertIsNone(propose_pair('你好嗎', '你好 嗎'))
+        self.assertIsNone(propose_pair('你好 嗎', '你好嗎'))
+        self.assertIsNone(propose_pair('我去公園玩，他在家', '我去公園玩耍，他在家睡'))
+        self.assertIsNone(propose_pair('好', '好嗎'))
+
+    def test_insertion_learn_writes_pair_and_blocks_confirmed_conflict(self):
+        r = self.sample('我們去公園玩')
+        args = dict(expected_output=r['output_text'], learn=True, vocabulary_path=self.vocab)
+        self.assertEqual(self.store.review(r['id'], '我們去公園玩耍', **args), ('公園玩', '公園玩耍'))
+        self.assertIn('公園玩耍', self.vocab.read_text())
+        other = self.sample('公園玩具店', sequence=2, status='correct', corrected_text='公園玩具店')
+        r3 = self.sample('他在公園玩', sequence=3)
+        vocab2 = Path(self.temp.name) / 'v2.toml'
+        with self.assertRaisesRegex(ValueError, '已確認'):
+            self.store.review(r3['id'], '他在公園玩耍', expected_output=r3['output_text'], learn=True, vocabulary_path=vocab2)
+        self.assertFalse(vocab2.exists())
+
     def test_malformed_optional_fields_are_skipped_without_breaking_queue(self):
         self.sample('bad', corrected_text={'unexpected': 'object'})
         self.sample('bad time', sequence=2, created_at=10**30)

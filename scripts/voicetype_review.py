@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import time
+import unicodedata
 
 from voicetype_vocab import Vocabulary, atomic_write
 
@@ -91,12 +92,37 @@ def propose_pair(before, after):
     while end < len(before) and new_end < len(after) and latin(before[end]) and latin(after[new_end]):
         end += 1; new_end += 1
     wrong, right = before[start:end], after[new_start:new_end]
-    if not wrong or not right:
-        return None
+    expanded = not wrong or not right
+    if expanded:
+        # Pure insertion or deletion (a dropped or extra character). Offer it
+        # only when the changed text is real CJK-style text, then widen it with
+        # neighbouring text so both sides are non-empty. The vocabulary applier
+        # skips text that is already corrected, so wrong may be a prefix of right.
+        changed = wrong or right
+        if (not changed.strip() or any(c.isspace() for c in changed) or changed.isascii()
+                or all(unicodedata.category(c)[0] in "PSZ" for c in changed)):
+            return None
+        stops = "，。！？；：,.!?;:\n\r\"'"
+        boundary = start
+        while boundary > 0 and start - boundary < 3 and before[boundary - 1] not in stops:
+            boundary -= 1
+        prefix = before[boundary:start]
+        if prefix.strip() and after[new_start - len(prefix):new_start] == prefix:
+            wrong, right = prefix + wrong, prefix + right
+        else:
+            tail = end
+            while tail < len(before) and tail - end < 3 and before[tail] not in stops:
+                tail += 1
+            suffix = before[end:tail]
+            if not suffix.strip() or after[new_end:new_end + len(suffix)] != suffix:
+                return None
+            wrong, right = wrong + suffix, right + suffix
+        if wrong == right:
+            return None
     # Lowercase English words and single Han characters require surrounding
     # phrase context. This avoids offering bare coming -> commit or 庫 -> 股.
     needs_context = (wrong.isascii() and wrong.islower() and right.islower()) or (not wrong.isascii() and len(wrong) < 4) or len(wrong) < 2 or len(right) < 2
-    if needs_context:
+    if needs_context and not expanded:
         boundary = start
         while boundary > 0 and start - boundary < 8 and before[boundary - 1] not in "，。！？；：,.!?;:\n\r\"'":
             boundary -= 1

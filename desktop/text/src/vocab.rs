@@ -183,7 +183,8 @@ impl VocabSnapshot {
                             && !names
                                 .iter()
                                 .any(|&(start, end)| start < pos + n && end > pos)
-                            && !crate::code_at(text, pos, pos + n) =>
+                            && !crate::code_at(text, pos, pos + n)
+                            && !already_corrected(text, pos, wrong, right) =>
                         {
                             Some((n, right))
                         }
@@ -365,6 +366,24 @@ pub fn name_spans(text: &str, names: &[String]) -> Vec<(usize, usize)> {
         }
     }
     spans
+}
+
+/// 補字型詞對 (right 含有 wrong, 例如 公園玩 -> 公園玩耍): 文字若已經是
+/// right, 就不能再替換, 否則會變成 公園玩耍耍。
+fn already_corrected(text: &str, pos: usize, wrong_lower: &str, right: &str) -> bool {
+    let right_lower = right.to_lowercase();
+    if right_lower == wrong_lower {
+        return false;
+    }
+    right_lower
+        .char_indices()
+        .map(|(k, _)| k)
+        .filter(|&k| right_lower[k..].starts_with(wrong_lower))
+        .any(|k| {
+            pos >= k
+                && text.is_char_boundary(pos - k)
+                && matched_len(&text[pos - k..], &right_lower) > 0
+        })
 }
 
 fn token_boundaries(text: &str, start: usize, len: usize, pattern: &str) -> bool {
@@ -553,6 +572,16 @@ mod tests {
     fn replacement_is_not_rescanned_by_the_same_rule() {
         let v = vocab(&[("git", "git")]);
         assert_eq!(v.apply("git git git"), "git git git");
+    }
+
+    #[test]
+    fn insertion_rule_does_not_double_an_already_correct_sentence() {
+        let v = vocab(&[("公園玩", "公園玩耍"), ("好好", "好好好")]);
+        assert_eq!(v.apply("我們去公園玩"), "我們去公園玩耍");
+        assert_eq!(v.apply("我們去公園玩耍"), "我們去公園玩耍");
+        assert_eq!(v.apply("今天好好"), "今天好好好");
+        assert_eq!(v.apply("今天好好好"), "今天好好好");
+        assert_eq!(v.apply("在公園散步"), "在公園散步");
     }
 
     #[test]
