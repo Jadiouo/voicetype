@@ -102,21 +102,20 @@ def propose_pair(before, after):
         if (not changed.strip() or any(c.isspace() for c in changed) or changed.isascii()
                 or all(unicodedata.category(c)[0] in "PSZ" for c in changed)):
             return None
-        stops = "，。！？；：,.!?;:\n\r\"'"
-        boundary = start
-        while boundary > 0 and start - boundary < 3 and before[boundary - 1] not in stops:
-            boundary -= 1
-        prefix = before[boundary:start]
-        if prefix.strip() and after[new_start - len(prefix):new_start] == prefix:
-            wrong, right = prefix + wrong, prefix + right
-        else:
-            tail = end
-            while tail < len(before) and tail - end < 3 and before[tail] not in stops:
-                tail += 1
-            suffix = before[end:tail]
-            if not suffix.strip() or after[new_end:new_end + len(suffix)] != suffix:
-                return None
-            wrong, right = wrong + suffix, right + suffix
+        stops = "，。！？；：,.!?;:\n\r\"' \t\u3000"
+        left = start
+        while left > 0 and start - left < 2 and before[left - 1] not in stops:
+            left -= 1
+        right_end = end
+        while right_end < len(before) and right_end - end < 2 and before[right_end] not in stops:
+            right_end += 1
+        prefix, suffix = before[left:start], before[end:right_end]
+        if after[new_start - len(prefix):new_start] != prefix or after[new_end:new_end + len(suffix)] != suffix:
+            return None
+        wrong, right = prefix + wrong + suffix, prefix + right + suffix
+        # A short wrong that is itself a common word would rewrite unrelated text.
+        if len(wrong) < 3 or len(right) < 2:
+            return None
         if wrong == right:
             return None
     # Lowercase English words and single Han characters require surrounding
