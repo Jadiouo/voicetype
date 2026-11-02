@@ -35,6 +35,8 @@ function shortcutLabel(view, provider, choice) {
 const enableInput = document.querySelector('#enable-local-input');
 const spellingEnabled = document.querySelector('#spelling-enabled');
 spellingEnabled.addEventListener('change', () => command('set_spelling_enabled', { enabled: spellingEnabled.checked }));
+const backgroundStart = document.querySelector('#background-start');
+backgroundStart.addEventListener('change', () => command('set_background_start', { enabled: backgroundStart.checked }));
 let moduleBusy = false;
 const installModule = document.querySelector('#install-input-module');
 const restoreModule = document.querySelector('#restore-input-module');
@@ -73,6 +75,14 @@ function runtimeControls(view) {
     ready: 'CPU 校正器已就緒。',
     unavailable: 'CPU 校正器本次不可用；仍可使用本機語音辨識，結果保留原文。請卸載後檢查安裝包再載入。',
   };
+  // Login start is a Windows-only choice; an unrecorded setting means opted in.
+  document.querySelector('#background-start-row').hidden = !view?.windows_input;
+  document.querySelector('#background-start-note').hidden = !view?.windows_input;
+  backgroundStart.disabled = commandBusy || !view;
+  if (view) backgroundStart.checked = view.settings.background_start !== false;
+  const autoStartNote = document.querySelector('#auto-start-note');
+  autoStartNote.textContent = view?.auto_start_error || '';
+  autoStartNote.hidden = !view?.auto_start_error;
   document.querySelector('#spelling-runtime-note').textContent = spellingNotes[view?.spelling_runtime] || '校正器會在載入引擎時檢查。';
   document.querySelector('#input-module-setup').hidden = !view?.local_runtime_bundled || !!view?.windows_input;
   installModule.disabled = restoreModule.disabled = moduleBusy || commandBusy
@@ -80,11 +90,13 @@ function runtimeControls(view) {
   const loaded = ['waiting_for_input', 'ready'].includes(view?.local_runtime);
   const runtimeAssetsIdle = !!view?.local_runtime_bundled && view.local_runtime === 'inactive'
     && !view.input_requested && !view.settings.dictation.busy;
-  loadRuntime.disabled = commandBusy || !runtimeAssetsIdle || view.settings.selected_provider !== 'local';
-  repairRuntime.disabled = rollbackRuntime.disabled = commandBusy || !runtimeAssetsIdle;
+  // The boot-time load/enable runs on its own thread; wait for it to settle.
+  const autoStarting = !!view?.auto_start_busy;
+  loadRuntime.disabled = commandBusy || autoStarting || !runtimeAssetsIdle || view.settings.selected_provider !== 'local';
+  repairRuntime.disabled = rollbackRuntime.disabled = commandBusy || autoStarting || !runtimeAssetsIdle;
   unloadRuntime.hidden = !loaded && view?.local_runtime !== 'failed';
   unloadRuntime.disabled = commandBusy || !!view?.settings.dictation.busy;
-  enableInput.disabled = commandBusy || !view?.local_runtime_bundled || !loaded
+  enableInput.disabled = commandBusy || autoStarting || !view?.local_runtime_bundled || !loaded
     || view?.input_requested || !!view?.settings.dictation.busy;
   document.querySelector('#runtime-note').textContent = !view?.local_runtime_bundled
     ? '這個平台的引擎封裝仍在準備中。'
@@ -153,14 +165,16 @@ function render(view) {
   }
   if (view.local_runtime !== 'inactive') {
     const runtimeLabels = {
-      waiting_for_input: view.windows_input ? '引擎已載入 · 尚未啟用快捷鍵' : '引擎已載入 · 等待輸入法連接',
+      waiting_for_input: view.windows_input ? (view.auto_start_busy ? '正在自動啟用聽寫…' : '引擎已載入 · 尚未啟用快捷鍵') : '引擎已載入 · 等待輸入法連接',
       ready: view.windows_input ? '本機引擎與 Windows 快捷鍵已連接 · 自動送字未驗證' : '本機引擎與輸入法已連接',
       failed: '本機引擎已中斷 · 請重新準備',
     };
     document.querySelector('#local-availability').textContent = runtimeLabels[view.local_runtime] || '尚未準備引擎';
   }
   document.querySelector('#version').textContent = `開發預覽 ${view.settings.version}`;
-  document.querySelector('#tray-note').textContent = view.tray_available
+  document.querySelector('#tray-note').textContent = view.windows_input && view.tray_available
+    ? '可從系統匣圖示開啟此視窗。關閉視窗只會縮到系統匣，聽寫照常；要結束請用系統匣選單的「結束預覽 App」。'
+    : view.tray_available
     ? '可從系統圖示開啟此視窗。關閉視窗會結束預覽 App。'
     : '此桌面未提供常駐圖示。關閉視窗會結束預覽 App。';
 }

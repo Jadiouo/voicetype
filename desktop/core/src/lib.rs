@@ -116,6 +116,8 @@ pub struct ProviderStatus {
 #[derive(Debug, Serialize)]
 pub struct Snapshot {
     pub spelling_enabled: bool,
+    /// `None` until the user (or first launch) has recorded a choice.
+    pub background_start: Option<bool>,
     pub dictation: DictationStatus,
     pub selected_provider: Provider,
     pub shortcuts: ShortcutSettings,
@@ -153,6 +155,8 @@ struct Preferences {
     selected_provider: Provider,
     #[serde(default = "default_spelling")]
     spelling_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    background_start: Option<bool>,
     #[serde(default)]
     shortcuts: ShortcutSettings,
     #[serde(flatten)]
@@ -169,6 +173,7 @@ impl Default for Preferences {
             schema_version: 1,
             selected_provider: Provider::Local,
             spelling_enabled: true,
+            background_start: None,
             shortcuts: ShortcutSettings::default(),
             extra: Default::default(),
         }
@@ -223,6 +228,7 @@ impl Application {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             spelling_enabled: self.preferences.spelling_enabled,
+            background_start: self.preferences.background_start,
             dictation: self.dictation.status(),
             selected_provider: self.preferences.selected_provider,
             shortcuts: self.preferences.shortcuts,
@@ -290,6 +296,14 @@ impl Application {
         }
         let mut next = self.preferences.clone();
         next.spelling_enabled = enabled;
+        self.save_preferences(next)
+    }
+
+    /// Login-start preference. It only records intent; the native shell owns
+    /// the OS registration, so a running engine does not block this change.
+    pub fn set_background_start(&mut self, enabled: bool) -> Result<Snapshot, AppError> {
+        let mut next = self.preferences.clone();
+        next.background_start = Some(enabled);
         self.save_preferences(next)
     }
 

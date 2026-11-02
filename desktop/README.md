@@ -54,8 +54,19 @@ these checks do not establish live recognition quality or end-user latency.
 The preview has its own application ID and settings directory:
 `io.github.jadiouo.voicetype.preview`. It never changes the existing
 `voicetype` vocabulary/learning settings; vocabulary import requires an explicit action. Only the explicit module installer changes
-the Fcitx addon registration, with rollback. Closing its window exits the preview; a desktop tray entry
-also opens settings where the desktop supports it. No autostart is installed.
+the Fcitx addon registration, with rollback. On Linux, closing its window exits the preview; a desktop tray entry
+also opens settings where the desktop supports it. On Windows, closing the window
+only hides it to the system tray and dictation keeps running; quit from the tray
+menu ("結束預覽 App"). If the tray cannot be created, closing the window still exits.
+
+On Windows the app also starts at login, hidden in the tray: a per-user
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value runs the app with
+`--background`. First launch opts in; the "開機時在背景啟動" setting removes or
+restores it. When the model is already prepared, each Windows launch loads the
+local engine and enables the hotkey automatically; if the model is missing it does
+nothing, and a failure is shown in the settings window. Launching the app again
+brings the existing window forward (single instance). Linux still installs no
+autostart and needs the explicit engine load and Fcitx enable steps.
 
 ## Development
 

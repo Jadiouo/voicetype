@@ -242,6 +242,16 @@ impl DesktopWorker {
         })
     }
 
+    pub fn set_background_start(&self, enabled: bool) -> Result<DesktopSnapshot, String> {
+        self.call(move |desktop| {
+            desktop
+                .app_mut()?
+                .set_background_start(enabled)
+                .map_err(|e| e.to_string())?;
+            desktop.snapshot()
+        })
+    }
+
     pub fn set_shortcut(
         &self,
         provider: Provider,
