@@ -307,12 +307,18 @@ fn desktop_context_with(enabled: Option<&std::ffi::OsStr>, helper: Option<&std::
     let Some(helper) = screen_context_helper(enabled, helper) else {
         return String::new();
     };
-    let Ok(mut child) = Command::new(helper)
+    let mut command = Command::new(helper);
+    command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .spawn()
-    else {
+        .stdin(Stdio::null());
+    // The parent has no console, so a console-subsystem helper would open its own window.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let Ok(mut child) = command.spawn() else {
         return String::new();
     };
     let start = Instant::now();

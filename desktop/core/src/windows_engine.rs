@@ -145,6 +145,13 @@ impl WindowsEngine {
         if let Some(spelling) = &paths.spelling {
             command.env("VOICETYPE_CSC_PROCESS", serde_json::to_string(spelling)?);
         }
+        // The App has no console; without this Windows opens a CMD window whose
+        // closing would kill the engine.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
         let mut child = command.spawn()?;
         #[cfg(windows)]
         let job = match crate::windows_job::WindowsJob::attach(&child) {
