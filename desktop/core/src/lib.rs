@@ -363,7 +363,26 @@ impl Application {
         let mut temp = tempfile::NamedTempFile::new_in(dir)?;
         temp.write_all(&data)?;
         temp.as_file().sync_all()?;
-        temp.persist(&self.path).map_err(|e| e.error)?;
+        // Windows refuses to replace a file another process has open without
+        // delete sharing (scanner, indexer, a polling reader). That is
+        // transient and nothing has changed yet, so retry for ~2s before
+        // reporting it. The settings lock is still held throughout.
+        let mut attempts = 0;
+        loop {
+            match temp.persist(&self.path) {
+                Ok(_) => break,
+                Err(e)
+                    if cfg!(windows)
+                        && e.error.kind() == std::io::ErrorKind::PermissionDenied
+                        && attempts < 40 =>
+                {
+                    attempts += 1;
+                    temp = e.file;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e.error.into()),
+            }
+        }
         self.preferences = next;
         self.original = Some(data);
         Ok(self.snapshot())
