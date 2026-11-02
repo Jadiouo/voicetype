@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unicodedata
 import urllib.request
@@ -139,6 +140,62 @@ def normalized(text):
                    and not unicodedata.category(char).startswith("P"))
 
 
+def desktop_handshake(exe, scratch, model, vad):
+    """Start the daemon the way windows_engine.rs start() does and read one reply."""
+    profile = Path(tempfile.mkdtemp(prefix="desktop-profile-", dir=scratch))
+    for name in ("home", "config", "data", "logs", "review"):
+        (profile / name).mkdir()
+    # App passes a vocab file, a review config file and a review root directory.
+    env = {"VOICETYPE_ASR_PROFILE": "nano", "VOICETYPE_NANO_MODEL_DIR": str(model),
+           "VOICETYPE_NANO_VAD_MODEL": str(vad), "VOICETYPE_VOCAB": str(profile / "vocab.json"),
+           "VOICETYPE_REVIEW_CONFIG": str(profile / "review.json"),
+           "VOICETYPE_REVIEW_ROOT": str(profile / "review"),
+           "APPDATA": str(profile / "config"), "LOCALAPPDATA": str(profile / "data"),
+           "USERPROFILE": str(profile), "HOME": str(profile / "home"),
+           "XDG_CONFIG_HOME": str(profile / "config"), "XDG_DATA_HOME": str(profile / "data"),
+           "VOICETYPE_LEARNING_FILE": str(profile / "data/learning.json"), "CUDA_VISIBLE_DEVICES": ""}
+    for name in ("SystemRoot", "WINDIR"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    log = profile / "logs/voicetyped.log"
+    lines = []
+    with log.open("wb") as errors:
+        # The App sets no current_dir, so neither do we.
+        child = subprocess.Popen([str(exe), "--desktop-stdio"], env=env, stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=errors)
+        try:
+            def pump():
+                lines.append(child.stdout.readline())
+            reader = threading.Thread(target=pump, daemon=True)
+            started = time.monotonic()
+            reader.start()
+            child.stdin.write(b'{"type":"desktop_status","request":1}\n')
+            child.stdin.flush()
+            reader.join(300)
+            waited = time.monotonic() - started
+            reply = lines[0] if lines else b""
+            if not reply.strip():
+                try:
+                    code = child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    code = None
+                tail = log.read_bytes()[-3000:].decode("utf-8", "replace")
+                state = "stdout EOF" if lines else f"no reply within {waited:.0f}s"
+                raise RuntimeError(f"--desktop-stdio daemon gave no handshake ({state}, exit {code}); "
+                                   f"stdout {reply[:500]!r}; stderr tail: {tail!r}")
+            info = json.loads(reply)
+            require(info.get("type") == "info" and info["value"].get("desktop_protocol") == 1,
+                    f"Unexpected --desktop-stdio handshake: {reply[:300]!r}")
+        finally:
+            child.kill()
+            child.wait()
+            for stream in (child.stdin, child.stdout):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+
 def main(runtime, scratch, archive_override):
     require(sys.platform == "win32", "Run this probe on a Windows CPU runner")
     root = ROOT.resolve()
@@ -219,22 +276,7 @@ def main(runtime, scratch, archive_override):
                 f"Nano did not apply the ORT precision config under non-ASCII TEMP: {unicode_err[-1500:]!r}")
         # The App starts the daemon with only --desktop-stdio and waits for one
         # desktop_status reply. --transcribe above never exercised that argv.
-        desktop = subprocess.Popen([str(exe), "--desktop-stdio"], cwd=runtime / "bin", env=env,
-                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            desktop.stdin.write(b'{"type":"desktop_status","request":1}\n')
-            desktop.stdin.flush()
-            reply = desktop.stdout.readline()
-            require(reply, f"--desktop-stdio daemon gave no handshake (exit {desktop.poll()})")
-            info = json.loads(reply)
-            require(info.get("type") == "info" and info["value"].get("desktop_protocol") == 1,
-                    f"Unexpected --desktop-stdio handshake: {reply[:300]!r}")
-        finally:
-            desktop.kill()
-            desktop.wait()
-            desktop.stdin.close()
-            desktop.stdout.close()
-            desktop.stderr.close()
+        desktop_handshake(exe, scratch, model, vad)
         print(json.dumps({"prerecorded_nano_cpu_asr": True, "non_ascii_temp_ok": True,
                           "sample": SAMPLE, "sample_bytes": sample_pin[0],
                           "sample_sha256": sample_pin[1], "archive_sha256": model_pin["sha256"],
