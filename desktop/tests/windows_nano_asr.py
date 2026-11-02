@@ -217,6 +217,24 @@ def main(runtime, scratch, archive_override):
                 f"Nano failed with non-ASCII TEMP: exit {unicode_run.returncode} {unicode_text!r} {unicode_err[-1500:]!r}")
         require("x64quantprecision=1" in unicode_err and "Nano warning" not in unicode_err,
                 f"Nano did not apply the ORT precision config under non-ASCII TEMP: {unicode_err[-1500:]!r}")
+        # The App starts the daemon with only --desktop-stdio and waits for one
+        # desktop_status reply. --transcribe above never exercised that argv.
+        desktop = subprocess.Popen([str(exe), "--desktop-stdio"], cwd=runtime / "bin", env=env,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            desktop.stdin.write(b'{"type":"desktop_status","request":1}\n')
+            desktop.stdin.flush()
+            reply = desktop.stdout.readline()
+            require(reply, f"--desktop-stdio daemon gave no handshake (exit {desktop.poll()})")
+            info = json.loads(reply)
+            require(info.get("type") == "info" and info["value"].get("desktop_protocol") == 1,
+                    f"Unexpected --desktop-stdio handshake: {reply[:300]!r}")
+        finally:
+            desktop.kill()
+            desktop.wait()
+            desktop.stdin.close()
+            desktop.stdout.close()
+            desktop.stderr.close()
         print(json.dumps({"prerecorded_nano_cpu_asr": True, "non_ascii_temp_ok": True,
                           "sample": SAMPLE, "sample_bytes": sample_pin[0],
                           "sample_sha256": sample_pin[1], "archive_sha256": model_pin["sha256"],

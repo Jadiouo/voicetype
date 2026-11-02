@@ -52,8 +52,12 @@ async fn main() -> Result<()> {
 
     // 評測模式 (SDD §8.1)。放在 daemon 啟動之前 —— 它不開 socket、
     // 不碰麥克風, 只跑推論管線。
-    if let Some(args) = TranscribeArgs::from_env()? {
-        return transcribe_file(args);
+    // Windows App 以唯一參數 `--desktop-stdio` 啟動; 它不是評測參數,
+    // 不能交給 from_env (會當成未知參數而 exit 1)。嚴格檢查留在下方 cfg(windows)。
+    if !is_desktop_stdio(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        if let Some(args) = TranscribeArgs::from_env()? {
+            return transcribe_file(args);
+        }
     }
 
     info!(version = env!("CARGO_PKG_VERSION"), "voicetyped starting");
@@ -105,6 +109,11 @@ async fn main() -> Result<()> {
         ipc::run(manager).await?;
     }
     Ok(())
+}
+
+/// 參數恰好是 `["--desktop-stdio"]` 時為 true (App 擁有的 stdio 子行程模式)。
+fn is_desktop_stdio(args: &[String]) -> bool {
+    args.len() == 1 && args[0] == "--desktop-stdio"
 }
 
 /// `--transcribe <wav> [--no-vad] [--no-itn]`：跑一次推論並把結果印到 stdout。
@@ -462,4 +471,25 @@ fn model_path() -> std::path::PathBuf {
     base.join("voicetype")
         .join("models")
         .join("sense-voice-small-q8_0.gguf")
+}
+
+#[cfg(test)]
+mod desktop_stdio_arg_tests {
+    use super::is_desktop_stdio;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn desktop_stdio_alone_bypasses_transcribe_parsing() {
+        assert!(is_desktop_stdio(&args(&["--desktop-stdio"])));
+    }
+
+    #[test]
+    fn anything_else_still_goes_through_transcribe_parsing() {
+        assert!(!is_desktop_stdio(&args(&[])));
+        assert!(!is_desktop_stdio(&args(&["--desktop-stdio", "--no-vad"])));
+        assert!(!is_desktop_stdio(&args(&["--transcribe", "a.wav"])));
+    }
 }

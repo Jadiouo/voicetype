@@ -453,16 +453,22 @@ impl DesktopWorker {
                     paths.spelling = None;
                 }
                 let spelling_requested = paths.spelling.is_some();
+                let profile = paths.profile.clone();
                 let engine = match crate::windows_engine::WindowsEngine::start(paths) {
                     Ok(engine) => engine,
-                    Err(_) => {
+                    Err(error) => {
                         desktop.local_status = LocalRuntimeStatus::Failed;
                         desktop.spelling_status = if spelling_enabled {
                             SpellingRuntimeStatus::Unavailable
                         } else {
                             SpellingRuntimeStatus::Disabled
                         };
-                        return Err("無法啟動 Windows 本機引擎或核對協定".into());
+                        let reason = crate::windows_engine::engine_log_tail(&profile)
+                            .unwrap_or_else(|| error.to_string());
+                        return Err(format!(
+                            "無法啟動 Windows 本機引擎或核對協定（{reason}；日誌：{}）",
+                            crate::windows_engine::engine_log_path(&profile).display()
+                        ));
                     }
                 };
                 desktop.spelling_status = if !spelling_enabled {
@@ -483,7 +489,7 @@ impl DesktopWorker {
         })
     }
 
-    /// The selected Windows provider alone owns the global Ctrl+CapsLock hook.
+    /// The selected Windows provider alone owns the global Ctrl+Alt hold hook.
     /// Native Google audio remains inside the official CLI; no App PCM sample
     /// or recorder-drain ACK is claimed by this route.
     #[cfg(windows)]
