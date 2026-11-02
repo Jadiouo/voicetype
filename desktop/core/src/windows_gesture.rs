@@ -22,7 +22,8 @@ pub(crate) fn shortcut_matches(
     windows: bool,
 ) -> bool {
     match choice {
-        ShortcutChoice::Default => ctrl,
+        // Hold-to-talk chord, same as the Linux module: exactly Ctrl+Alt.
+        ShortcutChoice::Default => ctrl && alt && !shift && !windows,
         ShortcutChoice::CtrlShiftF9 => ctrl && shift && !alt && !windows,
     }
 }
@@ -55,12 +56,73 @@ pub(crate) struct WindowsGesture {
     escape_latched: bool,
     escape_consumed: bool,
     owner_active: bool,
+    // Hold-to-talk (Default binding): one chord press starts at most once, and a
+    // foreign key pressed under Ctrl/Alt poisons the hold until both are released.
+    hold_latched: bool,
+    hold_poisoned: bool,
 }
 
 impl WindowsGesture {
     #[cfg(windows)]
     pub fn needs_target(&self) -> bool {
         matches!(self.phase, Phase::Idle) && !self.shortcut_latched
+    }
+
+    #[cfg(windows)]
+    pub fn hold_needs_target(&self) -> bool {
+        matches!(self.phase, Phase::Idle) && !self.hold_latched && !self.hold_poisoned
+    }
+
+    /// Called after every key event. `chord` is Ctrl and Alt both down, `extra`
+    /// Shift or Win down, `ctrl_or_alt` whether either of Ctrl/Alt is still down.
+    /// Only releasing Ctrl or Alt stops; an added Shift/Win counts as a foreign key.
+    /// Never suppresses keys.
+    pub fn hold(
+        &mut self,
+        chord: bool,
+        extra: bool,
+        ctrl_or_alt: bool,
+        target: impl FnOnce() -> Option<TargetLease>,
+    ) -> Option<GestureAction> {
+        if !ctrl_or_alt {
+            self.hold_poisoned = false;
+        }
+        if !chord {
+            self.hold_latched = false;
+            if matches!(self.phase, Phase::PendingStart | Phase::Listening) {
+                self.phase = Phase::Finalizing;
+                return Some(GestureAction::Stop);
+            }
+            return None;
+        }
+        if extra {
+            return self.hold_other_key(true);
+        }
+        if self.hold_latched || self.hold_poisoned {
+            return None;
+        }
+        self.hold_latched = true;
+        if matches!(self.phase, Phase::Idle) {
+            return target().map(|target| {
+                self.phase = Phase::PendingStart;
+                GestureAction::Start(target)
+            });
+        }
+        None
+    }
+
+    /// A non-modifier key (not Esc) went down. Under Ctrl/Alt it belongs to some
+    /// other shortcut: cancel a running hold and ignore the chord until release.
+    pub fn hold_other_key(&mut self, modifier_held: bool) -> Option<GestureAction> {
+        if !modifier_held {
+            return None;
+        }
+        self.hold_poisoned = true;
+        if matches!(self.phase, Phase::PendingStart | Phase::Listening) {
+            self.phase = Phase::Finalizing;
+            return Some(GestureAction::Cancel);
+        }
+        None
     }
 
     pub fn caps(
@@ -196,14 +258,28 @@ mod tests {
     }
 
     #[test]
-    fn alternate_requires_exact_modifiers_and_default_keeps_ctrl_caps_behavior() {
+    fn alternate_requires_exact_modifiers_and_default_is_exact_ctrl_alt() {
         assert!(shortcut_matches(
             ShortcutChoice::Default,
             true,
             false,
-            false,
+            true,
             false
         ));
+        for (ctrl, shift, alt, windows) in [
+            (true, false, false, false),
+            (false, false, true, false),
+            (true, true, true, false),
+            (true, false, true, true),
+        ] {
+            assert!(!shortcut_matches(
+                ShortcutChoice::Default,
+                ctrl,
+                shift,
+                alt,
+                windows
+            ));
+        }
         assert!(!shortcut_matches(
             ShortcutChoice::CtrlShiftF9,
             true,
@@ -295,6 +371,104 @@ mod tests {
             gesture.caps(true, true, || Some(lease(2))).action,
             Some(GestureAction::Start(lease(2)))
         );
+    }
+
+    #[test]
+    fn hold_starts_on_chord_and_stops_when_either_modifier_is_released() {
+        let mut gesture = WindowsGesture::default();
+        // Ctrl alone, then Alt joins: only the full chord starts.
+        assert!(gesture.hold(false, false, true, || Some(lease(9))).is_none());
+        assert_eq!(
+            gesture.hold(true, false, true, || Some(lease(1))),
+            Some(GestureAction::Start(lease(1)))
+        );
+        assert!(
+            gesture.hold(true, false, true, || Some(lease(2))).is_none(),
+            "auto-repeat must not restart"
+        );
+        gesture.observe_owner(true);
+        assert_eq!(gesture.hold(false, false, true, || None), Some(GestureAction::Stop));
+        assert!(gesture.hold(false, false, false, || None).is_none(), "one Stop only");
+        gesture.observe_owner(false);
+        assert_eq!(
+            gesture.hold(true, false, true, || Some(lease(3))),
+            Some(GestureAction::Start(lease(3)))
+        );
+    }
+
+    #[test]
+    fn hold_extra_shift_or_win_cancels_instead_of_stopping() {
+        let mut gesture = WindowsGesture::default();
+        gesture.hold(true, false, true, || Some(lease(1))).unwrap();
+        gesture.observe_owner(true);
+        assert_eq!(
+            gesture.hold(true, true, true, || None),
+            Some(GestureAction::Cancel)
+        );
+        // Shift released: still poisoned, no restart and no Stop.
+        assert!(gesture.hold(true, false, true, || Some(lease(2))).is_none());
+        gesture.observe_owner(false);
+        assert!(gesture.hold(false, false, true, || None).is_none());
+        assert!(gesture.hold(false, false, false, || None).is_none());
+        assert_eq!(
+            gesture.hold(true, false, true, || Some(lease(3))),
+            Some(GestureAction::Start(lease(3)))
+        );
+        // Shift pressed first while idle also blocks the start.
+        let mut idle = WindowsGesture::default();
+        assert!(idle.hold(true, true, true, || Some(lease(4))).is_none());
+        assert!(idle.hold(true, false, true, || Some(lease(4))).is_none());
+    }
+
+    #[test]
+    fn hold_quick_tap_before_owner_starts_still_stops() {
+        let mut gesture = WindowsGesture::default();
+        gesture.hold(true, false, true, || Some(lease(1))).unwrap();
+        assert_eq!(gesture.hold(false, false, true, || None), Some(GestureAction::Stop));
+    }
+
+    #[test]
+    fn hold_foreign_key_cancels_and_poisons_until_modifiers_release() {
+        let mut gesture = WindowsGesture::default();
+        gesture.hold(true, false, true, || Some(lease(1))).unwrap();
+        gesture.observe_owner(true);
+        assert_eq!(
+            gesture.hold_other_key(true),
+            Some(GestureAction::Cancel)
+        );
+        assert!(gesture.hold_other_key(true).is_none(), "one Cancel only");
+        // Releasing Alt after a cancel must not send Stop.
+        assert!(gesture.hold(false, false, true, || None).is_none());
+        gesture.observe_owner(false);
+        // Re-pressing Alt with Ctrl still down and poisoned does not restart.
+        assert!(gesture.hold(true, false, true, || Some(lease(2))).is_none());
+        assert!(gesture.hold(false, false, false, || None).is_none());
+        assert_eq!(
+            gesture.hold(true, false, true, || Some(lease(3))),
+            Some(GestureAction::Start(lease(3)))
+        );
+    }
+
+    #[test]
+    fn hold_ignores_keys_without_modifiers_and_blocks_chord_after_ctrl_shortcut() {
+        let mut gesture = WindowsGesture::default();
+        assert!(gesture.hold_other_key(false).is_none());
+        // Ctrl+T, then Alt joins while Ctrl is still down: not a dictation start.
+        assert!(gesture.hold_other_key(true).is_none());
+        assert!(gesture.hold(true, false, true, || Some(lease(1))).is_none());
+    }
+
+    #[test]
+    fn hold_esc_cancel_does_not_restart_or_stop_while_chord_is_held() {
+        let mut gesture = WindowsGesture::default();
+        gesture.hold(true, false, true, || Some(lease(1))).unwrap();
+        gesture.observe_owner(true);
+        assert_eq!(gesture.escape(true).action, Some(GestureAction::Cancel));
+        gesture.escape(false);
+        gesture.observe_owner(false);
+        assert!(gesture.hold(true, false, true, || Some(lease(2))).is_none());
+        assert!(gesture.hold(false, false, true, || None).is_none());
+        assert!(gesture.hold(false, false, false, || None).is_none());
     }
 
     #[test]

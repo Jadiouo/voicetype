@@ -34,7 +34,9 @@ vocabulary, Fcitx preferences and module binaries are not replaced.
 
 After preparing models/loading the runtime, choose **啟用本機聽寫**. Wait for the
 connected status, focus an ordinary text field, hold **Ctrl+Alt**, speak and release.
-**Esc** cancels. The same module switches only after the previous dictation's
+**Esc** cancels. On Windows the same hold-to-talk chord is used (both Ctrl and
+Alt held; releasing either sends the text); pressing any other key during the hold
+cancels that recording and the key is passed through untouched. The same module switches only after the previous dictation's
 pending result ends; no second hotkey owner is created. Closing/unloading the app
 withdraws the private lease and returns to the original service. A crashed or
 unresponsive app also falls back; a clean account without a legacy daemon simply
@@ -52,8 +54,19 @@ these checks do not establish live recognition quality or end-user latency.
 The preview has its own application ID and settings directory:
 `io.github.jadiouo.voicetype.preview`. It never changes the existing
 `voicetype` vocabulary/learning settings; vocabulary import requires an explicit action. Only the explicit module installer changes
-the Fcitx addon registration, with rollback. Closing its window exits the preview; a desktop tray entry
-also opens settings where the desktop supports it. No autostart is installed.
+the Fcitx addon registration, with rollback. On Linux, closing its window exits the preview; a desktop tray entry
+also opens settings where the desktop supports it. On Windows, closing the window
+only hides it to the system tray and dictation keeps running; quit from the tray
+menu ("結束預覽 App"). If the tray cannot be created, closing the window still exits.
+
+On Windows the app also starts at login, hidden in the tray: a per-user
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value runs the app with
+`--background`. First launch opts in; the "開機時在背景啟動" setting removes or
+restores it. When the model is already prepared, each Windows launch loads the
+local engine and enables the hotkey automatically; if the model is missing it does
+nothing, and a failure is shown in the settings window. Launching the app again
+brings the existing window forward (single instance). Linux still installs no
+autostart and needs the explicit engine load and Fcitx enable steps.
 
 ## Development
 

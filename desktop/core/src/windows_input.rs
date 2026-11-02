@@ -1,5 +1,6 @@
-//! Finite shortcut toggle for Windows dictation. This hook consumes the chord and
-//! locks the focused target; delivery itself lives in `windows_delivery`.
+//! Finite shortcut gestures for Windows dictation. Default is hold-to-talk on
+//! Ctrl+Alt (modifiers are never consumed); Ctrl+Shift+F9 stays a consumed
+//! toggle. Both lock the focused target; delivery lives in `windows_delivery`.
 use crate::windows_gesture::{shortcut_matches, GestureAction, WindowsGesture};
 use crate::{ShortcutChoice, TargetLease};
 use std::{
@@ -17,8 +18,9 @@ use windows_sys::Win32::{
     System::Threading::GetCurrentThreadId,
     UI::{
         Input::KeyboardAndMouse::{
-            VK_CAPITAL, VK_CONTROL, VK_ESCAPE, VK_F9, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
-            VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+            GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+            KEYEVENTF_KEYUP, VK_CONTROL, VK_ESCAPE, VK_F9, VK_LCONTROL, VK_LMENU, VK_LSHIFT,
+            VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
         },
         WindowsAndMessaging::{
             CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
@@ -27,6 +29,12 @@ use windows_sys::Win32::{
         },
     },
 };
+
+/// Scan code of the LCtrl that Windows synthesizes in front of AltGr (right Alt
+/// on layouts that have one). It is not a physical Ctrl press.
+const ALTGR_FAKE_LCTRL_SCAN: u32 = 0x21D;
+/// Unassigned virtual key used to keep a bare Alt release from opening menus.
+const MASK_VK: u16 = 0xE8;
 
 #[derive(Clone, Debug)]
 pub enum InputEvent {
@@ -53,6 +61,8 @@ struct HookState {
     win_right: bool,
     gesture: WindowsGesture,
     generation: u64,
+    // Default hold chord started a dictation and Alt has not been fully released.
+    hold_engaged: bool,
 }
 impl HookState {
     fn ctrl(&self) -> bool {
@@ -303,6 +313,84 @@ pub fn focus_matches(target: &TargetLease) -> bool {
     crate::windows_delivery::target_state(target) == crate::windows_delivery::TargetState::Ready
 }
 
+/// Lock the foreground target and stamp it with the next non-zero generation.
+fn next_target(state: &mut HookState) -> Option<TargetLease> {
+    focused_target().and_then(|mut target| {
+        state.generation = state.generation.wrapping_add(1);
+        if state.generation == 0 {
+            return None;
+        }
+        target.generation = state.generation;
+        Some(target)
+    })
+}
+
+/// Clear modifier flags whose key-up was never delivered to this hook (Ctrl+Alt+Del,
+/// UAC, desktop switch). GetAsyncKeyState inside a low-level hook still shows the
+/// state before the current event, so this runs before the event is applied. It
+/// only clears: AltGr's synthetic LCtrl must not be counted as held.
+fn resync_modifiers(state: &mut HookState) {
+    let held = |vk: u16| unsafe { GetAsyncKeyState(vk as i32) } < 0;
+    if state.ctrl_generic && !held(VK_CONTROL) {
+        state.ctrl_generic = false;
+    }
+    if state.ctrl_left && !held(VK_LCONTROL) {
+        state.ctrl_left = false;
+    }
+    if state.ctrl_right && !held(VK_RCONTROL) {
+        state.ctrl_right = false;
+    }
+    if state.shift_generic && !held(VK_SHIFT) {
+        state.shift_generic = false;
+    }
+    if state.shift_left && !held(VK_LSHIFT) {
+        state.shift_left = false;
+    }
+    if state.shift_right && !held(VK_RSHIFT) {
+        state.shift_right = false;
+    }
+    if state.alt_generic && !held(VK_MENU) {
+        state.alt_generic = false;
+    }
+    if state.alt_left && !held(VK_LMENU) {
+        state.alt_left = false;
+    }
+    if state.alt_right && !held(VK_RMENU) {
+        state.alt_right = false;
+    }
+    if state.win_left && !held(VK_LWIN) {
+        state.win_left = false;
+    }
+    if state.win_right && !held(VK_RWIN) {
+        state.win_right = false;
+    }
+}
+
+/// Inject an unassigned key press while Alt is still down. Injected events carry
+/// LLKHF_INJECTED, so the hook above passes them through untouched.
+fn inject_mask_key() {
+    let key = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: MASK_VK,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [key(0), key(KEYEVENTF_KEYUP)];
+    unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        );
+    }
+}
+
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code < 0 {
         return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
@@ -324,10 +412,11 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
         return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
     }
     let vk = event.vkCode as u16;
+    resync_modifiers(&mut state);
     if vk == VK_CONTROL {
         state.ctrl_generic = down;
     }
-    if vk == VK_LCONTROL {
+    if vk == VK_LCONTROL && event.scanCode != ALTGR_FAKE_LCTRL_SCAN {
         state.ctrl_left = down;
     }
     if vk == VK_RCONTROL {
@@ -368,10 +457,60 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             return 1;
         }
     }
-    let trigger_key = match state.choice {
-        ShortcutChoice::Default => VK_CAPITAL,
-        ShortcutChoice::CtrlShiftF9 => VK_F9,
-    };
+    if state.choice == ShortcutChoice::Default {
+        // Hold Ctrl+Alt to talk. No key is consumed here (a stuck Ctrl/Alt would
+        // be worse than a missed chord); Esc is handled above.
+        let is_alt = vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU;
+        let is_modifier = is_alt
+            || vk == VK_CONTROL
+            || vk == VK_LCONTROL
+            || vk == VK_RCONTROL
+            || vk == VK_SHIFT
+            || vk == VK_LSHIFT
+            || vk == VK_RSHIFT
+            || vk == VK_LWIN
+            || vk == VK_RWIN;
+        let chord = state.ctrl() && state.alt();
+        let extra = state.shift() || state.windows();
+        let ctrl_or_alt = state.ctrl() || state.alt();
+        let target = if chord && !extra && state.gesture.hold_needs_target() {
+            next_target(&mut state)
+        } else {
+            None
+        };
+        let mut action = state.gesture.hold(chord, extra, ctrl_or_alt, || target);
+        if action.is_none() && !is_modifier && down && vk != VK_ESCAPE {
+            // Ctrl+Alt+<other key> belongs to someone else: cancel, don't swallow.
+            action = state.gesture.hold_other_key(ctrl_or_alt);
+        }
+        if let Some(action) = action {
+            let event = match action {
+                GestureAction::Start(target) => InputEvent::Start(target),
+                GestureAction::Stop => InputEvent::Stop,
+                GestureAction::Cancel => InputEvent::Cancel,
+            };
+            let sent = state.tx.as_ref().is_some_and(|tx| tx.send(event).is_ok());
+            if !sent {
+                state.gesture.reject_start();
+            }
+        }
+        // Remember that Ctrl+Alt was fully held, whether or not a Start was sent.
+        if chord {
+            state.hold_engaged = true;
+        }
+        // Releasing Alt alone would activate the window menu; a harmless key
+        // typed while Alt is still down tells Windows the Alt press was a chord.
+        let mask = up && is_alt && state.hold_engaged;
+        if !state.ctrl() && !state.alt() {
+            state.hold_engaged = false;
+        }
+        drop(state);
+        if mask {
+            inject_mask_key();
+        }
+        return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
+    }
+    let trigger_key = VK_F9;
     if vk == trigger_key {
         let matched = shortcut_matches(
             state.choice,

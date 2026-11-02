@@ -64,6 +64,10 @@ struct DesktopState {
     worker: DesktopWorker,
     models: ModelSetup,
     tray_available: AtomicBool,
+    // Boot-time engine load/enable runs off the UI; its failure is kept here
+    // for the settings view instead of being dropped with the thread.
+    auto_start_busy: AtomicBool,
+    auto_start_error: std::sync::Mutex<Option<String>>,
     #[cfg(any(target_os = "linux", windows))]
     local_installer: voicetype_app_core::local_install::LocalInstaller,
     #[cfg(any(target_os = "linux", windows))]
@@ -204,51 +208,65 @@ async fn configure_input_module(restore: bool, app: tauri::AppHandle) -> Result<
     }
 }
 
+/// Shown for a missing/incomplete model; boot-time loading stays silent on it.
+#[cfg(any(target_os = "linux", windows))]
+const MODEL_NOT_READY: &str = "請先下載／檢查模型，再載入本機引擎。";
+
+#[cfg(any(target_os = "linux", windows))]
+fn load_local_blocking(
+    app: &tauri::AppHandle,
+    worker: &DesktopWorker,
+) -> Result<DesktopSnapshot, String> {
+    let state = app.state::<DesktopState>();
+    let _assets = state
+        .local_asset_lock
+        .lock()
+        .map_err(|_| "安裝程序已中斷")?;
+    local_assets_idle(worker)?;
+    // Hash/copy work stays off the resident dictation thread. No paths,
+    // URLs, manifests or command lines are accepted from the webview.
+    let mut paths = state
+        .local_installer
+        .prepare(&state.runtime_resources, |_, _| true)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => MODEL_NOT_READY.to_string(),
+            _ => "無法核對本機引擎或模型，請重新檢查模型與安裝包。".to_string(),
+        })?;
+    if worker.settings()?.settings.spelling_enabled {
+        // Correction is optional. The worker exposes unavailable when
+        // package verification fails while preserving the preference.
+        paths.spelling = state
+            .spelling_installer
+            .prepare(&state.spelling_resources)
+            .ok();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        worker.activate_local(paths)
+    }
+    #[cfg(windows)]
+    {
+        worker.activate_windows_local(paths)
+    }
+}
+
 #[tauri::command]
 async fn load_local_runtime(app: tauri::AppHandle) -> Result<View, String> {
     #[cfg(any(target_os = "linux", windows))]
     {
-        with_desktop(app.clone(), move |worker| {
-            let state = app.state::<DesktopState>();
-            let _assets = state
-                .local_asset_lock
-                .lock()
-                .map_err(|_| "安裝程序已中斷")?;
-            local_assets_idle(worker)?;
-            // Hash/copy work stays off the resident dictation thread. No paths,
-            // URLs, manifests or command lines are accepted from the webview.
-            let mut paths = state
-                .local_installer
-                .prepare(&state.runtime_resources, |_, _| true)
-                .map_err(|error| match error.kind() {
-                    std::io::ErrorKind::NotFound => {
-                        "請先下載／檢查模型，再載入本機引擎。".to_string()
-                    }
-                    _ => "無法核對本機引擎或模型，請重新檢查模型與安裝包。".to_string(),
-                })?;
-            if worker.settings()?.settings.spelling_enabled {
-                // Correction is optional. The worker exposes unavailable when
-                // package verification fails while preserving the preference.
-                paths.spelling = state
-                    .spelling_installer
-                    .prepare(&state.spelling_resources)
-                    .ok();
-            }
-            #[cfg(target_os = "linux")]
-            {
-                worker.activate_local(paths)
-            }
-            #[cfg(windows)]
-            {
-                worker.activate_windows_local(paths)
-            }
-        })
-        .await
+        clear_auto_start_error(&app);
+        with_desktop(app.clone(), move |worker| load_local_blocking(&app, worker)).await
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = app;
         Err("此平台的本機引擎封裝仍在準備中。".into())
+    }
+}
+
+fn clear_auto_start_error(app: &tauri::AppHandle) {
+    if let Ok(mut error) = app.state::<DesktopState>().auto_start_error.lock() {
+        *error = None;
     }
 }
 
@@ -798,26 +816,28 @@ async fn unload_google_runtime(app: tauri::AppHandle) -> Result<View, String> {
     }
 }
 
+fn enable_local_blocking(worker: &DesktopWorker) -> Result<DesktopSnapshot, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .ok_or("無法找到登入環境，請從桌面重新開啟 App")?;
+        worker.enable_local_input(PathBuf::from(runtime))
+    }
+    #[cfg(windows)]
+    {
+        worker.enable_windows_input()
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = worker;
+        Err("此平台的輸入整合仍在準備中。".into())
+    }
+}
+
 #[tauri::command]
 async fn enable_local_input(app: tauri::AppHandle) -> Result<View, String> {
-    with_desktop(app, |worker| {
-        #[cfg(target_os = "linux")]
-        {
-            let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-                .ok_or("無法找到登入環境，請從桌面重新開啟 App")?;
-            worker.enable_local_input(PathBuf::from(runtime))
-        }
-        #[cfg(windows)]
-        {
-            worker.enable_windows_input()
-        }
-        #[cfg(not(any(target_os = "linux", windows)))]
-        {
-            let _ = worker;
-            Err("此平台的輸入整合仍在準備中。".into())
-        }
-    })
-    .await
+    clear_auto_start_error(&app);
+    with_desktop(app, enable_local_blocking).await
 }
 
 #[tauri::command]
@@ -851,6 +871,8 @@ struct View {
     tray_available: bool,
     local_runtime_bundled: bool,
     windows_input: bool,
+    auto_start_busy: bool,
+    auto_start_error: Option<String>,
 }
 
 #[tauri::command]
@@ -866,6 +888,19 @@ async fn select_provider(provider: Provider, app: tauri::AppHandle) -> Result<Vi
 #[tauri::command]
 async fn set_spelling_enabled(enabled: bool, app: tauri::AppHandle) -> Result<View, String> {
     with_desktop(app, move |worker| worker.set_spelling_enabled(enabled)).await
+}
+
+#[tauri::command]
+async fn set_background_start(enabled: bool, app: tauri::AppHandle) -> Result<View, String> {
+    // Register first: a failed registry write must not leave the checkbox
+    // claiming a login start that Windows will not perform.
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || run_key::apply(enabled))
+            .await
+            .map_err(|_| "登入啟動設定中斷".to_string())??;
+    }
+    with_desktop(app, move |worker| worker.set_background_start(enabled)).await
 }
 
 #[tauri::command]
@@ -978,12 +1013,105 @@ async fn with_desktop(
         .state::<DesktopState>()
         .tray_available
         .load(Ordering::Relaxed);
+    let (auto_start_busy, auto_start_error) = {
+        let state = app.state::<DesktopState>();
+        (
+            state.auto_start_busy.load(Ordering::Relaxed),
+            state
+                .auto_start_error
+                .lock()
+                .ok()
+                .and_then(|error| error.clone()),
+        )
+    };
     Ok(View {
         desktop: with_worker(app, operation).await?,
         tray_available,
         local_runtime_bundled: cfg!(any(target_os = "linux", windows)),
         windows_input: cfg!(windows),
+        auto_start_busy,
+        auto_start_error,
     })
+}
+
+/// Windows login entry: `--background` keeps the window hidden in the tray.
+#[cfg(windows)]
+mod run_key {
+    use std::{os::windows::process::CommandExt, path::PathBuf, process::Command};
+
+    const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    const VALUE: &str = "VoiceType";
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    // reg.exe is called by absolute path, never resolved through PATH or the
+    // working directory, and without a console window.
+    fn reg() -> Result<Command, String> {
+        let root = PathBuf::from(std::env::var_os("SystemRoot").ok_or("找不到 Windows 目錄")?);
+        let mut command = Command::new(root.join("System32").join("reg.exe"));
+        command.creation_flags(CREATE_NO_WINDOW);
+        Ok(command)
+    }
+
+    pub fn apply(enabled: bool) -> Result<(), String> {
+        if enabled {
+            let exe = std::env::current_exe().map_err(|_| "找不到 App 的位置".to_string())?;
+            let data = format!("\"{}\" --background", exe.display());
+            let output = reg()?
+                .args(["add", KEY, "/v", VALUE, "/t", "REG_SZ", "/d", data.as_str(), "/f"])
+                .output()
+                .map_err(|_| "無法寫入登入啟動設定".to_string())?;
+            if !output.status.success() {
+                return Err("無法寫入登入啟動設定".into());
+            }
+        } else {
+            let output = reg()?
+                .args(["delete", KEY, "/v", VALUE, "/f"])
+                .output()
+                .map_err(|_| "無法移除登入啟動設定".to_string())?;
+            // reg.exe exits 1 when the value was already absent.
+            if !output.status.success() && output.status.code() != Some(1) {
+                return Err("無法移除登入啟動設定".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Windows only: after login the engine is loaded and the hotkey enabled
+/// without UI. Linux needs the Fcitx module, so its flow is left to the user.
+#[cfg(windows)]
+fn start_in_background(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let state = app.state::<DesktopState>();
+        // Missing record means first launch: opt in. A recorded value is only
+        // refreshed so a moved/reinstalled exe keeps a valid Run path.
+        match state.worker.settings().map(|v| v.settings.background_start) {
+            Ok(None) => match run_key::apply(true) {
+                Ok(()) => {
+                    let _ = state.worker.set_background_start(true);
+                }
+                Err(error) => eprintln!("Login start unavailable: {error}"),
+            },
+            Ok(Some(true)) => {
+                let _ = run_key::apply(true);
+            }
+            _ => {}
+        }
+        let result = load_local_blocking(&app, &state.worker)
+            .and_then(|_| enable_local_blocking(&state.worker));
+        match result {
+            // No downloaded model yet: nothing to start, nothing to report.
+            Ok(_) => {}
+            Err(error) if error == MODEL_NOT_READY => {}
+            Err(error) => {
+                if let Ok(mut slot) = state.auto_start_error.lock() {
+                    *slot = Some(format!("開機自動啟用失敗：{error}"));
+                }
+            }
+        }
+        // Publish the error before clearing busy so one UI poll cannot miss it.
+        state.auto_start_busy.store(false, Ordering::Relaxed);
+    });
 }
 
 fn show_settings(app: &tauri::AppHandle) {
@@ -996,9 +1124,31 @@ fn show_settings(app: &tauri::AppHandle) {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            show_settings(app)
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _| {
+            // A login-time relaunch must not pop the window of a running app.
+            if !argv.iter().any(|arg| arg == "--background") {
+                show_settings(app)
+            }
         }))
+        .on_window_event(|window, event| {
+            // Windows keeps dictating from the tray; Linux keeps its documented
+            // close-exits behaviour. Without a tray the window must stay closable.
+            #[cfg(windows)]
+            {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    let tray_ready = window
+                        .app_handle()
+                        .try_state::<DesktopState>()
+                        .is_some_and(|state| state.tray_available.load(Ordering::Relaxed));
+                    if window.label() == "main" && tray_ready {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            let _ = (window, event);
+        })
         .setup(|app| {
             // Distinct preview directory: never change the running dictation setup.
             let config_dir = match std::env::var_os("VOICETYPE_PREVIEW_CONFIG_DIR") {
@@ -1056,6 +1206,8 @@ fn main() {
                 worker,
                 models: ModelSetup::new(model_root)?,
                 tray_available: AtomicBool::new(false),
+                auto_start_busy: AtomicBool::new(cfg!(windows)),
+                auto_start_error: std::sync::Mutex::new(None),
             });
             let show = MenuItem::with_id(app, "show", "開啟 VoiceType", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "結束預覽 App", true, None::<&str>)?;
@@ -1087,10 +1239,19 @@ fn main() {
             }
             *app.state::<DesktopState>().review_monitor.lock().unwrap() =
                 Some(review::monitor(app.handle().clone(), reviews)?);
+            // The window is created hidden (tauri.conf.json). Only a Windows
+            // login start with a working tray stays hidden.
+            let background = cfg!(windows) && std::env::args().any(|arg| arg == "--background");
+            if !background || !app.state::<DesktopState>().tray_available.load(Ordering::Relaxed) {
+                show_settings(app.handle());
+            }
+            #[cfg(windows)]
+            start_in_background(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             set_spelling_enabled,
+            set_background_start,
             get_settings,
             set_shortcut,
             reload_settings,

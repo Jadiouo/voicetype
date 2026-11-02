@@ -52,6 +52,9 @@
         <label><input id="spelling-enabled" type="checkbox" disabled> 自動修正中文錯字（CPU）</label>
         <p>保留英文、名字與數字；校正逾時就送出原文。需先卸載引擎才能變更，下次載入時套用。</p>
         <p id="spelling-runtime-note" role="status" aria-live="polite">校正器會在載入引擎時檢查。</p>
+        <label id="background-start-row" hidden><input id="background-start" type="checkbox" disabled> 開機時在背景啟動</label>
+        <p id="background-start-note" hidden>登入 Windows 後直接在系統匣啟動並啟用聽寫，不顯示此視窗。</p>
+        <p id="auto-start-note" role="alert" hidden></p>
         <h2 id="model-setup-title">本機模型</h2>
         <p>下載約 844 MB，首次準備建議保留 4 GB 可用空間。已安裝的模型通過檢查後會直接沿用。</p>
         <p id="model-status" role="status" aria-live="polite">正在讀取模型準備狀態…</p>
@@ -140,7 +143,7 @@
         </div>
       </section>
       <section class="shared"><h2>自動錯字校正</h2><p>App 校正器仍在整合；日常版本的設定與資料繼續保留。</p></section>
-      <footer id="tray-note">關閉視窗會結束預覽 App。</footer>
+      <footer id="tray-note">正在讀取設定…</footer>
     </main>
   </div>
 </body>

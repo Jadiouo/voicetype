@@ -17,9 +17,25 @@ use std::{
 };
 
 const MAX_FRAME: usize = 256 * 1024;
+// Model load alone took ~21 s on a mid-range laptop CPU; leave wide headroom.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(120);
 const SPELLING_STATUS_INTERVAL: Duration = Duration::from_millis(500);
 const SPELLING_STATUS_DEADLINE: Duration = Duration::from_millis(400);
 const SPELLING_STATUS_MAX_MISSES: u8 = 3;
+
+/// Child stderr is kept here (overwritten on every start) so a failed start
+/// has a reason the user can open.
+pub fn engine_log_path(profile: &std::path::Path) -> PathBuf {
+    profile.join("logs").join("voicetyped.log")
+}
+
+/// Last non-empty line of the child log, trimmed for display in an error.
+pub fn engine_log_tail(profile: &std::path::Path) -> Option<String> {
+    let text = std::fs::read(engine_log_path(profile)).ok()?;
+    let text = String::from_utf8_lossy(&text);
+    let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
+    Some(line.trim().chars().take(200).collect())
+}
 
 pub struct EnginePaths {
     pub executable: PathBuf,
@@ -92,6 +108,11 @@ impl WindowsEngine {
                 "Windows local profile already owned",
             )
         })?;
+        // Best effort: without a log the child still runs, only the reason is lost.
+        let stderr = std::fs::create_dir_all(paths.profile.join("logs"))
+            .and_then(|_| File::create(engine_log_path(&paths.profile)))
+            .map(Stdio::from)
+            .unwrap_or_else(|_| Stdio::null());
         let mut command = Command::new(&paths.executable);
         command
             .arg("--desktop-stdio")
@@ -115,7 +136,7 @@ impl WindowsEngine {
             .env("CUDA_VISIBLE_DEVICES", "")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(stderr);
         for name in ["SystemRoot", "WINDIR"] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
@@ -123,6 +144,13 @@ impl WindowsEngine {
         }
         if let Some(spelling) = &paths.spelling {
             command.env("VOICETYPE_CSC_PROCESS", serde_json::to_string(spelling)?);
+        }
+        // The App has no console; without this Windows opens a CMD window whose
+        // closing would kill the engine.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         let mut child = command.spawn()?;
         #[cfg(windows)]
@@ -184,7 +212,7 @@ impl WindowsEngine {
         engine.write(&json!({"type":"desktop_status","request":1}))?;
         let reply = engine
             .frames
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(HANDSHAKE_TIMEOUT)
             .map_err(|_| io::ErrorKind::TimedOut)?;
         let Frame::Value(reply) = reply else {
             return Err(io::ErrorKind::BrokenPipe.into());
