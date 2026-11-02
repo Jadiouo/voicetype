@@ -34,7 +34,9 @@ vocabulary, Fcitx preferences and module binaries are not replaced.
 
 After preparing models/loading the runtime, choose **啟用本機聽寫**. Wait for the
 connected status, focus an ordinary text field, hold **Ctrl+Alt**, speak and release.
-**Esc** cancels. The same module switches only after the previous dictation's
+**Esc** cancels. On Windows the same hold-to-talk chord is used (both Ctrl and
+Alt held; releasing either sends the text); pressing any other key during the hold
+cancels that recording and the key is passed through untouched. The same module switches only after the previous dictation's
 pending result ends; no second hotkey owner is created. Closing/unloading the app
 withdraws the private lease and returns to the original service. A crashed or
 unresponsive app also falls back; a clean account without a legacy daemon simply

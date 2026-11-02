@@ -27,10 +27,10 @@ const unloadRuntime = document.querySelector('#unload-local-runtime');
 const repairRuntime = document.querySelector('#repair-local-runtime');
 const rollbackRuntime = document.querySelector('#rollback-local-runtime');
 function shortcutLabel(view, provider, choice) {
-  if (choice === 'ctrl_shift_f9') return `Ctrl＋Shift＋F9（${!view.windows_input && provider === 'local' ? '按住說話、放開結束' : '按一次開始、再按一次結束'}）`;
-  return !view.windows_input && provider === 'local'
-    ? 'Ctrl＋Alt（按住說話、放開結束）'
-    : 'Ctrl＋CapsLock（按一次開始、再按一次結束）';
+  if (choice === 'ctrl_shift_f9') return `Ctrl＋Shift＋F9（${!view.windows_input && provider === 'local' ? '按住說話、放開結束' : '按一次開始、再按一次結束'}）`; // Windows F9 remains a toggle
+  return view.windows_input
+    ? 'Ctrl＋Alt（按住說話，放開送出；Esc 取消）'
+    : 'Ctrl＋Alt（按住說話、放開結束）';
 }
 const enableInput = document.querySelector('#enable-local-input');
 const spellingEnabled = document.querySelector('#spelling-enabled');
